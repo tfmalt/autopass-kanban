@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use anyhow::{Context, Result, anyhow};
-use chrono::{Local, NaiveDate};
+use anyhow::{Context, Result, anyhow, bail};
+use chrono::{Datelike, Days, Local, NaiveDate, Weekday};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
@@ -46,7 +47,9 @@ const SPRINT_STATUS_FOLDERS: [(&str, &str); 5] = [
     ("04.done", "done"),
     ("99.blocked", "blocked"),
 ];
-const SPRINT_STATUS_DISPLAY_ORDER: [&str; 5] = ["todo", "in-progress", "ready-for-qa", "done", "blocked"];
+const SPRINT_STATUS_DISPLAY_ORDER: [&str; 5] =
+    ["todo", "in-progress", "ready-for-qa", "done", "blocked"];
+const CANONICAL_TASK_STATUSES: [&str; 4] = ["todo", "in-progress", "blocked", "done"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedFrontmatter {
@@ -159,6 +162,46 @@ pub struct SprintOverview {
     pub stories_by_status: BTreeMap<String, Vec<StoryOverview>>,
     pub blocked_work: Vec<BlockedWorkItem>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateSprintInput {
+    pub number: u32,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    pub headline: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateSprintResult {
+    pub sprint_name: String,
+    pub sprint_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MoveStoryResult {
+    pub story_id: String,
+    pub sprint_name: String,
+    pub from_status: String,
+    pub to_status: String,
+    pub story_path: PathBuf,
+    pub task_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskMutationResult {
+    pub story_id: String,
+    pub task_id: String,
+    pub task_file_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RolloverResult {
+    pub from_sprint: String,
+    pub to_sprint: String,
+    pub created_next_sprint: bool,
+    pub completed_story_ids: Vec<String>,
+    pub carried_story_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -482,6 +525,564 @@ pub fn summarize_phase(repo_root: impl AsRef<Path>, phase: &str) -> Result<Phase
     Ok(PhaseOverview {
         phase: format!("F{phase_number}"),
         stories,
+    })
+}
+
+pub fn suggested_next_sprint_number(repo_root: impl AsRef<Path>) -> Result<u32> {
+    let repo_root = fs::canonicalize(repo_root.as_ref())
+        .with_context(|| format!("resolve repo root {}", repo_root.as_ref().display()))?;
+    let specs = discover_sprint_folder_specs(&repo_root)?;
+    Ok(specs
+        .iter()
+        .filter_map(|spec| parse_sprint_number(&spec.sprint_name))
+        .max()
+        .map(|value| value + 1)
+        .unwrap_or(0))
+}
+
+pub fn suggested_next_sprint_dates(
+    repo_root: impl AsRef<Path>,
+) -> Result<Option<(NaiveDate, NaiveDate)>> {
+    let repo_root = fs::canonicalize(repo_root.as_ref())
+        .with_context(|| format!("resolve repo root {}", repo_root.as_ref().display()))?;
+    let specs = discover_sprint_folder_specs(&repo_root)?;
+    let previous_end_date = specs
+        .iter()
+        .filter_map(|spec| {
+            parse_sprint_number(&spec.sprint_name).map(|number| (number, spec.end_date))
+        })
+        .max_by_key(|(number, _)| *number)
+        .map(|(_, end_date)| end_date);
+
+    Ok(previous_end_date.map(suggested_sprint_dates))
+}
+
+pub fn suggested_sprint_dates(previous_end_date: NaiveDate) -> (NaiveDate, NaiveDate) {
+    let start_date = first_weekday_after(previous_end_date, Weekday::Mon);
+    let end_date = first_weekday_on_or_after(start_date + Days::new(11), Weekday::Fri);
+    (start_date, end_date)
+}
+
+pub fn create_sprint(
+    repo_root: impl AsRef<Path>,
+    input: &CreateSprintInput,
+) -> Result<CreateSprintResult> {
+    let repo_root = fs::canonicalize(repo_root.as_ref())
+        .with_context(|| format!("resolve repo root {}", repo_root.as_ref().display()))?;
+    let today = Local::now().date_naive();
+    if input.start_date < today {
+        bail!(
+            "Sprint start date {} cannot be in the past relative to {}.",
+            input.start_date.format("%Y-%m-%d"),
+            today.format("%Y-%m-%d")
+        );
+    }
+    if input.end_date <= input.start_date {
+        bail!(
+            "Sprint end date {} must be after start date {}.",
+            input.end_date.format("%Y-%m-%d"),
+            input.start_date.format("%Y-%m-%d")
+        );
+    }
+
+    let headline = slugify_headline(&input.headline);
+    if headline.is_empty() {
+        bail!("Sprint headline must contain at least one ASCII letter or number.");
+    }
+
+    let sprint_name = format!(
+        "S{:03}.{}--{}.{}",
+        input.number,
+        input.start_date.format("%Y-%m-%d"),
+        input.end_date.format("%Y-%m-%d"),
+        headline
+    );
+    let sprint_root = repo_root.join("doc/backlog/sprints").join(&sprint_name);
+    if sprint_root.exists() {
+        bail!("Sprint already exists: {sprint_name}");
+    }
+
+    fs::create_dir_all(&sprint_root)
+        .with_context(|| format!("create sprint folder {}", sprint_root.display()))?;
+    for (folder_name, _) in SPRINT_STATUS_FOLDERS {
+        let status_path = sprint_root.join(folder_name);
+        fs::create_dir_all(&status_path)
+            .with_context(|| format!("create sprint status folder {}", status_path.display()))?;
+    }
+
+    let readme = render_sprint_readme_template(&sprint_name, input.start_date, input.end_date);
+    let readme_path = sprint_root.join("README.md");
+    fs::write(&readme_path, readme)
+        .with_context(|| format!("write sprint summary {}", readme_path.display()))?;
+
+    Ok(CreateSprintResult {
+        sprint_name,
+        sprint_path: relative_path(&repo_root, &sprint_root),
+    })
+}
+
+pub fn move_story_to_status(
+    repo_root: impl AsRef<Path>,
+    story_id: &str,
+    target_status: &str,
+) -> Result<MoveStoryResult> {
+    move_story_to_status_with_assignee(repo_root, story_id, target_status, None)
+}
+
+pub fn move_story_to_status_with_assignee(
+    repo_root: impl AsRef<Path>,
+    story_id: &str,
+    target_status: &str,
+    assignee_override: Option<&str>,
+) -> Result<MoveStoryResult> {
+    let repository = read_repository(repo_root)?;
+    let normalized_story_id = story_id.trim().to_ascii_uppercase();
+    let normalized_status = normalize_story_status_input(target_status)?;
+    let assignee_override = match assignee_override {
+        Some(assignee) if normalized_status != "in-progress" => {
+            bail!("Assignee override can only be used when moving a story to in-progress.");
+        }
+        Some(assignee) => Some(validate_assignee_override(assignee)?),
+        None => None,
+    };
+    let story = repository
+        .stories
+        .iter()
+        .find(|story| {
+            matches!(story.kind, StoryKind::Sprint)
+                && story
+                    .frontmatter
+                    .get("id")
+                    .map(|id| id.eq_ignore_ascii_case(&normalized_story_id))
+                    .unwrap_or(false)
+        })
+        .cloned()
+        .ok_or_else(|| anyhow!("Sprint story not found: {normalized_story_id}"))?;
+
+    let sprint_name = story
+        .sprint_name
+        .clone()
+        .ok_or_else(|| anyhow!("Sprint story is missing parent sprint information."))?;
+    let current_status = story.frontmatter.get("status").cloned().unwrap_or_default();
+    let current_folder_status = story.folder_status.clone().unwrap_or_default();
+
+    if current_folder_status == normalized_status {
+        let now = current_timestamp_string();
+        let assignee_update = if normalized_status == "in-progress" {
+            Some(match assignee_override.clone() {
+                Some(assignee) => assignee,
+                None => current_git_assignee(&repository.repo_root)?,
+            })
+        } else {
+            None
+        };
+        let mut story_updates = vec![
+            ("status", Some(normalized_status.clone())),
+            ("updated", Some(now.clone())),
+        ];
+        if let Some(assignee) = assignee_update.clone() {
+            story_updates.push(("assignee", Some(assignee)));
+        }
+        if normalized_status == "done" {
+            story_updates.push(("work_done", Some(now.clone())));
+        }
+        let story_markdown = update_story_frontmatter_markdown(&story.markdown, &story_updates)?;
+        fs::write(&story.file_path, story_markdown)
+            .with_context(|| format!("rewrite sprint story {}", story.file_path.display()))?;
+        if let Some(source_story_path) = &story.source_story_path {
+            let backlog_markdown = fs::read_to_string(source_story_path)
+                .with_context(|| format!("read backlog story {}", source_story_path.display()))?;
+            let mut backlog_updates = vec![
+                ("status", Some(normalized_status.clone())),
+                ("updated", Some(now.clone())),
+            ];
+            if let Some(assignee) = assignee_update {
+                backlog_updates.push(("assignee", Some(assignee)));
+            }
+            if normalized_status == "done" {
+                backlog_updates.push(("work_done", Some(now)));
+            }
+            let backlog_markdown =
+                update_story_frontmatter_markdown(&backlog_markdown, &backlog_updates)?;
+            fs::write(source_story_path, backlog_markdown).with_context(|| {
+                format!("rewrite backlog story {}", source_story_path.display())
+            })?;
+        }
+
+        return Ok(MoveStoryResult {
+            story_id: normalized_story_id,
+            sprint_name,
+            from_status: current_status.clone(),
+            to_status: normalized_status,
+            story_path: story.relative_path,
+            task_path: story
+                .task_file
+                .as_ref()
+                .map(|task_file| task_file.relative_path.clone()),
+        });
+    }
+
+    let assignee_update = if normalized_status == "in-progress" {
+        Some(match assignee_override {
+            Some(assignee) => assignee,
+            None => current_git_assignee(&repository.repo_root)?,
+        })
+    } else {
+        story.frontmatter.get("assignee").cloned()
+    };
+
+    let target_folder_name = status_to_folder_name(&normalized_status)?;
+    let target_story_path = story
+        .file_path
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| {
+            anyhow!(
+                "Cannot resolve sprint status folder for {}",
+                story.file_path.display()
+            )
+        })?
+        .join(target_folder_name)
+        .join(&story.file_name);
+    fs::rename(&story.file_path, &target_story_path).with_context(|| {
+        format!(
+            "move sprint story {} -> {}",
+            story.file_path.display(),
+            target_story_path.display()
+        )
+    })?;
+
+    let target_task_path = if let Some(task_file) = &story.task_file {
+        if task_file.exists {
+            let target_task_path = target_story_path
+                .parent()
+                .unwrap()
+                .join(task_file.file_path.file_name().unwrap());
+            fs::rename(&task_file.file_path, &target_task_path).with_context(|| {
+                format!(
+                    "move sprint task file {} -> {}",
+                    task_file.file_path.display(),
+                    target_task_path.display()
+                )
+            })?;
+            Some(target_task_path)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let moved_story_markdown = fs::read_to_string(&target_story_path)
+        .with_context(|| format!("read moved sprint story {}", target_story_path.display()))?;
+    let now = current_timestamp_string();
+    let work_started_update =
+        if current_folder_status == "todo" && normalized_status == "in-progress" {
+            story
+                .frontmatter
+                .get("work_started")
+                .filter(|value| !value.is_empty())
+                .cloned()
+                .or_else(|| Some(now.clone()))
+        } else {
+            story.frontmatter.get("work_started").cloned()
+        };
+    let work_done_update = if normalized_status == "done" {
+        Some(now.clone())
+    } else {
+        story.frontmatter.get("work_done").cloned()
+    };
+
+    let moved_story_markdown = update_story_frontmatter_markdown(
+        &moved_story_markdown,
+        &[
+            (&"status", Some(normalized_status.clone())),
+            (&"updated", Some(now.clone())),
+            (&"assignee", assignee_update.clone()),
+            (&"work_started", work_started_update),
+            (&"work_done", work_done_update),
+        ],
+    )?;
+    fs::write(&target_story_path, moved_story_markdown)
+        .with_context(|| format!("rewrite moved sprint story {}", target_story_path.display()))?;
+
+    if let Some(source_story_path) = &story.source_story_path {
+        let backlog_markdown = fs::read_to_string(source_story_path)
+            .with_context(|| format!("read backlog story {}", source_story_path.display()))?;
+        let backlog_markdown = update_story_frontmatter_markdown(
+            &backlog_markdown,
+            &[
+                (&"status", Some(normalized_status.clone())),
+                (&"updated", Some(now.clone())),
+                (&"assignee", assignee_update),
+                (
+                    &"work_started",
+                    story
+                        .frontmatter
+                        .get("work_started")
+                        .filter(|value| !value.is_empty())
+                        .cloned()
+                        .or_else(|| {
+                            if current_folder_status == "todo" && normalized_status == "in-progress"
+                            {
+                                Some(now.clone())
+                            } else {
+                                None
+                            }
+                        }),
+                ),
+                (
+                    &"work_done",
+                    if normalized_status == "done" {
+                        Some(now.clone())
+                    } else {
+                        story
+                            .frontmatter
+                            .get("work_done")
+                            .filter(|value| !value.is_empty())
+                            .cloned()
+                            .or_else(|| Some(String::new()))
+                    },
+                ),
+            ],
+        )?;
+        fs::write(source_story_path, backlog_markdown)
+            .with_context(|| format!("rewrite backlog story {}", source_story_path.display()))?;
+    }
+
+    Ok(MoveStoryResult {
+        story_id: normalized_story_id,
+        sprint_name,
+        from_status: current_status,
+        to_status: normalized_status,
+        story_path: relative_path(&repository.repo_root, &target_story_path),
+        task_path: target_task_path.map(|path| relative_path(&repository.repo_root, &path)),
+    })
+}
+
+pub fn add_task_to_story(
+    repo_root: impl AsRef<Path>,
+    story_id: &str,
+    title: &str,
+    status: &str,
+    tags: &[String],
+    description: &str,
+) -> Result<TaskMutationResult> {
+    let repository = read_repository(repo_root)?;
+    let story = find_sprint_story_for_write(&repository, story_id)?;
+    let task_file = story
+        .task_file
+        .as_ref()
+        .ok_or_else(|| anyhow!("Sprint story is missing task_file frontmatter."))?;
+    let task_id = next_task_id(&story, task_file);
+    let normalized_status = normalize_task_status_for_write(status)?;
+    let markdown = task_file.markdown.as_deref().unwrap_or_default();
+    let updated = append_task_markdown(
+        markdown,
+        &task_id,
+        title,
+        &normalized_status,
+        tags,
+        description,
+    );
+    let task_file_path = story.file_path.parent().unwrap().join(
+        story
+            .frontmatter
+            .get("task_file")
+            .cloned()
+            .ok_or_else(|| anyhow!("Sprint story is missing task_file frontmatter."))?,
+    );
+    fs::write(&task_file_path, updated)
+        .with_context(|| format!("write task file {}", task_file_path.display()))?;
+
+    Ok(TaskMutationResult {
+        story_id: story.frontmatter.get("id").cloned().unwrap_or_default(),
+        task_id,
+        task_file_path: relative_path(&repository.repo_root, &task_file_path),
+    })
+}
+
+pub fn update_task_in_story(
+    repo_root: impl AsRef<Path>,
+    story_id: &str,
+    task_id: &str,
+    status: Option<&str>,
+    title: Option<&str>,
+    tags: Option<&[String]>,
+    description: Option<&str>,
+) -> Result<TaskMutationResult> {
+    let repository = read_repository(repo_root)?;
+    let story = find_sprint_story_for_write(&repository, story_id)?;
+    let task_file = story
+        .task_file
+        .as_ref()
+        .ok_or_else(|| anyhow!("Sprint story is missing task_file frontmatter."))?;
+    let markdown = task_file
+        .markdown
+        .as_deref()
+        .ok_or_else(|| anyhow!("Task file does not exist for story {}.", story_id))?;
+    let updated = rewrite_task_markdown(
+        markdown,
+        task_id,
+        status
+            .map(normalize_task_status_for_write)
+            .transpose()?
+            .as_deref(),
+        title,
+        tags,
+        description,
+    )?;
+    let task_file_path = task_file.file_path.clone();
+    fs::write(&task_file_path, updated)
+        .with_context(|| format!("write task file {}", task_file_path.display()))?;
+
+    Ok(TaskMutationResult {
+        story_id: story.frontmatter.get("id").cloned().unwrap_or_default(),
+        task_id: task_id.trim().to_ascii_uppercase(),
+        task_file_path: relative_path(&repository.repo_root, &task_file_path),
+    })
+}
+
+pub fn rollover_sprint(
+    repo_root: impl AsRef<Path>,
+    sprint_name: &str,
+    next_sprint: Option<&CreateSprintInput>,
+) -> Result<RolloverResult> {
+    let repo_root = fs::canonicalize(repo_root.as_ref())
+        .with_context(|| format!("resolve repo root {}", repo_root.as_ref().display()))?;
+    let repository = read_repository(&repo_root)?;
+    let specs = discover_sprint_folder_specs(&repo_root)?;
+    let current_spec = specs
+        .iter()
+        .find(|spec| spec.sprint_name == sprint_name)
+        .ok_or_else(|| anyhow!("Sprint not found: {sprint_name}"))?;
+
+    let expected_next_number = parse_sprint_number(sprint_name).map(|value| value + 1);
+    let mut next_sprint_name = specs
+        .iter()
+        .find(|spec| parse_sprint_number(&spec.sprint_name) == expected_next_number)
+        .map(|spec| spec.sprint_name.clone());
+    let mut created_next_sprint = false;
+
+    if next_sprint_name.is_none() {
+        let input = next_sprint.ok_or_else(|| {
+            anyhow!(
+                "Next sprint is missing after {sprint_name}. Create it first or provide create input."
+            )
+        })?;
+        let create_result = create_sprint(&repo_root, input)?;
+        created_next_sprint = true;
+        next_sprint_name = Some(create_result.sprint_name);
+    }
+
+    let next_sprint_name = next_sprint_name.ok_or_else(|| anyhow!("Next sprint is missing."))?;
+    let mut completed_story_ids = Vec::new();
+    let mut carried_story_ids = Vec::new();
+
+    for story in repository
+        .stories
+        .iter()
+        .filter(|story| matches!(story.kind, StoryKind::Sprint))
+        .filter(|story| story.sprint_name.as_deref() == Some(sprint_name))
+    {
+        let story_id = story.frontmatter.get("id").cloned().unwrap_or_default();
+        let status = story.frontmatter.get("status").cloned().unwrap_or_default();
+        if status == "done" {
+            completed_story_ids.push(story_id);
+            continue;
+        }
+
+        let target_folder = status_to_folder_name(&status)?;
+        let target_story_path = repo_root
+            .join("doc/backlog/sprints")
+            .join(&next_sprint_name)
+            .join(target_folder)
+            .join(&story.file_name);
+        fs::rename(&story.file_path, &target_story_path).with_context(|| {
+            format!(
+                "move sprint story {} -> {}",
+                story.file_path.display(),
+                target_story_path.display()
+            )
+        })?;
+        if let Some(task_file) = &story.task_file {
+            if task_file.exists {
+                let target_task_path = target_story_path
+                    .parent()
+                    .unwrap()
+                    .join(task_file.file_path.file_name().unwrap());
+                fs::rename(&task_file.file_path, &target_task_path).with_context(|| {
+                    format!(
+                        "move sprint task file {} -> {}",
+                        task_file.file_path.display(),
+                        target_task_path.display()
+                    )
+                })?;
+            }
+        }
+
+        let now = current_timestamp_string();
+        let moved_story_markdown = fs::read_to_string(&target_story_path)
+            .with_context(|| format!("read moved sprint story {}", target_story_path.display()))?;
+        let moved_story_markdown = update_story_frontmatter_markdown(
+            &moved_story_markdown,
+            &[
+                (&"sprint", Some(next_sprint_name.clone())),
+                (&"updated", Some(now.clone())),
+                (
+                    &"work_started",
+                    story.frontmatter.get("work_started").cloned(),
+                ),
+            ],
+        )?;
+        fs::write(&target_story_path, moved_story_markdown).with_context(|| {
+            format!(
+                "rewrite rolled sprint story {}",
+                target_story_path.display()
+            )
+        })?;
+
+        if let Some(source_story_path) = &story.source_story_path {
+            let backlog_markdown = fs::read_to_string(source_story_path)
+                .with_context(|| format!("read backlog story {}", source_story_path.display()))?;
+            let backlog_markdown = update_story_frontmatter_markdown(
+                &backlog_markdown,
+                &[
+                    (&"sprint", Some(next_sprint_name.clone())),
+                    (&"updated", Some(now.clone())),
+                    (
+                        &"work_started",
+                        story.frontmatter.get("work_started").cloned(),
+                    ),
+                ],
+            )?;
+            fs::write(source_story_path, backlog_markdown).with_context(|| {
+                format!("rewrite backlog story {}", source_story_path.display())
+            })?;
+        }
+
+        carried_story_ids.push(story_id);
+    }
+
+    let closed_readme_path = current_spec.readme_path.clone();
+    let closed_readme = fs::read_to_string(&closed_readme_path)
+        .with_context(|| format!("read sprint summary {}", closed_readme_path.display()))?;
+    let closed_readme = update_sprint_summary_for_rollover(
+        &closed_readme,
+        sprint_name,
+        &next_sprint_name,
+        &completed_story_ids,
+        &carried_story_ids,
+    );
+    fs::write(&closed_readme_path, closed_readme)
+        .with_context(|| format!("write sprint summary {}", closed_readme_path.display()))?;
+
+    Ok(RolloverResult {
+        from_sprint: sprint_name.to_string(),
+        to_sprint: next_sprint_name,
+        created_next_sprint,
+        completed_story_ids,
+        carried_story_ids,
     })
 }
 
@@ -996,7 +1597,10 @@ fn discover_sprint_folder_specs(repo_root: &Path) -> Result<Vec<SprintFolderSpec
             continue;
         }
 
-        let Some(folder_name) = path.file_name().map(|value| value.to_string_lossy().into_owned()) else {
+        let Some(folder_name) = path
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+        else {
             continue;
         };
 
@@ -1071,6 +1675,372 @@ fn parse_sprint_folder_name(folder_name: &str) -> Option<(NaiveDate, NaiveDate, 
     Some((start_date, end_date, headline))
 }
 
+fn parse_sprint_number(sprint_name: &str) -> Option<u32> {
+    let prefix = sprint_name.strip_prefix('S')?;
+    let number = prefix.split_once('.')?.0;
+    number.parse().ok()
+}
+
+fn current_timestamp_string() -> String {
+    Local::now().format("%Y-%m-%dT%H:%M:%S%z").to_string()
+}
+
+fn current_git_assignee(repo_root: &Path) -> Result<String> {
+    let name = git_config_value(repo_root, "user.name")?;
+    let email = git_config_value(repo_root, "user.email")?;
+    if name.is_empty() || email.is_empty() {
+        bail!(
+            "Git user.name and user.email must be configured before moving a story to in-progress."
+        );
+    }
+    Ok(format!("{name} <{email}>"))
+}
+
+fn validate_assignee_override(assignee: &str) -> Result<String> {
+    let trimmed = assignee.trim();
+    let pattern =
+        Regex::new(r"^[^<>\s].*\s<[^<>\s@]+@[^<>\s@]+>$").expect("valid assignee validation regex");
+    if pattern.is_match(trimmed) {
+        Ok(trimmed.to_string())
+    } else {
+        bail!("Assignee must use the format `Name <email>`.");
+    }
+}
+
+fn git_config_value(repo_root: &Path, key: &str) -> Result<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("config")
+        .arg(key)
+        .output()
+        .with_context(|| format!("read git config {key}"))?;
+    if !output.status.success() {
+        bail!("Git config {key} is not set.");
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn first_weekday_after(date: NaiveDate, weekday: Weekday) -> NaiveDate {
+    let mut current = date + Days::new(1);
+    while current.weekday() != weekday {
+        current = current + Days::new(1);
+    }
+    current
+}
+
+fn first_weekday_on_or_after(date: NaiveDate, weekday: Weekday) -> NaiveDate {
+    let mut current = date;
+    while current.weekday() != weekday {
+        current = current + Days::new(1);
+    }
+    current
+}
+
+fn slugify_headline(value: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_dash = false;
+    for ch in value.trim().chars() {
+        let normalized = ch.to_ascii_lowercase();
+        if normalized.is_ascii_alphanumeric() {
+            slug.push(normalized);
+            last_was_dash = false;
+        } else if !last_was_dash && !slug.is_empty() {
+            slug.push('-');
+            last_was_dash = true;
+        }
+    }
+    slug.trim_matches('-').to_string()
+}
+
+fn render_sprint_readme_template(
+    sprint_name: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> String {
+    format!(
+        "# {sprint_name}\n\n## Sprint Summary\n\n| Field | Value |\n|-------|-------|\n| Sprint Name | `{sprint_name}` |\n| Start Date | `{}` |\n| End Date | `{}` |\n| Sprint Status | Planned |\n| WIP Limit | Not explicitly set |\n\n## Sprint Goal\n\nTBD\n\n## Stories By Status\n\n### To Do\n\nNo stories currently in `01.todo/`.\n\n### In Progress\n\nNo stories currently in `02.in-progress/`.\n\n### Ready For QA\n\nNo stories currently in `03.ready-for-qa/`.\n\n### Done\n\nNo stories currently in `04.done/`.\n\n### Blocked\n\nNo stories currently in `99.blocked/`.\n\n## Blocked Work\n\nNo sprint task files currently contain tasks with `Status: Blocked`.\n\n## Notes For Review / Demo\n\n- Sprint created by `kanban sprint create`.\n\n## End-Of-Sprint Summary\n\nSprint not started yet.\n\n## Expected Carry-Over / Unfinished Stories\n\nNot determined yet.\n",
+        start_date.format("%Y-%m-%d"),
+        end_date.format("%Y-%m-%d")
+    )
+}
+
+fn normalize_story_status_input(status: &str) -> Result<String> {
+    let lowercase = status.trim().to_ascii_lowercase();
+    let normalized = match lowercase.as_str() {
+        "to do" => "todo",
+        "in progress" => "in-progress",
+        other => other,
+    };
+    if CANONICAL_STORY_STATUSES.contains(&normalized) {
+        Ok(normalized.to_string())
+    } else {
+        bail!("Unsupported story status: {status}");
+    }
+}
+
+fn normalize_task_status_for_write(status: &str) -> Result<String> {
+    let normalized = normalize_task_status(status);
+    if CANONICAL_TASK_STATUSES.contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        bail!("Unsupported task status: {status}");
+    }
+}
+
+fn status_to_folder_name(status: &str) -> Result<&'static str> {
+    SPRINT_STATUS_FOLDERS
+        .iter()
+        .find_map(|(folder, candidate_status)| (*candidate_status == status).then_some(*folder))
+        .ok_or_else(|| anyhow!("Unsupported sprint status folder mapping: {status}"))
+}
+
+fn update_story_frontmatter_markdown(
+    markdown: &str,
+    updates: &[(&str, Option<String>)],
+) -> Result<String> {
+    let normalized = markdown.replace("\r\n", "\n");
+    let lines: Vec<&str> = normalized.split('\n').collect();
+    if !normalized.starts_with("---\n") {
+        bail!("Story file is missing YAML frontmatter.");
+    }
+    let closing_index = lines
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find_map(|(index, line)| (*line == "---").then_some(index))
+        .ok_or_else(|| anyhow!("Story file has an unclosed frontmatter block."))?;
+
+    let mut output = Vec::new();
+    output.push("---".to_string());
+    for line in &lines[1..closing_index] {
+        if line.trim().is_empty() {
+            output.push(String::new());
+            continue;
+        }
+        if let Some((key, _)) = line.split_once(':') {
+            let key = key.trim();
+            if let Some((_, value)) = updates.iter().find(|(candidate, _)| *candidate == key) {
+                output.push(format!("{key}: {}", value.clone().unwrap_or_default()));
+                continue;
+            }
+        }
+        output.push((*line).to_string());
+    }
+    output.push("---".to_string());
+    output.extend(
+        lines[(closing_index + 1)..]
+            .iter()
+            .map(|line| (*line).to_string()),
+    );
+    Ok(output.join("\n"))
+}
+
+fn find_sprint_story_for_write<'a>(
+    repository: &'a Repository,
+    story_id: &str,
+) -> Result<&'a Story> {
+    let normalized_story_id = story_id.trim().to_ascii_uppercase();
+    repository
+        .stories
+        .iter()
+        .find(|story| {
+            matches!(story.kind, StoryKind::Sprint)
+                && story
+                    .frontmatter
+                    .get("id")
+                    .map(|id| id.eq_ignore_ascii_case(&normalized_story_id))
+                    .unwrap_or(false)
+        })
+        .ok_or_else(|| anyhow!("Sprint story not found: {normalized_story_id}"))
+}
+
+fn next_task_id(story: &Story, task_file: &TaskFile) -> String {
+    let story_id = story.frontmatter.get("id").cloned().unwrap_or_default();
+    let next_number = task_file
+        .tasks
+        .iter()
+        .filter_map(|task| task.id.rsplit('-').next()?.parse::<u32>().ok())
+        .max()
+        .map(|value| value + 1)
+        .unwrap_or(1);
+    format!("TASK-{story_id}-{next_number:03}")
+}
+
+fn append_task_markdown(
+    markdown: &str,
+    task_id: &str,
+    title: &str,
+    status: &str,
+    tags: &[String],
+    description: &str,
+) -> String {
+    let mut output = markdown.trim_end().to_string();
+    if !output.is_empty() {
+        output.push_str("\n\n");
+    }
+    output.push_str("---\n\n");
+    output.push_str(&render_task_block(
+        task_id,
+        title,
+        status,
+        tags,
+        description,
+    ));
+    output.push_str("\n\n---\n");
+    output
+}
+
+fn rewrite_task_markdown(
+    markdown: &str,
+    task_id: &str,
+    status: Option<&str>,
+    title: Option<&str>,
+    tags: Option<&[String]>,
+    description: Option<&str>,
+) -> Result<String> {
+    let normalized = markdown.replace("\r\n", "\n");
+    let heading_pattern = Regex::new(TASK_HEADING_PATTERN).expect("valid task heading regex");
+    let matches: Vec<_> = heading_pattern
+        .captures_iter(&normalized)
+        .filter_map(|captures| {
+            let full = captures.get(0)?;
+            let id = captures.get(1)?.as_str().to_string();
+            let title = captures.get(2)?.as_str().trim().to_string();
+            Some((full.start(), full.end(), id, title))
+        })
+        .collect();
+
+    let normalized_task_id = task_id.trim().to_ascii_uppercase();
+    let mut rewritten = String::new();
+    let mut cursor = 0;
+    let mut found = false;
+
+    for (index, (start, block_start, id, existing_title)) in matches.iter().enumerate() {
+        let block_end = matches
+            .get(index + 1)
+            .map(|next| next.0)
+            .unwrap_or(normalized.len());
+        rewritten.push_str(&normalized[cursor..*start]);
+        let block = &normalized[*block_start..block_end];
+        if id.eq_ignore_ascii_case(&normalized_task_id) {
+            let existing_status = capture_line_value(block, "Status").unwrap_or_default();
+            let existing_tags = capture_line_value(block, "Tags")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|tag| !tag.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            let existing_description = capture_description(block);
+            rewritten.push_str(&render_task_block(
+                id,
+                title.unwrap_or(existing_title),
+                status.unwrap_or(existing_status.trim()),
+                tags.unwrap_or(existing_tags.as_slice()),
+                description.unwrap_or(existing_description.as_str()),
+            ));
+            found = true;
+        } else {
+            rewritten.push_str(block);
+        }
+        cursor = block_end;
+    }
+
+    rewritten.push_str(&normalized[cursor..]);
+    if found {
+        Ok(rewritten)
+    } else {
+        bail!("Task not found: {normalized_task_id}");
+    }
+}
+
+fn render_task_block(
+    task_id: &str,
+    title: &str,
+    status: &str,
+    tags: &[String],
+    description: &str,
+) -> String {
+    format!(
+        "## {task_id} - {}\n\nStatus: {}\nTags: {}\n\nDescription:\n{}",
+        title.trim(),
+        display_task_status(status),
+        tags.join(", "),
+        description.trim()
+    )
+}
+
+fn display_task_status(status: &str) -> &'static str {
+    match status {
+        "todo" => "To Do",
+        "in-progress" => "In Progress",
+        "blocked" => "Blocked",
+        "done" => "Done",
+        _ => "To Do",
+    }
+}
+
+fn update_sprint_summary_for_rollover(
+    markdown: &str,
+    sprint_name: &str,
+    next_sprint_name: &str,
+    completed_story_ids: &[String],
+    carried_story_ids: &[String],
+) -> String {
+    let end_summary = if completed_story_ids.is_empty() {
+        format!("Sprint closed. No stories were completed in `{sprint_name}` before rollover.")
+    } else {
+        format!(
+            "Sprint closed. Completed stories in `{sprint_name}`: {}.",
+            completed_story_ids.join(", ")
+        )
+    };
+    let carry_over = if carried_story_ids.is_empty() {
+        "No unfinished stories were moved forward.".to_string()
+    } else {
+        format!(
+            "Moved to `{next_sprint_name}`: {}.",
+            carried_story_ids.join(", ")
+        )
+    };
+    let updated = replace_markdown_section(markdown, "End-Of-Sprint Summary", &end_summary);
+    replace_markdown_section(
+        &updated,
+        "Expected Carry-Over / Unfinished Stories",
+        &carry_over,
+    )
+}
+
+fn replace_markdown_section(markdown: &str, heading: &str, new_content: &str) -> String {
+    let normalized = markdown.replace("\r\n", "\n");
+    let lines = normalized.lines().collect::<Vec<_>>();
+    let target_heading = format!("## {heading}");
+    let Some(start) = lines.iter().position(|line| line.trim() == target_heading) else {
+        let mut output = normalized.trim_end().to_string();
+        output.push_str("\n\n");
+        output.push_str(&target_heading);
+        output.push_str("\n\n");
+        output.push_str(new_content.trim());
+        output.push('\n');
+        return output;
+    };
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find_map(|(index, line)| line.starts_with("## ").then_some(index))
+        .unwrap_or(lines.len());
+
+    let mut output = Vec::new();
+    output.extend(lines[..=start].iter().map(|line| (*line).to_string()));
+    output.push(String::new());
+    output.extend(new_content.trim().lines().map(|line| line.to_string()));
+    output.push(String::new());
+    output.extend(lines[end..].iter().map(|line| (*line).to_string()));
+    output.join("\n")
+}
+
 fn parse_markdown_date(value: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(value.trim_matches('`').trim(), "%Y-%m-%d").ok()
 }
@@ -1088,14 +2058,19 @@ fn sprint_warnings(spec: &SprintFolderSpec, today: NaiveDate) -> Vec<String> {
 
 fn story_overview(story: &Story) -> StoryOverview {
     StoryOverview {
-        id: story
-            .frontmatter
-            .get("id")
-            .cloned()
-            .unwrap_or_else(|| story.file_name.trim_end_matches(STORY_FILE_SUFFIX).to_string()),
+        id: story.frontmatter.get("id").cloned().unwrap_or_else(|| {
+            story
+                .file_name
+                .trim_end_matches(STORY_FILE_SUFFIX)
+                .to_string()
+        }),
         title: story_title(&story.body).unwrap_or_else(|| story.file_name.clone()),
         status: story.frontmatter.get("status").cloned().unwrap_or_default(),
-        assignee: story.frontmatter.get("assignee").cloned().unwrap_or_default(),
+        assignee: story
+            .frontmatter
+            .get("assignee")
+            .cloned()
+            .unwrap_or_default(),
         story_points: story
             .frontmatter
             .get("story_points")
@@ -1104,7 +2079,10 @@ fn story_overview(story: &Story) -> StoryOverview {
         sprint: story.frontmatter.get("sprint").cloned(),
         kind: story.kind.clone(),
         relative_path: story.relative_path.clone(),
-        task_summary: story.task_file.as_ref().map(|task_file| task_file.summary.clone()),
+        task_summary: story
+            .task_file
+            .as_ref()
+            .map(|task_file| task_file.summary.clone()),
         task_count: story
             .task_file
             .as_ref()
@@ -1128,7 +2106,9 @@ fn extract_markdown_section(body: &str, heading: &str) -> Option<String> {
     let normalized = body.replace("\r\n", "\n");
     let lines = normalized.lines().collect::<Vec<_>>();
     let target_heading = format!("## {heading}");
-    let start = lines.iter().position(|line| line.trim() == target_heading)?;
+    let start = lines
+        .iter()
+        .position(|line| line.trim() == target_heading)?;
     let end = lines
         .iter()
         .enumerate()
@@ -1143,18 +2123,20 @@ fn extract_markdown_section(body: &str, heading: &str) -> Option<String> {
         .collect::<Vec<_>>();
     let mut section = section_lines.join("\n").trim().to_string();
     while section.ends_with("\n---") || section == "---" {
-        section = section
-            .trim_end_matches("---")
-            .trim_end()
-            .to_string();
+        section = section.trim_end_matches("---").trim_end().to_string();
     }
     (!section.is_empty()).then_some(section)
 }
 
 fn normalize_phase_input(phase: &str) -> Result<String> {
-    let digits = phase.chars().filter(|ch| ch.is_ascii_digit()).collect::<String>();
+    let digits = phase
+        .chars()
+        .filter(|ch| ch.is_ascii_digit())
+        .collect::<String>();
     if digits.is_empty() {
-        return Err(anyhow!("Phase must contain a numeric identifier, for example `1` or `F1`."));
+        return Err(anyhow!(
+            "Phase must contain a numeric identifier, for example `1` or `F1`."
+        ));
     }
 
     let trimmed = digits.trim_start_matches('0');
@@ -1300,11 +2282,11 @@ fn story_location(file_path: &Path) -> StoryLocation {
     let mut parts = remainder.split('/');
     let sprint_name = parts.next().map(ToOwned::to_owned);
     let status_folder = parts.next().map(ToOwned::to_owned);
-    let folder_status = status_folder
-        .as_deref()
-        .and_then(|folder| SPRINT_STATUS_FOLDERS.iter().find_map(|(name, status)| {
-            (*name == folder).then(|| (*status).to_string())
-        }));
+    let folder_status = status_folder.as_deref().and_then(|folder| {
+        SPRINT_STATUS_FOLDERS
+            .iter()
+            .find_map(|(name, status)| (*name == folder).then(|| (*status).to_string()))
+    });
 
     StoryLocation {
         kind: StoryKind::Sprint,
@@ -1324,6 +2306,36 @@ mod tests {
             .join("../../../../")
             .canonicalize()
             .unwrap()
+    }
+
+    fn write_git_config(repo_root: &Path, name: &str, email: &str) {
+        let init_status = Command::new("git")
+            .arg("-C")
+            .arg(repo_root)
+            .arg("init")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(init_status.success());
+        let name_status = Command::new("git")
+            .arg("-C")
+            .arg(repo_root)
+            .arg("config")
+            .arg("user.name")
+            .arg(name)
+            .status()
+            .unwrap();
+        assert!(name_status.success());
+        let email_status = Command::new("git")
+            .arg("-C")
+            .arg(repo_root)
+            .arg("config")
+            .arg("user.email")
+            .arg(email)
+            .status()
+            .unwrap();
+        assert!(email_status.success());
     }
 
     #[test]
@@ -1458,13 +2470,19 @@ mod tests {
             "---\nid: US-F1-052\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.2026-05-18--2026-05-29.foundation\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md\ntask_file: US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add read-only CLI for sprint and backlog inspection\n",
         ).unwrap();
 
-        let sprint = summarize_current_sprint_at_date(temp_root.path(), NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()).unwrap();
+        let sprint = summarize_current_sprint_at_date(
+            temp_root.path(),
+            NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
+        )
+        .unwrap();
 
         assert_eq!(sprint.sprint_name, "S001.2026-05-18--2026-05-29.foundation");
-        assert!(sprint
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("Folder dates are authoritative")));
+        assert!(
+            sprint
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Folder dates are authoritative"))
+        );
     }
 
     #[test]
@@ -1475,8 +2493,7 @@ mod tests {
         assert_eq!(phase.phase, "F1");
         assert!(phase.stories.iter().any(|story| {
             story.id == "US-F1-052"
-                && story.sprint.as_deref()
-                    == Some("S000.2026-05-18--2026-05-29.getting-started")
+                && story.sprint.as_deref() == Some("S000.2026-05-18--2026-05-29.getting-started")
         }));
     }
 
@@ -1486,11 +2503,13 @@ mod tests {
         let story = find_story(&repo_root, "US-F1-010").unwrap().unwrap();
 
         assert_eq!(story.story.kind, StoryKind::Sprint);
-        assert!(story
-            .acceptance_criteria
-            .as_deref()
-            .unwrap_or_default()
-            .contains("Scenario 1"));
+        assert!(
+            story
+                .acceptance_criteria
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Scenario 1")
+        );
         assert_eq!(story.tasks.len(), 4);
     }
 
@@ -1520,11 +2539,408 @@ mod tests {
             "---\nid: US-F1-052\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.2026-05-18--2026-05-29.foundation\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md\ntask_file: US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add read-only CLI for sprint and backlog inspection\n",
         ).unwrap();
 
-        let findings = doctor_repository_at_date(temp_root.path(), NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()).unwrap();
+        let findings = doctor_repository_at_date(
+            temp_root.path(),
+            NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
+        )
+        .unwrap();
 
         assert!(findings.iter().any(|finding| {
             finding.scope == "S001.2026-05-18--2026-05-29.foundation"
                 && finding.message.contains("Folder dates are authoritative")
         }));
+    }
+
+    #[test]
+    fn create_sprint_creates_folder_layout_and_readme() {
+        let temp_root = tempdir().unwrap();
+        fs::create_dir_all(temp_root.path().join("doc/backlog/sprints")).unwrap();
+        let today = Local::now().date_naive();
+        let input = CreateSprintInput {
+            number: 1,
+            start_date: today,
+            end_date: today + Days::new(11),
+            headline: "Foundation Sprint".to_string(),
+        };
+
+        let result = create_sprint(temp_root.path(), &input).unwrap();
+
+        assert_eq!(
+            result.sprint_name,
+            format!(
+                "S001.{}--{}.foundation-sprint",
+                today.format("%Y-%m-%d"),
+                (today + Days::new(11)).format("%Y-%m-%d")
+            )
+        );
+        let sprint_root = temp_root.path().join(&result.sprint_path);
+        for (folder_name, _) in SPRINT_STATUS_FOLDERS {
+            assert!(sprint_root.join(folder_name).exists());
+        }
+        assert!(sprint_root.join("README.md").exists());
+    }
+
+    #[test]
+    fn suggested_next_sprint_dates_use_latest_sprint_folder_end_date() {
+        let temp_root = tempdir().unwrap();
+        let sprints_root = temp_root.path().join("doc/backlog/sprints");
+        fs::create_dir_all(sprints_root.join("S000.2026-05-18--2026-05-29.getting-started"))
+            .unwrap();
+        fs::create_dir_all(sprints_root.join("S001.2026-06-02--2026-06-13.foundation")).unwrap();
+
+        let suggestion = suggested_next_sprint_dates(temp_root.path())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(suggestion.0, NaiveDate::from_ymd_opt(2026, 6, 15).unwrap());
+        assert_eq!(suggestion.1, NaiveDate::from_ymd_opt(2026, 6, 26).unwrap());
+    }
+
+    #[test]
+    fn move_story_to_status_moves_story_and_task_and_sets_work_started() {
+        let temp_root = tempdir().unwrap();
+        write_git_config(temp_root.path(), "Test User", "test@example.com");
+        let sprint_root = temp_root
+            .path()
+            .join("doc/backlog/sprints/S001.2026-06-01--2026-06-12.foundation");
+        let todo_root = sprint_root.join("01.todo");
+        let progress_root = sprint_root.join("02.in-progress");
+        let backlog_dir = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+
+        fs::create_dir_all(&todo_root).unwrap();
+        fs::create_dir_all(&progress_root).unwrap();
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            sprint_root.join("README.md"),
+            "# Sprint\n\n## Sprint Summary\n\n| Field | Value |\n|-------|-------|\n| Sprint Name | `S001.2026-06-01--2026-06-12.foundation` |\n| Start Date | `2099-06-01` |\n| End Date | `2099-06-12` |\n| Sprint Status | Planned |\n",
+        ).unwrap();
+        fs::write(
+            backlog_dir.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.2026-06-01--2026-06-12.foundation\nassignee: Old Owner <old@example.com>\nstory_points: 8\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+        fs::write(
+            todo_root.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.2026-06-01--2026-06-12.foundation\nassignee: Old Owner <old@example.com>\nstory_points: 8\nwork_started:\nwork_done:\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md\ntask_file: US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+        fs::write(
+            todo_root.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.tasks.md"),
+            "# Tasks for US-F1-053\n\nParent User Story: US-F1-053\nSprint: S001.2026-06-01--2026-06-12.foundation\n\n---\n\n## TASK-US-F1-053-001 - Initial task\n\nStatus: To Do\nTags: cli\n\nDescription:\nMove together.\n\n---\n",
+        ).unwrap();
+
+        let result = move_story_to_status(temp_root.path(), "US-F1-053", "in-progress").unwrap();
+
+        assert_eq!(result.to_status, "in-progress");
+        let moved_story_path = temp_root.path().join(result.story_path);
+        let moved_story = fs::read_to_string(&moved_story_path).unwrap();
+        let backlog_story = fs::read_to_string(
+            backlog_dir.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+        )
+        .unwrap();
+        assert!(moved_story.contains("status: in-progress"));
+        assert!(moved_story.contains("assignee: Test User <test@example.com>"));
+        assert!(backlog_story.contains("assignee: Test User <test@example.com>"));
+        assert!(moved_story.contains("work_started: 20"));
+        assert!(temp_root.path().join("doc/backlog/sprints/S001.2026-06-01--2026-06-12.foundation/02.in-progress/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.tasks.md").exists());
+    }
+
+    #[test]
+    fn move_story_to_in_progress_refreshes_assignee_when_already_in_progress() {
+        let temp_root = tempdir().unwrap();
+        write_git_config(temp_root.path(), "Test User", "test@example.com");
+        let sprint_root = temp_root
+            .path()
+            .join("doc/backlog/sprints/S001.2099-06-01--2099-06-12.foundation/02.in-progress");
+        let backlog_dir = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+
+        fs::create_dir_all(&sprint_root).unwrap();
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            sprint_root.parent().unwrap().join("README.md"),
+            "# Sprint\n\n## Sprint Summary\n\n| Field | Value |\n|-------|-------|\n| Sprint Name | `S001.2099-06-01--2099-06-12.foundation` |\n| Start Date | `2099-06-01` |\n| End Date | `2099-06-12` |\n| Sprint Status | Active |\n",
+        ).unwrap();
+        fs::write(
+            backlog_dir.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.2099-06-01--2099-06-12.foundation\nassignee: Old Owner <old@example.com>\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+        fs::write(
+            sprint_root.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.2099-06-01--2099-06-12.foundation\nassignee: Old Owner <old@example.com>\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md\ntask_file: US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+
+        let result = move_story_to_status(temp_root.path(), "US-F1-053", "in-progress").unwrap();
+
+        assert_eq!(result.to_status, "in-progress");
+        let sprint_story = fs::read_to_string(temp_root.path().join(result.story_path)).unwrap();
+        let backlog_story = fs::read_to_string(
+            backlog_dir.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+        )
+        .unwrap();
+        assert!(sprint_story.contains("assignee: Test User <test@example.com>"));
+        assert!(backlog_story.contains("assignee: Test User <test@example.com>"));
+    }
+
+    #[test]
+    fn move_story_to_in_progress_uses_assignee_override() {
+        let temp_root = tempdir().unwrap();
+        let sprint_root = temp_root
+            .path()
+            .join("doc/backlog/sprints/S001.2026-06-01--2026-06-12.foundation");
+        let todo_root = sprint_root.join("01.todo");
+        let progress_root = sprint_root.join("02.in-progress");
+        let backlog_dir = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+
+        fs::create_dir_all(&todo_root).unwrap();
+        fs::create_dir_all(&progress_root).unwrap();
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            sprint_root.join("README.md"),
+            "# Sprint\n\n## Sprint Summary\n\n| Field | Value |\n|-------|-------|\n| Sprint Name | `S001.2026-06-01--2026-06-12.foundation` |\n| Start Date | `2099-06-01` |\n| End Date | `2099-06-12` |\n| Sprint Status | Planned |\n",
+        ).unwrap();
+        fs::write(
+            backlog_dir.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.2026-06-01--2026-06-12.foundation\nassignee: TBD\nstory_points: 8\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+        fs::write(
+            todo_root.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.2026-06-01--2026-06-12.foundation\nassignee: TBD\nstory_points: 8\nwork_started:\nwork_done:\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md\ntask_file: US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+
+        let result = move_story_to_status_with_assignee(
+            temp_root.path(),
+            "US-F1-053",
+            "in-progress",
+            Some("Override User <override@example.com>"),
+        )
+        .unwrap();
+
+        let sprint_story = fs::read_to_string(temp_root.path().join(result.story_path)).unwrap();
+        let backlog_story = fs::read_to_string(
+            backlog_dir.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+        )
+        .unwrap();
+        assert!(sprint_story.contains("assignee: Override User <override@example.com>"));
+        assert!(backlog_story.contains("assignee: Override User <override@example.com>"));
+    }
+
+    #[test]
+    fn move_story_rejects_invalid_assignee_override_before_moving_files() {
+        let temp_root = tempdir().unwrap();
+        let sprint_root = temp_root
+            .path()
+            .join("doc/backlog/sprints/S001.2026-06-01--2026-06-12.foundation");
+        let todo_root = sprint_root.join("01.todo");
+        let progress_root = sprint_root.join("02.in-progress");
+        let backlog_dir = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+        let story_file = "US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md";
+
+        fs::create_dir_all(&todo_root).unwrap();
+        fs::create_dir_all(&progress_root).unwrap();
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            sprint_root.join("README.md"),
+            "# Sprint\n\n## Sprint Summary\n\n| Field | Value |\n|-------|-------|\n| Sprint Name | `S001.2026-06-01--2026-06-12.foundation` |\n| Start Date | `2099-06-01` |\n| End Date | `2099-06-12` |\n| Sprint Status | Planned |\n",
+        ).unwrap();
+        fs::write(
+            backlog_dir.join(story_file),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.2026-06-01--2026-06-12.foundation\nassignee: TBD\nstory_points: 8\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+        fs::write(
+            todo_root.join(story_file),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.2026-06-01--2026-06-12.foundation\nassignee: TBD\nstory_points: 8\nwork_started:\nwork_done:\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md\ntask_file: US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+
+        let err = move_story_to_status_with_assignee(
+            temp_root.path(),
+            "US-F1-053",
+            "in-progress",
+            Some("Invalid User"),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("Name <email>"));
+        assert!(todo_root.join(story_file).exists());
+        assert!(!progress_root.join(story_file).exists());
+    }
+
+    #[test]
+    fn move_story_to_done_refreshes_existing_work_done() {
+        let temp_root = tempdir().unwrap();
+        let sprint_root = temp_root
+            .path()
+            .join("doc/backlog/sprints/S001.2099-06-01--2099-06-12.foundation");
+        let progress_root = sprint_root.join("02.in-progress");
+        let done_root = sprint_root.join("04.done");
+        let backlog_dir = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+
+        fs::create_dir_all(&progress_root).unwrap();
+        fs::create_dir_all(&done_root).unwrap();
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            sprint_root.join("README.md"),
+            "# Sprint\n\n## Sprint Summary\n\n| Field | Value |\n|-------|-------|\n| Sprint Name | `S001.2099-06-01--2099-06-12.foundation` |\n| Start Date | `2099-06-01` |\n| End Date | `2099-06-12` |\n| Sprint Status | Active |\n",
+        ).unwrap();
+        fs::write(
+            backlog_dir.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.2099-06-01--2099-06-12.foundation\nassignee: TBD\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done: 1999-01-01T00:00:00+0100\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+        fs::write(
+            progress_root.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.2099-06-01--2099-06-12.foundation\nassignee: TBD\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done: 1999-01-01T00:00:00+0100\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md\ntask_file: US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+
+        let result = move_story_to_status(temp_root.path(), "US-F1-053", "done").unwrap();
+
+        assert_eq!(result.to_status, "done");
+        let moved_story = fs::read_to_string(temp_root.path().join(result.story_path)).unwrap();
+        let backlog_story = fs::read_to_string(
+            backlog_dir.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+        )
+        .unwrap();
+        assert!(moved_story.contains("status: done"));
+        assert!(!moved_story.contains("work_done: 1999-01-01T00:00:00+0100"));
+        assert!(!backlog_story.contains("work_done: 1999-01-01T00:00:00+0100"));
+        assert!(moved_story.contains("work_done: 20"));
+        assert!(backlog_story.contains("work_done: 20"));
+    }
+
+    #[test]
+    fn task_mutations_update_sibling_task_file_only() {
+        let temp_root = tempdir().unwrap();
+        let sprint_root = temp_root
+            .path()
+            .join("doc/backlog/sprints/S001.2099-06-01--2099-06-12.foundation/02.in-progress");
+        let backlog_dir = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+
+        fs::create_dir_all(&sprint_root).unwrap();
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            sprint_root.parent().unwrap().join("README.md"),
+            "# Sprint\n\n## Sprint Summary\n\n| Field | Value |\n|-------|-------|\n| Sprint Name | `S001.2099-06-01--2099-06-12.foundation` |\n| Start Date | `2099-06-01` |\n| End Date | `2099-06-12` |\n| Sprint Status | Active |\n",
+        ).unwrap();
+        fs::write(
+            backlog_dir.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.2099-06-01--2099-06-12.foundation\nassignee: TBD\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+        fs::write(
+            sprint_root.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.2099-06-01--2099-06-12.foundation\nassignee: TBD\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md\ntask_file: US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+        fs::write(
+            sprint_root.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.tasks.md"),
+            "# Tasks for US-F1-053\n\nParent User Story: US-F1-053\nSprint: S001.2099-06-01--2099-06-12.foundation\n\n---\n",
+        ).unwrap();
+
+        let add_result = add_task_to_story(
+            temp_root.path(),
+            "US-F1-053",
+            "Add new task",
+            "todo",
+            &["cli".to_string(), "write".to_string()],
+            "Add command coverage.",
+        )
+        .unwrap();
+        let task_markdown =
+            fs::read_to_string(temp_root.path().join(add_result.task_file_path.clone())).unwrap();
+        assert!(task_markdown.contains("TASK-US-F1-053-001"));
+        assert!(task_markdown.contains("Add new task"));
+
+        update_task_in_story(
+            temp_root.path(),
+            "US-F1-053",
+            "TASK-US-F1-053-001",
+            Some("done"),
+            None,
+            None,
+            Some("Completed command coverage."),
+        )
+        .unwrap();
+        let updated_markdown =
+            fs::read_to_string(temp_root.path().join(add_result.task_file_path)).unwrap();
+        assert!(updated_markdown.contains("Status: Done"));
+        assert!(updated_markdown.contains("Completed command coverage."));
+    }
+
+    #[test]
+    fn rollover_moves_unfinished_stories_and_updates_closed_summary() {
+        let temp_root = tempdir().unwrap();
+        let sprint_root = temp_root
+            .path()
+            .join("doc/backlog/sprints/S001.2099-06-01--2099-06-12.foundation");
+        let todo_root = sprint_root.join("01.todo");
+        let done_root = sprint_root.join("04.done");
+        let backlog_dir = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+
+        fs::create_dir_all(&todo_root).unwrap();
+        fs::create_dir_all(&done_root).unwrap();
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            sprint_root.join("README.md"),
+            "# Sprint\n\n## Sprint Summary\n\n| Field | Value |\n|-------|-------|\n| Sprint Name | `S001.2099-06-01--2099-06-12.foundation` |\n| Start Date | `2099-06-01` |\n| End Date | `2099-06-12` |\n| Sprint Status | Active |\n\n## End-Of-Sprint Summary\n\nSprint still active.\n\n## Expected Carry-Over / Unfinished Stories\n\nNot determined yet.\n",
+        ).unwrap();
+        fs::write(
+            backlog_dir.join("US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md"),
+            "---\nid: US-F1-052\ntype: user-story\nstatus: done\nepic: EP-F1-06\nsprint: S001.2099-06-01--2099-06-12.foundation\nassignee: TBD\nstory_points: 5\nwork_started: 2026-05-28T16:30:54+0200\nwork_done: 2026-05-28T22:06:38+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T22:06:38+0200\n---\n# User Story: Add read-only CLI for sprint and backlog inspection\n",
+        ).unwrap();
+        fs::write(
+            done_root.join("US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md"),
+            "---\nid: US-F1-052\ntype: user-story\nstatus: done\nepic: EP-F1-06\nsprint: S001.2099-06-01--2099-06-12.foundation\nassignee: TBD\nstory_points: 5\nwork_started: 2026-05-28T16:30:54+0200\nwork_done: 2026-05-28T22:06:38+0200\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md\ntask_file: US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T22:06:38+0200\n---\n# User Story: Add read-only CLI for sprint and backlog inspection\n",
+        ).unwrap();
+        fs::write(
+            backlog_dir.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.2099-06-01--2099-06-12.foundation\nassignee: TBD\nstory_points: 8\nwork_started: 2026-05-28T22:35:00+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T22:35:00+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+        fs::write(
+            todo_root.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.2099-06-01--2099-06-12.foundation\nassignee: TBD\nstory_points: 8\nwork_started: 2026-05-28T22:35:00+0200\nwork_done:\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md\ntask_file: US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T22:35:00+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+        fs::write(
+            todo_root.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.tasks.md"),
+            "# Tasks for US-F1-053\n\nParent User Story: US-F1-053\nSprint: S001.2099-06-01--2099-06-12.foundation\n\n---\n",
+        ).unwrap();
+
+        let next_start = NaiveDate::from_ymd_opt(2099, 6, 15).unwrap();
+        let next_end = NaiveDate::from_ymd_opt(2099, 6, 26).unwrap();
+        let next_input = CreateSprintInput {
+            number: 2,
+            start_date: next_start,
+            end_date: next_end,
+            headline: "next-sprint".to_string(),
+        };
+
+        let result = rollover_sprint(
+            temp_root.path(),
+            "S001.2099-06-01--2099-06-12.foundation",
+            Some(&next_input),
+        )
+        .unwrap();
+
+        assert!(result.created_next_sprint);
+        assert_eq!(result.completed_story_ids, vec!["US-F1-052".to_string()]);
+        assert_eq!(result.carried_story_ids, vec!["US-F1-053".to_string()]);
+        assert!(temp_root.path().join("doc/backlog/sprints/S002.2099-06-15--2099-06-26.next-sprint/01.todo/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md").exists());
+        let closed_summary = fs::read_to_string(sprint_root.join("README.md")).unwrap();
+        assert!(
+            closed_summary.contains(
+                "Completed stories in `S001.2099-06-01--2099-06-12.foundation`: US-F1-052."
+            )
+        );
+        assert!(
+            closed_summary
+                .contains("Moved to `S002.2099-06-15--2099-06-26.next-sprint`: US-F1-053.")
+        );
     }
 }
