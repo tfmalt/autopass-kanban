@@ -1,0 +1,14 @@
+[package]
+name = "kanban-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "kanban"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+kanban-core = { path = "../core" }
+clap.workspace = true

@@ -1,0 +1,9 @@
+[package]
+name = "kanban-tui"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+kanban-core = { path = "../core" }
