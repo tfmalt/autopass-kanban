@@ -21,6 +21,15 @@ These instructions apply to all files under `tools/kanban/`.
 - Use full local ISO 8601 timestamps with numeric timezone offset when writing backlog lifecycle fields.
 - Avoid adding new CLI command names, status names, or file layout conventions without checking `doc/backlog/README.md` and the relevant backlog-board workflow.
 
+## Versioning
+
+- The kanban workspace version is defined in `tools/kanban/Cargo.toml` under `[workspace.package]`.
+- Always update the version when finished with a task.
+- Use this SemVer scheme:
+  - `MAJOR` is the last two digits of the current year, for example `26` for 2026.
+  - `MINOR` is the current month without a leading zero, for example `1`, `5`, or `12`.
+  - `PATCH` is the current day of month without a leading zero followed by the update count for that day. For example, the 3rd update on 5 May is `53`, and the 12th update on 29 May is `2912`.
+
 ## Verification
 
 Run commands from `tools/kanban/` unless noted otherwise:

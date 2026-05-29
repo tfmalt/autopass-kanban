@@ -48,9 +48,7 @@ enum SprintCommand {
         about = "Show one sprint summary. Effect: read-only inspection of the selected sprint folder, stories, tasks, and README. Side effects: none."
     )]
     Show {
-        #[arg(
-            help = "Sprint folder name to inspect, for example S001.2026-06-01--2026-06-12.foundation."
-        )]
+        #[arg(help = "Sprint folder name to inspect, for example S001.foundation.")]
         name: String,
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
         #[arg(default_value = ".")]
