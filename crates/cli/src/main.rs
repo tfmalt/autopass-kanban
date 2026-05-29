@@ -6,6 +6,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use kanban_core::{
     CreateSprintInput, DoctorFinding, PhaseOverview, RolloverResult, SprintOverview, StoryDetails,
     StoryKind, TaskSummary, add_task_to_story, create_sprint, doctor_repository, find_story,
+    list_epic_ids, list_sprint_names, list_story_completion_items, list_story_ids,
     move_story_to_status_with_assignee, rollover_sprint, suggested_next_sprint_dates,
     suggested_next_sprint_number, suggested_sprint_dates, summarize_current_sprint,
     summarize_phase, summarize_sprint, summarize_sprints, update_task_in_story,
@@ -205,6 +206,15 @@ impl CompletionTarget {
     }
 }
 
+/// Kind of IDs to list for shell completion.
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum ListIdsKind {
+    Sprints,
+    Stories,
+    StoriesWithTitles,
+    Epics,
+}
+
 #[derive(Subcommand)]
 enum Command {
     #[command(
@@ -257,6 +267,17 @@ enum Command {
         about = "Diagnose repository workflow issues. Effect: read-only inspection with actionable findings. Side effects: none."
     )]
     Doctor {
+        #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        hide = true,
+        about = "List IDs for shell completion. Effect: read-only listing of sprint names, story IDs, or epic IDs from the repository. Side effects: none."
+    )]
+    ListIds {
+        #[arg(help = "Kind of IDs to list: sprints, stories, stories-with-titles, or epics.")]
+        kind: ListIdsKind,
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
         #[arg(default_value = ".")]
         repo_root: PathBuf,
@@ -412,6 +433,133 @@ fn format_task_summary(summary: &TaskSummary) -> String {
     format!(
         "tasks(todo={}, in-progress={}, blocked={}, done={})",
         summary.todo, summary.in_progress, summary.blocked, summary.done
+    )
+}
+
+/// ZSH helper functions appended after the clap_complete-generated script.
+/// These provide dynamic completion for sprint names, story IDs, and epic IDs.
+const ZSH_DYNAMIC_HELPERS: &str = r#"
+_kanban_sprint_names() {
+    local -a names
+    local name
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && names+=( "$name" )
+    done < <(kanban list-ids sprints 2>/dev/null)
+    compadd -a names
+}
+_kanban_story_ids() {
+    local -a ids descriptions
+    local id title
+    while IFS=$'\t' read -r id title; do
+        [[ -z "$id" ]] && continue
+        ids+=( "$id" )
+        if [[ -n "$title" ]]; then
+            descriptions+=( "$id -- $title" )
+        else
+            descriptions+=( "$id" )
+        fi
+    done < <(kanban list-ids stories-with-titles 2>/dev/null)
+    compadd -d descriptions -a ids
+}
+_kanban_epic_ids() {
+    local -a ids
+    local id
+    while IFS= read -r id; do
+        [[ -n "$id" ]] && ids+=( "$id" )
+    done < <(kanban list-ids epics 2>/dev/null)
+    compadd -a ids
+}
+"#;
+
+/// Enhance the zsh completion script by replacing `_default` completions for
+/// sprint name and story ID arguments with dynamic lookup helpers.
+fn enhance_zsh_completion(script: &str) -> String {
+    let enhanced = script
+        // Sprint name arguments
+        .replace(
+            "':name -- Sprint folder name to inspect, for example S001.foundation.:_default'",
+            "':name -- Sprint folder name to inspect, for example S001.foundation.:_kanban_sprint_names'",
+        )
+        .replace(
+            "':name -- Sprint folder name to close and roll over.:_default'",
+            "':name -- Sprint folder name to close and roll over.:_kanban_sprint_names'",
+        )
+        // Story ID arguments (story show, story move, task add, task update)
+        .replace(
+            "':id -- Story id to inspect, for example US-F1-053.:_default'",
+            "':id -- Story id to inspect, for example US-F1-053.:_kanban_story_ids'",
+        )
+        .replace(
+            "':id -- Sprint story id to move, for example US-F1-053.:_default'",
+            "':id -- Sprint story id to move, for example US-F1-053.:_kanban_story_ids'",
+        )
+        // Note: .replace replaces ALL occurrences — intentional for task add + task update
+        .replace(
+            "':story_id -- Parent story id for the task, for example US-F1-053.:_default'",
+            "':story_id -- Parent story id for the task, for example US-F1-053.:_kanban_story_ids'",
+        );
+    format!("{enhanced}{ZSH_DYNAMIC_HELPERS}")
+}
+
+/// Inject dynamic completion into a single bash case block identified by its label and opts string.
+/// Inserts a story/sprint lookup BEFORE the standard opts fallback at the given word position.
+fn inject_bash_dynamic(script: &str, label: &str, opts: &str, kind: &str, pos: usize) -> String {
+    let old = format!(
+        "        {label})\n            opts=\"{opts}\"\n            if [[ ${{cur}} == -* || ${{COMP_CWORD}} -eq {pos} ]] ; then\n                COMPREPLY=( $(compgen -W \"${{opts}}\" -- \"${{cur}}\") )\n                return 0\n            fi"
+    );
+    let new = format!(
+        "        {label})\n            opts=\"{opts}\"\n            if [[ ${{COMP_CWORD}} -eq {pos} && ${{cur}} != -* ]]; then\n                COMPREPLY=( $(compgen -W \"$(kanban list-ids {kind} 2>/dev/null)\" -- \"${{cur}}\") )\n                return 0\n            fi\n            if [[ ${{cur}} == -* || ${{COMP_CWORD}} -eq {pos} ]] ; then\n                COMPREPLY=( $(compgen -W \"${{opts}}\" -- \"${{cur}}\") )\n                return 0\n            fi"
+    );
+    if script.contains(&old) {
+        script.replacen(&old, &new, 1)
+    } else {
+        script.to_string()
+    }
+}
+
+/// Enhance the bash completion script with dynamic sprint name and story ID completions.
+fn enhance_bash_completion(script: &str) -> String {
+    let script = inject_bash_dynamic(
+        script,
+        "kanban__subcmd__sprint__subcmd__show",
+        "-h --help <NAME> [REPO_ROOT]",
+        "sprints",
+        3,
+    );
+    let script = inject_bash_dynamic(
+        &script,
+        "kanban__subcmd__sprint__subcmd__rollover",
+        "-h --help <NAME> [REPO_ROOT]",
+        "sprints",
+        3,
+    );
+    let script = inject_bash_dynamic(
+        &script,
+        "kanban__subcmd__story__subcmd__show",
+        "-h --help <ID> [REPO_ROOT]",
+        "stories",
+        3,
+    );
+    let script = inject_bash_dynamic(
+        &script,
+        "kanban__subcmd__story__subcmd__move",
+        "-a -h --assignee --help <ID> <STATUS> [REPO_ROOT]",
+        "stories",
+        3,
+    );
+    let script = inject_bash_dynamic(
+        &script,
+        "kanban__subcmd__task__subcmd__add",
+        "-h --title --status --tags --description --help <STORY_ID> [REPO_ROOT]",
+        "stories",
+        3,
+    );
+    inject_bash_dynamic(
+        &script,
+        "kanban__subcmd__task__subcmd__update",
+        "-h --title --status --tags --description --help <STORY_ID> <TASK_ID> [REPO_ROOT]",
+        "stories",
+        3,
     )
 }
 
@@ -650,7 +798,15 @@ fn main() -> Result<()> {
         Command::Completion { target } => {
             let mut command = Args::command();
             if let Some(generator) = target.generator() {
-                clap_complete::generate(generator, &mut command, "kanban", &mut std::io::stdout());
+                let mut buf = Vec::new();
+                clap_complete::generate(generator, &mut command, "kanban", &mut buf);
+                let script = String::from_utf8(buf).expect("clap_complete output should be utf8");
+                let enhanced = match generator {
+                    clap_complete::Shell::Zsh => enhance_zsh_completion(&script),
+                    clap_complete::Shell::Bash => enhance_bash_completion(&script),
+                    _ => script,
+                };
+                print!("{enhanced}");
             } else {
                 println!("{COMPLETION_HELP}");
             }
@@ -674,6 +830,29 @@ fn main() -> Result<()> {
             let findings = doctor_repository(repo_root)?;
             print_doctor_findings(&findings);
         }
+        Command::ListIds { kind, repo_root } => match kind {
+            ListIdsKind::Sprints => {
+                for id in list_sprint_names(repo_root)? {
+                    println!("{id}");
+                }
+            }
+            ListIdsKind::Stories => {
+                for id in list_story_ids(repo_root)? {
+                    println!("{id}");
+                }
+            }
+            ListIdsKind::StoriesWithTitles => {
+                for item in list_story_completion_items(repo_root)? {
+                    let description = item.description.replace(['\t', '\n', '\r'], " ");
+                    println!("{}\t{}", item.value, description);
+                }
+            }
+            ListIdsKind::Epics => {
+                for id in list_epic_ids(repo_root)? {
+                    println!("{id}");
+                }
+            }
+        },
     }
 
     Ok(())

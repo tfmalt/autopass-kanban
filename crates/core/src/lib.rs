@@ -37,6 +37,7 @@ const CANONICAL_STORY_STATUSES: [&str; 8] = [
 const ALLOWED_STORY_POINTS: [&str; 10] = ["2", "3", "5", "8", "13", "XS", "S", "M", "L", "XL"];
 const TASK_HEADING_PATTERN: &str = r"(?m)^##\s+(TASK-[A-Z0-9-]+)\s+-\s+(.+)$";
 const STORY_FILE_PREFIX: &str = "US-";
+const EPIC_FILE_PREFIX: &str = "EP-";
 const STORY_FILE_SUFFIX: &str = ".md";
 const TASK_FILE_SUFFIX: &str = ".tasks.md";
 const SPRINT_FOLDER_PATTERN: &str = r"^(S\d{3})\.([a-z0-9][a-z0-9-]*)$";
@@ -219,6 +220,12 @@ pub struct PhaseOverview {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionItem {
+    pub value: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoryDetails {
     pub story: StoryOverview,
     pub source_story_path: Option<PathBuf>,
@@ -393,6 +400,98 @@ pub fn collect_user_story_files(repo_root: impl AsRef<Path>) -> Result<Vec<PathB
 
     files.sort();
     Ok(files)
+}
+
+/// Collect all epic markdown files (`EP-*.md`) from the backlog tree.
+pub fn collect_epic_files(repo_root: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
+    let backlog_root = repo_root.as_ref().join("doc/backlog");
+    let mut files = Vec::new();
+
+    for entry in WalkDir::new(&backlog_root)
+        .into_iter()
+        .filter_entry(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+    {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
+        let name = entry.file_name().to_string_lossy();
+        if name.starts_with(EPIC_FILE_PREFIX) && name.ends_with(STORY_FILE_SUFFIX) {
+            files.push(entry.into_path());
+        }
+    }
+
+    files.sort();
+    Ok(files)
+}
+
+/// Return all sprint folder names (e.g. `S000.getting-started`) sorted alphabetically.
+/// This is a lightweight listing suitable for shell completion.
+pub fn list_sprint_names(repo_root: impl AsRef<Path>) -> Result<Vec<String>> {
+    let repo_root = fs::canonicalize(repo_root.as_ref())
+        .with_context(|| format!("resolve repo root {}", repo_root.as_ref().display()))?;
+    let mut specs = discover_sprint_folder_specs(&repo_root)?;
+    specs.sort_by(|a, b| a.sprint_name.cmp(&b.sprint_name));
+    Ok(specs.into_iter().map(|s| s.sprint_name).collect())
+}
+
+/// Return unique user story IDs (e.g. `US-F1-053`) sorted alphabetically.
+/// Each ID appears only once regardless of how many copies (sprint vs backlog) exist.
+/// This is a lightweight listing suitable for shell completion.
+pub fn list_story_ids(repo_root: impl AsRef<Path>) -> Result<Vec<String>> {
+    let repository = read_repository(repo_root)?;
+    let mut seen = BTreeSet::new();
+    for story in &repository.stories {
+        if let Some(id) = story.frontmatter.get("id") {
+            let id_upper = id.trim().to_ascii_uppercase();
+            if !id_upper.is_empty() {
+                seen.insert(id_upper);
+            }
+        }
+    }
+    Ok(seen.into_iter().collect())
+}
+
+/// Return user story completion values with display descriptions.
+/// `value` is the inserted shell completion; `description` is menu text only.
+pub fn list_story_completion_items(repo_root: impl AsRef<Path>) -> Result<Vec<CompletionItem>> {
+    let repository = read_repository(repo_root)?;
+    let mut items = BTreeMap::new();
+    for story in &repository.stories {
+        if let Some(id) = story.frontmatter.get("id") {
+            let id_upper = id.trim().to_ascii_uppercase();
+            if !id_upper.is_empty() {
+                let title = story_title(&story.body).unwrap_or_else(|| story.file_name.clone());
+                items.entry(id_upper).or_insert(title);
+            }
+        }
+    }
+
+    Ok(items
+        .into_iter()
+        .map(|(value, description)| CompletionItem { value, description })
+        .collect())
+}
+
+/// Return epic IDs (e.g. `EP-F1-06`) from all `EP-*.md` files in the backlog.
+/// IDs are read from frontmatter `id` field; missing/empty entries are skipped.
+/// This is a lightweight listing suitable for shell completion.
+pub fn list_epic_ids(repo_root: impl AsRef<Path>) -> Result<Vec<String>> {
+    let files = collect_epic_files(repo_root)?;
+    let mut ids = BTreeSet::new();
+    for file in &files {
+        if let Ok(markdown) = fs::read_to_string(file) {
+            let parsed = parse_frontmatter(&markdown);
+            if let Some(id) = parsed.frontmatter.get("id") {
+                let id_upper = id.trim().to_ascii_uppercase();
+                if !id_upper.is_empty() {
+                    ids.insert(id_upper);
+                }
+            }
+        }
+    }
+    Ok(ids.into_iter().collect())
 }
 
 pub fn read_task_file(
