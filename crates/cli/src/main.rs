@@ -186,7 +186,7 @@ enum TaskCommand {
     },
 }
 
-const COMPLETION_HELP: &str = "Generate a shell completion script from the current kanban command tree.\n\nInstall bash completion:\n  kanban completion bash > ~/.local/share/bash-completion/completions/kanban\n\nInstall zsh completion:\n  mkdir -p ~/.zfunc\n  kanban completion zsh > ~/.zfunc/_kanban\n  Add `fpath=(~/.zfunc $fpath)` and `autoload -Uz compinit && compinit` to ~/.zshrc if needed.\n\nSupported shells: bash, zsh. The command only prints completion scripts and never edits shell config files.";
+const COMPLETION_HELP: &str = "Generate a shell completion script from the current kanban command tree.\n\nInstall zsh completion — add to ~/.zshrc:\n  eval \"$(kanban completion zsh)\"\n\nInstall bash completion — add to ~/.bashrc or ~/.bash_profile:\n  eval \"$(kanban completion bash)\"\n\nNote on direnv: .envrc is evaluated as bash, so eval \"$(kanban completion zsh)\" cannot\nbe placed there. Add the eval line to ~/.zshrc instead; it runs once per shell.\n\nSupported shells: bash, zsh. The command only prints completion scripts and never edits shell config files.";
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum CompletionTarget {

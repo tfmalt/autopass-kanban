@@ -23,6 +23,30 @@ Implemented commands:
 - `kanban validate [repo_root]`
 - `kanban doctor [repo_root]`
 
+## Shell completion
+
+### zsh
+
+Add to `~/.zshrc`:
+
+```zsh
+eval "$(kanban completion zsh)"
+```
+
+### bash
+
+Add to `~/.bashrc` or `~/.bash_profile`:
+
+```bash
+eval "$(kanban completion bash)"
+```
+
+### Note on direnv
+
+`.envrc` is evaluated as bash by direnv, so `eval "$(kanban completion zsh)"` cannot be
+placed there — the zsh-specific completion syntax will fail. The `eval` approach in
+`~/.zshrc` is the recommended setup; it runs once per shell regardless of directory.
+
 - `crates/core`: shared parsing and validation core
 - `crates/cli`: CLI interface for inspection and lightweight write flows
 - `crates/tui`: reserved for the terminal UI
