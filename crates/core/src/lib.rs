@@ -2166,7 +2166,7 @@ fn rewrite_task_markdown(
             ));
             found = true;
         } else {
-            rewritten.push_str(block);
+            rewritten.push_str(&normalized[*start..block_end]);
         }
         cursor = block_end;
     }
@@ -3102,6 +3102,26 @@ mod tests {
             fs::read_to_string(temp_root.path().join(add_result.task_file_path)).unwrap();
         assert!(updated_markdown.contains("Status: Done"));
         assert!(updated_markdown.contains("Completed command coverage."));
+    }
+
+    #[test]
+    fn task_update_preserves_other_task_headings() {
+        let markdown = "# Tasks for US-F1-053\n\n---\n\n## TASK-US-F1-053-001 - First task\n\nStatus: To Do\nTags: docs\n\nDescription:\nFirst.\n\n---\n\n## TASK-US-F1-053-002 - Second task\n\nStatus: To Do\nTags: cli\n\nDescription:\nSecond.\n\n---\n\n## TASK-US-F1-053-003 - Third task\n\nStatus: To Do\nTags: tests\n\nDescription:\nThird.\n";
+
+        let updated = rewrite_task_markdown(
+            markdown,
+            "TASK-US-F1-053-002",
+            Some("done"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(updated.contains("## TASK-US-F1-053-001 - First task"));
+        assert!(updated.contains("## TASK-US-F1-053-002 - Second task"));
+        assert!(updated.contains("## TASK-US-F1-053-003 - Third task"));
+        assert!(updated.contains("Status: Done"));
     }
 
     #[test]

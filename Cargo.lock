@@ -344,18 +344,19 @@ dependencies = [
 
 [[package]]
 name = "kanban-cli"
-version = "26.5.298"
+version = "26.5.2914"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "clap_complete",
  "kanban-core",
+ "libc",
 ]
 
 [[package]]
 name = "kanban-core"
-version = "26.5.298"
+version = "26.5.2914"
 dependencies = [
  "anyhow",
  "chrono",
@@ -367,7 +368,7 @@ dependencies = [
 
 [[package]]
 name = "kanban-tui"
-version = "26.5.298"
+version = "26.5.2914"
 dependencies = [
  "anyhow",
  "kanban-core",
@@ -375,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "kanban-web"
-version = "26.5.298"
+version = "26.5.2914"
 dependencies = [
  "anyhow",
  "kanban-core",

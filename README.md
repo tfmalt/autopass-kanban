@@ -53,3 +53,9 @@ placed there — the zsh-specific completion syntax will fail. The `eval` approa
 - `crates/web`: reserved for the local web interface
 
 Run tests with `cargo test` from this directory.
+
+## Terminal output
+
+Human-readable commands use semantic ANSI color when stdout is an interactive
+terminal. Color is disabled automatically for pipes, `NO_COLOR`, and `TERM=dumb`
+so command output remains safe for scripts and review notes.

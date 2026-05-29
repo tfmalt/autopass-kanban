@@ -1,17 +1,173 @@
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use chrono::NaiveDate;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use kanban_core::{
     CreateSprintInput, DoctorFinding, PhaseOverview, RolloverResult, SprintOverview, StoryDetails,
-    StoryKind, TaskSummary, add_task_to_story, create_sprint, doctor_repository, find_story,
-    list_epic_ids, list_sprint_names, list_story_completion_items, list_story_ids,
+    StoryKind, StoryOverview, TaskSummary, add_task_to_story, create_sprint, doctor_repository,
+    find_story, list_epic_ids, list_sprint_names, list_story_completion_items, list_story_ids,
     move_story_to_status_with_assignee, rollover_sprint, suggested_next_sprint_dates,
     suggested_next_sprint_number, suggested_sprint_dates, summarize_current_sprint,
     summarize_phase, summarize_sprint, summarize_sprints, update_task_in_story,
     validate_repository,
 };
+
+const MIN_TERMINAL_WIDTH: usize = 80;
+const DEFAULT_OUTPUT_WIDTH: usize = 100;
+
+#[derive(Copy, Clone)]
+struct Theme {
+    color: bool,
+}
+
+#[derive(Copy, Clone)]
+enum Style {
+    Bold,
+    Muted,
+    Blue,
+    Cyan,
+    Green,
+    Purple,
+    Red,
+    Yellow,
+}
+
+impl Theme {
+    fn for_stdout() -> Self {
+        Self {
+            color: std::io::stdout().is_terminal()
+                && std::env::var_os("NO_COLOR").is_none()
+                && std::env::var_os("TERM").is_none_or(|term| term != "dumb"),
+        }
+    }
+
+    #[cfg(test)]
+    fn color() -> Self {
+        Self { color: true }
+    }
+
+    #[cfg(test)]
+    fn plain() -> Self {
+        Self { color: false }
+    }
+
+    fn paint(&self, style: Style, value: impl std::fmt::Display) -> String {
+        if !self.color {
+            return value.to_string();
+        }
+
+        let code = match style {
+            Style::Bold => "1",
+            Style::Muted => "2",
+            Style::Blue => "1;34",
+            Style::Cyan => "1;36",
+            Style::Green => "1;32",
+            Style::Purple => "1;35",
+            Style::Red => "1;31",
+            Style::Yellow => "1;33",
+        };
+        format!("\x1b[{code}m{value}\x1b[0m")
+    }
+
+    fn heading(&self, value: impl std::fmt::Display) -> String {
+        self.paint(Style::Bold, value)
+    }
+
+    fn label(&self, value: impl std::fmt::Display) -> String {
+        self.paint(Style::Bold, value)
+    }
+
+    fn id(&self, value: impl std::fmt::Display) -> String {
+        self.paint(Style::Cyan, value)
+    }
+
+    fn count(&self, value: impl std::fmt::Display) -> String {
+        self.paint(Style::Bold, value)
+    }
+
+    fn path(&self, value: impl std::fmt::Display) -> String {
+        self.paint(Style::Muted, value)
+    }
+
+    fn success(&self, value: impl std::fmt::Display) -> String {
+        self.paint(Style::Green, value)
+    }
+
+    fn warning(&self, value: impl std::fmt::Display) -> String {
+        self.paint(Style::Yellow, value)
+    }
+
+    fn status(&self, status: &str) -> String {
+        match status {
+            "todo" => self.paint(Style::Muted, status),
+            "in-progress" => self.paint(Style::Blue, status),
+            "ready-for-qa" => self.paint(Style::Purple, status),
+            "done" => self.paint(Style::Green, status),
+            "blocked" => self.paint(Style::Red, status),
+            _ => status.to_string(),
+        }
+    }
+
+    fn severity(&self, severity: &str) -> String {
+        match severity.to_ascii_lowercase().as_str() {
+            "error" | "critical" => self.paint(Style::Red, severity),
+            "warning" | "warn" => self.paint(Style::Yellow, severity),
+            "info" => self.paint(Style::Cyan, severity),
+            _ => severity.to_string(),
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct OutputLayout {
+    width: usize,
+}
+
+impl OutputLayout {
+    fn for_stdout() -> Result<Self> {
+        let width = detected_terminal_width().unwrap_or(DEFAULT_OUTPUT_WIDTH);
+        if width < MIN_TERMINAL_WIDTH {
+            bail!(
+                "Terminal width must be at least {MIN_TERMINAL_WIDTH} columns for kanban sprint output; detected {width}."
+            );
+        }
+        Ok(Self { width })
+    }
+}
+
+fn detected_terminal_width() -> Option<usize> {
+    if std::io::stdout().is_terminal() {
+        terminal_width_from_stdout().or_else(terminal_width_from_columns)
+    } else {
+        terminal_width_from_columns()
+    }
+}
+
+fn terminal_width_from_columns() -> Option<usize> {
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|width| *width > 0)
+}
+
+#[cfg(unix)]
+fn terminal_width_from_stdout() -> Option<usize> {
+    let mut size = std::mem::MaybeUninit::<libc::winsize>::zeroed();
+    let result = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, size.as_mut_ptr()) };
+    if result != 0 {
+        return None;
+    }
+
+    let size = unsafe { size.assume_init() };
+    (size.ws_col > 0).then_some(size.ws_col as usize)
+}
+
+#[cfg(not(unix))]
+fn terminal_width_from_stdout() -> Option<usize> {
+    None
+}
 
 #[derive(Parser)]
 #[command(name = "kanban")]
@@ -284,147 +440,488 @@ enum Command {
     },
 }
 
-fn print_sprint_overview(sprint: &SprintOverview) {
-    println!("Sprint: {}", sprint.sprint_name);
-    println!("Headline: {}", sprint.headline);
-    println!("Dates: {} .. {}", sprint.start_date, sprint.end_date);
-    println!(
-        "README: {}{}",
-        sprint.readme_path.display(),
-        sprint
-            .readme_status
-            .as_deref()
-            .map(|status| format!(" (status: {status})"))
-            .unwrap_or_default()
+fn print_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOverview) {
+    print!("{}", render_sprint_overview(theme, layout, sprint));
+}
+
+fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOverview) -> String {
+    let mut output = String::new();
+    push_line(
+        &mut output,
+        &theme.heading(format!("Sprint {}", sprint.sprint_name)),
     );
+    push_wrapped_label_value(
+        &mut output,
+        theme,
+        "Headline:",
+        &sprint.headline,
+        layout.width,
+    );
+    push_wrapped_label_value(
+        &mut output,
+        theme,
+        "Dates:",
+        &format!("{} .. {}", sprint.start_date, sprint.end_date),
+        layout.width,
+    );
+    let readme = sprint
+        .readme_status
+        .as_deref()
+        .map(|status| format!("{} (status: {status})", sprint.readme_path.display()))
+        .unwrap_or_else(|| sprint.readme_path.display().to_string());
+    push_wrapped_label_value(&mut output, theme, "README:", &readme, layout.width);
 
     if !sprint.warnings.is_empty() {
-        println!("Warnings:");
+        push_line(&mut output, &theme.warning("Warnings:"));
         for warning in &sprint.warnings {
-            println!("- {warning}");
+            push_wrapped_hanging_line(&mut output, "- ", warning, layout.width, |value| {
+                theme.warning(value)
+            });
         }
     }
 
-    println!("Stories by status:");
+    push_line(&mut output, &theme.heading("Stories by status"));
     for status in ["todo", "in-progress", "ready-for-qa", "done", "blocked"] {
+        push_line(&mut output, "");
         let stories = sprint
             .stories_by_status
             .get(status)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        println!("- {status}: {}", stories.len());
-        for story in stories {
-            let task_suffix = story
-                .task_summary
-                .as_ref()
-                .map(format_task_summary)
-                .unwrap_or_default();
-            if task_suffix.is_empty() {
-                println!("  {} {} [{}]", story.id, story.title, story.assignee);
-            } else {
-                println!(
-                    "  {} {} [{}] {}",
-                    story.id, story.title, story.assignee, task_suffix
-                );
-            }
+        push_line(
+            &mut output,
+            &format!("{} ({})", theme.status(status), theme.count(stories.len())),
+        );
+        if stories.is_empty() {
+            push_line(&mut output, "  - none");
+        } else {
+            push_story_table(&mut output, theme, layout.width, stories);
         }
     }
 
-    println!("Blocked work:");
+    push_line(&mut output, &theme.heading("Blocked work"));
     if sprint.blocked_work.is_empty() {
-        println!("- none");
+        push_line(&mut output, "- none");
     } else {
-        for item in &sprint.blocked_work {
-            match (&item.task_id, &item.task_title) {
-                (Some(task_id), Some(task_title)) => {
-                    println!(
-                        "- {} {} -> {} {}",
-                        item.story_id, item.story_title, task_id, task_title
-                    );
-                }
-                _ => println!("- {} {}", item.story_id, item.story_title),
-            }
+        push_blocked_work_table(&mut output, theme, layout.width, &sprint.blocked_work);
+    }
+
+    output
+}
+
+fn push_line(output: &mut String, line: &str) {
+    output.push_str(line);
+    output.push('\n');
+}
+
+fn push_wrapped_label_value(
+    output: &mut String,
+    theme: &Theme,
+    label: &str,
+    value: &str,
+    width: usize,
+) {
+    let prefix_width = display_width(label) + 1;
+    let value_width = width.saturating_sub(prefix_width).max(1);
+    let wrapped = wrap_text(value, value_width);
+    for (index, line) in wrapped.iter().enumerate() {
+        if index == 0 {
+            push_line(output, &format!("{} {line}", theme.label(label)));
+        } else {
+            push_line(output, &format!("{}{line}", " ".repeat(prefix_width)));
         }
     }
 }
 
-fn print_phase_overview(phase: &PhaseOverview) {
-    println!("Phase: {}", phase.phase);
-    println!("Stories: {}", phase.stories.len());
+fn push_wrapped_hanging_line(
+    output: &mut String,
+    prefix: &str,
+    value: &str,
+    width: usize,
+    style: impl Fn(&str) -> String,
+) {
+    let value_width = width.saturating_sub(display_width(prefix)).max(1);
+    let wrapped = wrap_text(value, value_width);
+    for (index, line) in wrapped.iter().enumerate() {
+        if index == 0 {
+            push_line(output, &format!("{prefix}{}", style(line)));
+        } else {
+            push_line(
+                output,
+                &format!("{}{line}", " ".repeat(display_width(prefix))),
+            );
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+enum CellStyle {
+    Id,
+    Path,
+    Warning,
+}
+
+struct TableCell {
+    text: String,
+    style: Option<CellStyle>,
+}
+
+impl TableCell {
+    fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            style: None,
+        }
+    }
+
+    fn styled(text: impl Into<String>, style: CellStyle) -> Self {
+        Self {
+            text: text.into(),
+            style: Some(style),
+        }
+    }
+}
+
+fn push_story_table(output: &mut String, theme: &Theme, width: usize, stories: &[StoryOverview]) {
+    let columns = story_table_columns(width, stories);
+    let rows = stories
+        .iter()
+        .map(|story| {
+            vec![
+                TableCell::styled(&story.id, CellStyle::Id),
+                TableCell::new(&story.title),
+                TableCell::new(&story.assignee),
+                TableCell::styled(
+                    format_compact_task_summary(story.task_summary.as_ref()),
+                    CellStyle::Path,
+                ),
+            ]
+        })
+        .collect::<Vec<_>>();
+    push_wrapped_rows(output, theme, &columns, &rows);
+}
+
+fn push_blocked_work_table(
+    output: &mut String,
+    theme: &Theme,
+    width: usize,
+    items: &[kanban_core::BlockedWorkItem],
+) {
+    let columns = blocked_work_table_columns(width, items);
+    let rows = items
+        .iter()
+        .map(|item| {
+            vec![
+                TableCell::styled(&item.story_id, CellStyle::Id),
+                TableCell::new(&item.story_title),
+                TableCell::styled(
+                    item.task_id.clone().unwrap_or_else(|| "-".to_string()),
+                    CellStyle::Warning,
+                ),
+                TableCell::new(item.task_title.clone().unwrap_or_else(|| "-".to_string())),
+            ]
+        })
+        .collect::<Vec<_>>();
+    push_wrapped_rows(output, theme, &columns, &rows);
+}
+
+fn story_table_columns(width: usize, stories: &[StoryOverview]) -> Vec<(&'static str, usize)> {
+    let available = row_content_width(width, 4);
+    let id_width = stories
+        .iter()
+        .map(|story| display_width(&story.id))
+        .max()
+        .unwrap_or(5)
+        .clamp(5, 12);
+    let task_width = stories
+        .iter()
+        .map(|story| display_width(&format_compact_task_summary(story.task_summary.as_ref())))
+        .max()
+        .unwrap_or(5)
+        .clamp(5, 17);
+    let assignee_width = stories
+        .iter()
+        .flat_map(|story| story.assignee.split_whitespace())
+        .map(display_width)
+        .max()
+        .unwrap_or(8)
+        .max(8);
+    let title_width = available
+        .saturating_sub(id_width + assignee_width + task_width)
+        .max(1);
+
+    vec![
+        ("Story", id_width),
+        ("Description", title_width),
+        ("Assignee", assignee_width),
+        ("Tasks", task_width),
+    ]
+}
+
+fn blocked_work_table_columns(
+    width: usize,
+    items: &[kanban_core::BlockedWorkItem],
+) -> Vec<(&'static str, usize)> {
+    let available = row_content_width(width, 4);
+    let story_width = items
+        .iter()
+        .map(|item| display_width(&item.story_id))
+        .max()
+        .unwrap_or(5)
+        .clamp(5, 12);
+    let task_width = items
+        .iter()
+        .filter_map(|item| item.task_id.as_deref())
+        .map(display_width)
+        .max()
+        .unwrap_or(4)
+        .clamp(4, 10);
+    let remaining = available.saturating_sub(story_width + task_width);
+    let story_title_width = remaining / 2;
+    let task_title_width = remaining.saturating_sub(story_title_width);
+
+    vec![
+        ("Story", story_width),
+        ("Description", story_title_width.max(16)),
+        ("Task", task_width),
+        ("Task description", task_title_width.max(16)),
+    ]
+}
+
+fn row_content_width(width: usize, column_count: usize) -> usize {
+    let indent = 2;
+    let gaps = column_count.saturating_sub(1) * 2;
+    width.saturating_sub(indent + gaps)
+}
+
+fn push_wrapped_rows(
+    output: &mut String,
+    theme: &Theme,
+    columns: &[(&'static str, usize)],
+    rows: &[Vec<TableCell>],
+) {
+    for row in rows {
+        push_wrapped_table_row(output, theme, columns, row);
+    }
+}
+
+fn push_wrapped_table_row(
+    output: &mut String,
+    theme: &Theme,
+    columns: &[(&'static str, usize)],
+    row: &[TableCell],
+) {
+    let wrapped_cells = row
+        .iter()
+        .zip(columns)
+        .map(|(cell, (_, width))| wrap_text(&cell.text, *width))
+        .collect::<Vec<_>>();
+    let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1);
+
+    for line_index in 0..row_height {
+        let mut line = String::new();
+        line.push_str("  ");
+        for ((cell, (_, width)), wrapped) in row.iter().zip(columns).zip(&wrapped_cells) {
+            let value = wrapped.get(line_index).map(String::as_str).unwrap_or("");
+            let padded = pad_to_width(value, *width);
+            if line.len() > 2 {
+                line.push_str("  ");
+            }
+            line.push_str(&style_table_cell(theme, cell.style, &padded));
+        }
+        push_line(output, &line);
+    }
+}
+
+fn style_table_cell(theme: &Theme, style: Option<CellStyle>, value: &str) -> String {
+    match style {
+        Some(CellStyle::Id) => theme.id(value),
+        Some(CellStyle::Path) => theme.path(value),
+        Some(CellStyle::Warning) => theme.warning(value),
+        None => value.to_string(),
+    }
+}
+
+fn pad_to_width(value: &str, width: usize) -> String {
+    let padding = width.saturating_sub(display_width(value));
+    format!("{value}{}", " ".repeat(padding))
+}
+
+fn display_width(value: &str) -> usize {
+    value.chars().count()
+}
+
+fn wrap_text(value: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut current = String::new();
+
+    for word in value.split_whitespace() {
+        if current.is_empty() {
+            push_word_wrapped(&mut lines, &mut current, word, width);
+        } else if display_width(&current) + 1 + display_width(word) <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut current));
+            push_word_wrapped(&mut lines, &mut current, word, width);
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn push_word_wrapped(lines: &mut Vec<String>, current: &mut String, word: &str, width: usize) {
+    let mut chunk = String::new();
+    for character in word.chars() {
+        if display_width(&chunk) == width {
+            lines.push(std::mem::take(&mut chunk));
+        }
+        chunk.push(character);
+    }
+    *current = chunk;
+}
+
+fn format_compact_task_summary(summary: Option<&TaskSummary>) -> String {
+    summary
+        .map(|summary| {
+            format!(
+                "T:{} IP:{} B:{} D:{}",
+                summary.todo, summary.in_progress, summary.blocked, summary.done
+            )
+        })
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn print_phase_overview(theme: &Theme, phase: &PhaseOverview) {
+    println!("{} {}", theme.label("Phase:"), theme.id(&phase.phase));
+    println!(
+        "{} {}",
+        theme.label("Stories:"),
+        theme.count(phase.stories.len())
+    );
     for story in &phase.stories {
         let sprint = story.sprint.as_deref().unwrap_or("~");
         println!(
             "- {} [{}] sprint={} assignee={} points={} {}",
-            story.id, story.status, sprint, story.assignee, story.story_points, story.title
+            theme.id(&story.id),
+            theme.status(&story.status),
+            sprint,
+            story.assignee,
+            theme.count(&story.story_points),
+            story.title
         );
     }
 }
 
-fn print_story_details(details: &StoryDetails) {
+fn print_story_details(theme: &Theme, details: &StoryDetails) {
     let kind = match details.story.kind {
         StoryKind::Backlog => "backlog",
         StoryKind::Sprint => "sprint",
     };
 
-    println!("Story: {}", details.story.id);
-    println!("Title: {}", details.story.title);
-    println!("Kind: {kind}");
-    println!("Status: {}", details.story.status);
-    println!("Assignee: {}", details.story.assignee);
-    println!("Story points: {}", details.story.story_points);
-    println!("Path: {}", details.story.relative_path.display());
+    println!("{} {}", theme.label("Story:"), theme.id(&details.story.id));
+    println!("{} {}", theme.label("Title:"), details.story.title);
+    println!("{} {kind}", theme.label("Kind:"));
+    println!(
+        "{} {}",
+        theme.label("Status:"),
+        theme.status(&details.story.status)
+    );
+    println!("{} {}", theme.label("Assignee:"), details.story.assignee);
+    println!(
+        "{} {}",
+        theme.label("Story points:"),
+        theme.count(&details.story.story_points)
+    );
+    println!(
+        "{} {}",
+        theme.label("Path:"),
+        theme.path(details.story.relative_path.display())
+    );
 
     if let Some(sprint) = &details.story.sprint {
-        println!("Sprint: {sprint}");
+        println!("{} {sprint}", theme.label("Sprint:"));
     }
     if let Some(source_path) = &details.source_story_path {
-        println!("Source story: {}", source_path.display());
+        println!(
+            "{} {}",
+            theme.label("Source story:"),
+            theme.path(source_path.display())
+        );
     }
     if let Some(task_file_path) = &details.task_file_path {
-        println!("Task file: {}", task_file_path.display());
+        println!(
+            "{} {}",
+            theme.label("Task file:"),
+            theme.path(task_file_path.display())
+        );
     }
     if let Some(summary) = &details.story.task_summary {
-        println!("Task summary: {}", format_task_summary(summary));
+        println!(
+            "{} {}",
+            theme.label("Task summary:"),
+            theme.path(format_task_summary(summary))
+        );
     }
 
-    print_optional_section("Story Statement", details.story_statement.as_deref());
+    print_optional_section(theme, "Story Statement", details.story_statement.as_deref());
     print_optional_section(
+        theme,
         "Acceptance Criteria",
         details.acceptance_criteria.as_deref(),
     );
-    print_optional_section("Definition Of Done", details.definition_of_done.as_deref());
     print_optional_section(
+        theme,
+        "Definition Of Done",
+        details.definition_of_done.as_deref(),
+    );
+    print_optional_section(
+        theme,
         "Notes And Open Questions",
         details.notes_and_open_questions.as_deref(),
     );
 
-    println!("Tasks:");
+    println!("{}", theme.heading("Tasks"));
     if details.tasks.is_empty() {
         println!("- none");
     } else {
         for task in &details.tasks {
-            println!("- {} [{}] {}", task.id, task.normalized_status, task.title);
+            println!(
+                "- {} [{}] {}",
+                theme.id(&task.id),
+                theme.status(&task.normalized_status),
+                task.title
+            );
         }
     }
 }
 
-fn print_optional_section(title: &str, content: Option<&str>) {
+fn print_optional_section(theme: &Theme, title: &str, content: Option<&str>) {
     if let Some(content) = content {
-        println!("{title}:");
+        println!("{}", theme.heading(format!("{title}:")));
         println!("{content}");
     }
 }
 
-fn print_doctor_findings(findings: &[DoctorFinding]) {
+fn print_doctor_findings(theme: &Theme, findings: &[DoctorFinding]) {
     if findings.is_empty() {
-        println!("No doctor findings.");
+        println!("{}", theme.success("No doctor findings."));
         return;
     }
 
     for finding in findings {
         println!(
             "{} [{}] {}",
-            finding.scope, finding.severity, finding.message
+            finding.scope,
+            theme.severity(&finding.severity),
+            finding.message
         );
     }
 }
@@ -638,7 +1135,7 @@ fn prompt_create_sprint(
     })
 }
 
-fn print_rollover_result(result: &RolloverResult) {
+fn print_rollover_result(theme: &Theme, result: &RolloverResult) {
     let completed = if result.completed_story_ids.is_empty() {
         "none".to_string()
     } else {
@@ -650,55 +1147,67 @@ fn print_rollover_result(result: &RolloverResult) {
         result.carried_story_ids.join(", ")
     };
     println!(
-        "Rolled sprint {} -> {}",
-        result.from_sprint, result.to_sprint
+        "{} {} -> {}",
+        theme.success("Rolled sprint"),
+        result.from_sprint,
+        result.to_sprint
     );
     println!(
-        "Created next sprint: {}",
+        "{} {}",
+        theme.label("Created next sprint:"),
         if result.created_next_sprint {
-            "yes"
+            theme.success("yes")
         } else {
-            "no"
+            "no".to_string()
         }
     );
-    println!("Completed stories: {completed}");
-    println!("Carried stories: {carried}");
+    println!("{} {completed}", theme.label("Completed stories:"));
+    println!("{} {carried}", theme.label("Carried stories:"));
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    let theme = Theme::for_stdout();
 
     match args.command {
         Command::Sprint { command } => match command {
             SprintCommand::Current { repo_root } => {
                 let sprint = summarize_current_sprint(repo_root)?;
-                print_sprint_overview(&sprint);
+                print_sprint_overview(&theme, OutputLayout::for_stdout()?, &sprint);
             }
             SprintCommand::List { repo_root } => {
                 let sprints = summarize_sprints(repo_root)?;
                 for sprint in sprints {
                     println!(
                         "- {} [{}..{}]{}",
-                        sprint.sprint_name,
+                        theme.id(sprint.sprint_name),
                         sprint.start_date,
                         sprint.end_date,
                         sprint
                             .readme_status
                             .as_deref()
-                            .map(|status| format!(" README={status}"))
+                            .map(|status| format!(" README={}", theme.status(status)))
                             .unwrap_or_default()
                     );
                 }
             }
             SprintCommand::Show { name, repo_root } => {
                 let sprint = summarize_sprint(repo_root, &name)?;
-                print_sprint_overview(&sprint);
+                print_sprint_overview(&theme, OutputLayout::for_stdout()?, &sprint);
             }
             SprintCommand::Create { repo_root } => {
                 let input = prompt_create_sprint(&repo_root, None, None)?;
                 let result = create_sprint(repo_root, &input)?;
-                println!("Created sprint: {}", result.sprint_name);
-                println!("Path: {}", result.sprint_path.display());
+                println!(
+                    "{} {}",
+                    theme.success("Created sprint:"),
+                    result.sprint_name
+                );
+                println!(
+                    "{} {}",
+                    theme.label("Path:"),
+                    theme.path(result.sprint_path.display())
+                );
             }
             SprintCommand::Rollover { name, repo_root } => {
                 let sprint = summarize_sprint(&repo_root, &name)?;
@@ -723,19 +1232,19 @@ fn main() -> Result<()> {
                     )?)
                 };
                 let result = rollover_sprint(&repo_root, &name, next_input.as_ref())?;
-                print_rollover_result(&result);
+                print_rollover_result(&theme, &result);
             }
         },
         Command::Phase { command } => match command {
             PhaseCommand::Show { phase, repo_root } => {
                 let phase = summarize_phase(repo_root, &phase)?;
-                print_phase_overview(&phase);
+                print_phase_overview(&theme, &phase);
             }
         },
         Command::Story { command } => match command {
             StoryCommand::Show { id, repo_root } => match find_story(repo_root, &id)? {
-                Some(details) => print_story_details(&details),
-                None => println!("Story not found: {id}"),
+                Some(details) => print_story_details(&theme, &details),
+                None => println!("{} {id}", theme.warning("Story not found:")),
             },
             StoryCommand::Move {
                 id,
@@ -750,12 +1259,24 @@ fn main() -> Result<()> {
                     assignee.as_deref(),
                 )?;
                 println!(
-                    "Moved {} in {}: {} -> {}",
-                    result.story_id, result.sprint_name, result.from_status, result.to_status
+                    "{} {} in {}: {} -> {}",
+                    theme.success("Moved"),
+                    theme.id(&result.story_id),
+                    result.sprint_name,
+                    theme.status(&result.from_status),
+                    theme.status(&result.to_status)
                 );
-                println!("Story: {}", result.story_path.display());
+                println!(
+                    "{} {}",
+                    theme.label("Story:"),
+                    theme.path(result.story_path.display())
+                );
                 if let Some(task_path) = result.task_path {
-                    println!("Task file: {}", task_path.display());
+                    println!(
+                        "{} {}",
+                        theme.label("Task file:"),
+                        theme.path(task_path.display())
+                    );
                 }
             }
         },
@@ -770,8 +1291,17 @@ fn main() -> Result<()> {
             } => {
                 let result =
                     add_task_to_story(repo_root, &story_id, &title, &status, &tags, &description)?;
-                println!("Added {} to {}", result.task_id, result.story_id);
-                println!("Task file: {}", result.task_file_path.display());
+                println!(
+                    "{} {} to {}",
+                    theme.success("Added"),
+                    theme.id(&result.task_id),
+                    theme.id(&result.story_id)
+                );
+                println!(
+                    "{} {}",
+                    theme.label("Task file:"),
+                    theme.path(result.task_file_path.display())
+                );
             }
             TaskCommand::Update {
                 story_id,
@@ -791,8 +1321,17 @@ fn main() -> Result<()> {
                     tags.as_deref(),
                     description.as_deref(),
                 )?;
-                println!("Updated {} in {}", result.task_id, result.story_id);
-                println!("Task file: {}", result.task_file_path.display());
+                println!(
+                    "{} {} in {}",
+                    theme.success("Updated"),
+                    theme.id(&result.task_id),
+                    theme.id(&result.story_id)
+                );
+                println!(
+                    "{} {}",
+                    theme.label("Task file:"),
+                    theme.path(result.task_file_path.display())
+                );
             }
         },
         Command::Completion { target } => {
@@ -814,13 +1353,13 @@ fn main() -> Result<()> {
         Command::Validate { repo_root } => {
             let report = validate_repository(repo_root)?;
             if report.issues.is_empty() {
-                println!("No validation issues found.");
+                println!("{}", theme.success("No validation issues found."));
             } else {
                 for issue in report.issues {
                     println!(
                         "{} [{}] {}",
-                        issue.file_path.display(),
-                        issue.rule,
+                        theme.path(issue.file_path.display()),
+                        theme.warning(issue.rule),
                         issue.message
                     );
                 }
@@ -828,7 +1367,7 @@ fn main() -> Result<()> {
         }
         Command::Doctor { repo_root } => {
             let findings = doctor_repository(repo_root)?;
-            print_doctor_findings(&findings);
+            print_doctor_findings(&theme, &findings);
         }
         Command::ListIds { kind, repo_root } => match kind {
             ListIdsKind::Sprints => {
@@ -856,4 +1395,81 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn plain_theme_preserves_text_without_ansi_codes() {
+        let theme = Theme::plain();
+
+        assert_eq!(theme.status("blocked"), "blocked");
+        assert_eq!(theme.id("US-F1-056"), "US-F1-056");
+        assert!(!theme.status("done").contains("\x1b["));
+    }
+
+    #[test]
+    fn color_theme_keeps_status_text_while_adding_ansi_codes() {
+        let theme = Theme::color();
+        let styled = theme.status("in-progress");
+
+        assert!(styled.contains("\x1b["));
+        assert!(styled.contains("in-progress"));
+    }
+
+    #[test]
+    fn sprint_overview_wraps_story_rows_to_terminal_width() {
+        let theme = Theme::plain();
+        let mut stories_by_status = BTreeMap::new();
+        stories_by_status.insert(
+            "in-progress".to_string(),
+            vec![StoryOverview {
+                id: "US-F1-999".to_string(),
+                title: "Improve current sprint terminal rendering so story descriptions wrap responsively inside the detected table boundary".to_string(),
+                status: "in-progress".to_string(),
+                assignee: "Ada Lovelace <ada@example.test>".to_string(),
+                story_points: "3".to_string(),
+                sprint: Some("S999.test".to_string()),
+                kind: StoryKind::Sprint,
+                relative_path: PathBuf::from("doc/backlog/sprints/S999.test/02.in-progress/US-F1-999.md"),
+                task_summary: Some(TaskSummary {
+                    todo: 1,
+                    in_progress: 2,
+                    blocked: 3,
+                    done: 4,
+                }),
+                task_count: 10,
+            }],
+        );
+        let sprint = SprintOverview {
+            sprint_name: "S999.test".to_string(),
+            headline: "Terminal wrapping".to_string(),
+            start_date: "2026-05-29".to_string(),
+            end_date: "2026-06-12".to_string(),
+            readme_path: PathBuf::from("doc/backlog/sprints/S999.test/README.md"),
+            readme_status: Some("active".to_string()),
+            stories_by_status,
+            blocked_work: vec![kanban_core::BlockedWorkItem {
+                story_id: "US-F1-999".to_string(),
+                story_title: "Improve current sprint terminal rendering so blocked work also wraps responsively".to_string(),
+                task_id: Some("T-001".to_string()),
+                task_title: Some("Verify narrow but supported terminal widths do not overflow".to_string()),
+            }],
+            warnings: Vec::new(),
+        };
+
+        let output = render_sprint_overview(&theme, OutputLayout { width: 80 }, &sprint);
+
+        assert!(output.contains("US-F1-999"));
+        assert!(!output.contains('|'));
+        for line in output.lines() {
+            assert!(
+                display_width(line) <= 80,
+                "line exceeded 80 columns: {line}"
+            );
+        }
+    }
 }

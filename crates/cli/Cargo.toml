@@ -14,3 +14,4 @@ kanban-core = { path = "../core" }
 clap.workspace = true
 clap_complete.workspace = true
 chrono.workspace = true
+libc.workspace = true
