@@ -17,6 +17,9 @@ Implemented commands:
 - `kanban story move <id> <status> [-a|--assignee "Name <email>"] [repo_root]`
 - `kanban task add <story_id> --title <title> --description <text> [--status <status>] [--tags <a,b>] [repo_root]`
 - `kanban task update <story_id> <task_id> [--title <title>] [--description <text>] [--status <status>] [--tags <a,b>] [repo_root]`
+- `kanban completion bash`
+- `kanban completion zsh`
+- `kanban completion help`
 - `kanban validate [repo_root]`
 - `kanban doctor [repo_root]`
 

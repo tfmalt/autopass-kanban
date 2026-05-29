@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use chrono::NaiveDate;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use kanban_core::{
     CreateSprintInput, DoctorFinding, PhaseOverview, RolloverResult, SprintOverview, StoryDetails,
     StoryKind, TaskSummary, add_task_to_story, create_sprint, doctor_repository, find_story,
@@ -15,6 +15,7 @@ use kanban_core::{
 #[derive(Parser)]
 #[command(name = "kanban")]
 #[command(bin_name = "kanban")]
+#[command(version)]
 #[command(visible_alias = "kb")]
 #[command(about = "Markdown-first kanban tooling")]
 #[command(
@@ -187,6 +188,25 @@ enum TaskCommand {
     },
 }
 
+const COMPLETION_HELP: &str = "Generate a shell completion script from the current kanban command tree.\n\nInstall bash completion:\n  kanban completion bash > ~/.local/share/bash-completion/completions/kanban\n\nInstall zsh completion:\n  mkdir -p ~/.zfunc\n  kanban completion zsh > ~/.zfunc/_kanban\n  Add `fpath=(~/.zfunc $fpath)` and `autoload -Uz compinit && compinit` to ~/.zshrc if needed.\n\nSupported shells: bash, zsh. The command only prints completion scripts and never edits shell config files.";
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum CompletionTarget {
+    Bash,
+    Zsh,
+    Help,
+}
+
+impl CompletionTarget {
+    fn generator(self) -> Option<clap_complete::Shell> {
+        match self {
+            CompletionTarget::Bash => Some(clap_complete::Shell::Bash),
+            CompletionTarget::Zsh => Some(clap_complete::Shell::Zsh),
+            CompletionTarget::Help => None,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
     #[command(
@@ -216,6 +236,16 @@ enum Command {
     Task {
         #[command(subcommand)]
         command: TaskCommand,
+    },
+    #[command(
+        about = "Generate shell completion scripts. Effect: read-only output to stdout. Side effects: none.",
+        long_about = COMPLETION_HELP
+    )]
+    Completion {
+        #[arg(
+            help = "Shell to generate completion for, or help for setup instructions. Supported values: bash, zsh, help."
+        )]
+        target: CompletionTarget,
     },
     #[command(
         about = "Validate repository workflow metadata. Effect: read-only validation of backlog and sprint markdown. Side effects: none."
@@ -619,6 +649,14 @@ fn main() -> Result<()> {
                 println!("Task file: {}", result.task_file_path.display());
             }
         },
+        Command::Completion { target } => {
+            let mut command = Args::command();
+            if let Some(generator) = target.generator() {
+                clap_complete::generate(generator, &mut command, "kanban", &mut std::io::stdout());
+            } else {
+                println!("{COMPLETION_HELP}");
+            }
+        }
         Command::Validate { repo_root } => {
             let report = validate_repository(repo_root)?;
             if report.issues.is_empty() {

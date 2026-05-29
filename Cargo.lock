@@ -146,6 +146,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap_complete"
+version = "4.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0a7a9bfdb35811f9e59832f0f05975114d2251b415fb534108e6f34060fd772"
+dependencies = [
+ "clap",
+]
+
+[[package]]
 name = "clap_derive"
 version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -335,17 +344,18 @@ dependencies = [
 
 [[package]]
 name = "kanban-cli"
-version = "0.1.0"
+version = "26.5.293"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "clap_complete",
  "kanban-core",
 ]
 
 [[package]]
 name = "kanban-core"
-version = "0.1.0"
+version = "26.5.293"
 dependencies = [
  "anyhow",
  "chrono",
@@ -357,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "kanban-tui"
-version = "0.1.0"
+version = "26.5.293"
 dependencies = [
  "anyhow",
  "kanban-core",
@@ -365,7 +375,7 @@ dependencies = [
 
 [[package]]
 name = "kanban-web"
-version = "0.1.0"
+version = "26.5.293"
 dependencies = [
  "anyhow",
  "kanban-core",
