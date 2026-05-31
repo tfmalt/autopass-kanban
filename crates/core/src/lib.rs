@@ -9,6 +9,13 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
+mod config;
+
+pub use config::{
+    ColorMode, ConfigInitResult, ConfigSetResult, KanbanConfig, get_config_json, get_config_value,
+    init_config, load_kanban_config, resolve_repo_root, set_config_value,
+};
+
 const REQUIRED_STORY_FIELDS: [&str; 11] = [
     "id",
     "type",
@@ -34,7 +41,6 @@ const CANONICAL_STORY_STATUSES: [&str; 8] = [
     "done",
     "dropped",
 ];
-const ALLOWED_STORY_POINTS: [&str; 10] = ["2", "3", "5", "8", "13", "XS", "S", "M", "L", "XL"];
 const TASK_HEADING_PATTERN: &str = r"(?m)^##\s+(TASK-[A-Z0-9-]+)\s+-\s+(.+)$";
 const STORY_FILE_PREFIX: &str = "US-";
 const EPIC_FILE_PREFIX: &str = "EP-";
@@ -164,6 +170,7 @@ pub struct BlockedWorkItem {
 pub struct SprintOverview {
     pub sprint_name: String,
     pub headline: String,
+    pub sprint_goal: Option<String>,
     pub start_date: String,
     pub end_date: String,
     pub readme_path: PathBuf,
@@ -248,6 +255,7 @@ pub struct DoctorFinding {
 struct SprintFolderSpec {
     sprint_name: String,
     headline: String,
+    sprint_goal: Option<String>,
     start_date: NaiveDate,
     end_date: NaiveDate,
     readme_path: PathBuf,
@@ -258,6 +266,7 @@ struct SprintFolderSpec {
 struct SprintReadmeInfo {
     sprint: Option<String>,
     headline: Option<String>,
+    sprint_goal: Option<String>,
     status: Option<String>,
     start_date: Option<NaiveDate>,
     end_date: Option<NaiveDate>,
@@ -377,7 +386,8 @@ pub fn create_task_summary(tasks: &[Task]) -> TaskSummary {
 }
 
 pub fn collect_user_story_files(repo_root: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
-    let backlog_root = repo_root.as_ref().join("doc/backlog");
+    let config = load_kanban_config(repo_root)?;
+    let backlog_root = config.backlog_path();
     let mut files = Vec::new();
 
     for entry in WalkDir::new(&backlog_root)
@@ -404,7 +414,8 @@ pub fn collect_user_story_files(repo_root: impl AsRef<Path>) -> Result<Vec<PathB
 
 /// Collect all epic markdown files (`EP-*.md`) from the backlog tree.
 pub fn collect_epic_files(repo_root: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
-    let backlog_root = repo_root.as_ref().join("doc/backlog");
+    let config = load_kanban_config(repo_root)?;
+    let backlog_root = config.backlog_path();
     let mut files = Vec::new();
 
     for entry in WalkDir::new(&backlog_root)
@@ -429,9 +440,8 @@ pub fn collect_epic_files(repo_root: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
 /// Return all sprint folder names (e.g. `S000.getting-started`) sorted alphabetically.
 /// This is a lightweight listing suitable for shell completion.
 pub fn list_sprint_names(repo_root: impl AsRef<Path>) -> Result<Vec<String>> {
-    let repo_root = fs::canonicalize(repo_root.as_ref())
-        .with_context(|| format!("resolve repo root {}", repo_root.as_ref().display()))?;
-    let mut specs = discover_sprint_folder_specs(&repo_root)?;
+    let config = load_kanban_config(repo_root)?;
+    let mut specs = discover_sprint_folder_specs(&config)?;
     specs.sort_by(|a, b| a.sprint_name.cmp(&b.sprint_name));
     Ok(specs.into_iter().map(|s| s.sprint_name).collect())
 }
@@ -515,12 +525,13 @@ pub fn read_task_file(
 
 pub fn read_story_file(file_path: impl AsRef<Path>, repo_root: impl AsRef<Path>) -> Result<Story> {
     let repo_root = repo_root.as_ref();
+    let config = load_kanban_config(repo_root)?;
     let file_path = fs::canonicalize(file_path.as_ref())
         .with_context(|| format!("resolve story file {}", file_path.as_ref().display()))?;
     let markdown = fs::read_to_string(&file_path)
         .with_context(|| format!("read story file {}", file_path.display()))?;
     let parsed = parse_frontmatter(&markdown);
-    let location = story_location(&file_path);
+    let location = story_location(&file_path, &config);
     let source_story_path = if matches!(location.kind, StoryKind::Sprint) {
         parsed
             .frontmatter
@@ -578,8 +589,8 @@ pub fn read_story_file(file_path: impl AsRef<Path>, repo_root: impl AsRef<Path>)
 }
 
 pub fn read_repository(repo_root: impl AsRef<Path>) -> Result<Repository> {
-    let repo_root = fs::canonicalize(repo_root.as_ref())
-        .with_context(|| format!("resolve repo root {}", repo_root.as_ref().display()))?;
+    let config = load_kanban_config(repo_root)?;
+    let repo_root = config.repo_root.clone();
     let story_files = collect_user_story_files(&repo_root)?;
     let stories = story_files
         .into_iter()
@@ -618,7 +629,8 @@ pub fn summarize_sprint(repo_root: impl AsRef<Path>, sprint_name: &str) -> Resul
 pub fn summarize_phase(repo_root: impl AsRef<Path>, phase: &str) -> Result<PhaseOverview> {
     let repository = read_repository(repo_root)?;
     let phase_number = normalize_phase_input(phase)?;
-    let phase_marker = format!("/doc/backlog/phase-{phase_number}-");
+    let config = load_kanban_config(&repository.repo_root)?;
+    let phase_marker = format!("{}phase-{phase_number}-", config.backlog_marker());
     let mut stories = repository
         .stories
         .iter()
@@ -636,9 +648,8 @@ pub fn summarize_phase(repo_root: impl AsRef<Path>, phase: &str) -> Result<Phase
 }
 
 pub fn suggested_next_sprint_number(repo_root: impl AsRef<Path>) -> Result<u32> {
-    let repo_root = fs::canonicalize(repo_root.as_ref())
-        .with_context(|| format!("resolve repo root {}", repo_root.as_ref().display()))?;
-    let specs = discover_sprint_folder_specs(&repo_root)?;
+    let config = load_kanban_config(repo_root)?;
+    let specs = discover_sprint_folder_specs(&config)?;
     Ok(specs
         .iter()
         .filter_map(|spec| parse_sprint_number(&spec.sprint_name))
@@ -650,9 +661,8 @@ pub fn suggested_next_sprint_number(repo_root: impl AsRef<Path>) -> Result<u32> 
 pub fn suggested_next_sprint_dates(
     repo_root: impl AsRef<Path>,
 ) -> Result<Option<(NaiveDate, NaiveDate)>> {
-    let repo_root = fs::canonicalize(repo_root.as_ref())
-        .with_context(|| format!("resolve repo root {}", repo_root.as_ref().display()))?;
-    let specs = discover_sprint_folder_specs(&repo_root)?;
+    let config = load_kanban_config(repo_root)?;
+    let specs = discover_sprint_folder_specs(&config)?;
     let previous_end_date = specs
         .iter()
         .filter_map(|spec| {
@@ -674,8 +684,8 @@ pub fn create_sprint(
     repo_root: impl AsRef<Path>,
     input: &CreateSprintInput,
 ) -> Result<CreateSprintResult> {
-    let repo_root = fs::canonicalize(repo_root.as_ref())
-        .with_context(|| format!("resolve repo root {}", repo_root.as_ref().display()))?;
+    let config = load_kanban_config(repo_root)?;
+    let repo_root = config.repo_root.clone();
     let today = Local::now().date_naive();
     if input.start_date < today {
         bail!(
@@ -699,7 +709,7 @@ pub fn create_sprint(
 
     let sprint_id = format!("S{:03}", input.number);
     let sprint_name = format!("{sprint_id}.{headline}");
-    let sprint_root = repo_root.join("doc/backlog/sprints").join(&sprint_name);
+    let sprint_root = config.sprints_path().join(&sprint_name);
     if sprint_root.exists() {
         bail!("Sprint already exists: {sprint_name}");
     }
@@ -1051,10 +1061,10 @@ pub fn rollover_sprint(
     sprint_name: &str,
     next_sprint: Option<&CreateSprintInput>,
 ) -> Result<RolloverResult> {
-    let repo_root = fs::canonicalize(repo_root.as_ref())
-        .with_context(|| format!("resolve repo root {}", repo_root.as_ref().display()))?;
+    let config = load_kanban_config(repo_root)?;
+    let repo_root = config.repo_root.clone();
     let repository = read_repository(&repo_root)?;
-    let specs = discover_sprint_folder_specs(&repo_root)?;
+    let specs = discover_sprint_folder_specs(&config)?;
     let current_spec = specs
         .iter()
         .find(|spec| spec.sprint_name == sprint_name)
@@ -1096,8 +1106,8 @@ pub fn rollover_sprint(
         }
 
         let target_folder = status_to_folder_name(&status)?;
-        let target_story_path = repo_root
-            .join("doc/backlog/sprints")
+        let target_story_path = config
+            .sprints_path()
             .join(&next_sprint_name)
             .join(target_folder)
             .join(&story.file_name);
@@ -1204,7 +1214,8 @@ pub fn doctor_repository_at_date(
 ) -> Result<Vec<DoctorFinding>> {
     let repository = read_repository(repo_root)?;
     let validation = validate_repository(&repository.repo_root)?;
-    let sprint_specs = discover_sprint_folder_specs(&repository.repo_root)?;
+    let config = load_kanban_config(&repository.repo_root)?;
+    let sprint_specs = discover_sprint_folder_specs(&config)?;
     let mut findings = Vec::new();
 
     for issue in validation.issues {
@@ -1255,6 +1266,10 @@ pub fn doctor_repository_at_date(
 }
 
 pub fn validate_story(story: &Story) -> Vec<ValidationIssue> {
+    let config = story
+        .file_path
+        .parent()
+        .and_then(|parent| load_kanban_config(parent).ok());
     let mut issues = Vec::new();
 
     for field_name in REQUIRED_STORY_FIELDS {
@@ -1305,13 +1320,24 @@ pub fn validate_story(story: &Story) -> Vec<ValidationIssue> {
             .get("story_points")
             .map(String::as_str)
             .unwrap_or_default();
-        if !ALLOWED_STORY_POINTS.contains(&story_points) {
+        let accepted_values = config
+            .as_ref()
+            .map(|config| config.story_points.accepted_values())
+            .unwrap_or_else(|| {
+                ["2", "3", "5", "8", "13", "XS", "S", "M", "L", "XL"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            });
+        if !accepted_values.contains(story_points) {
             add_issue(
                 story,
                 &mut issues,
                 "invalid-story-points",
-                "story_points must be one of 2, 3, 5, 8, 13 or the draft aliases XS, S, M, L, XL."
-                    .to_string(),
+                format!(
+                    "story_points must be one of {}.",
+                    accepted_values.into_iter().collect::<Vec<_>>().join(", ")
+                ),
             );
         }
     }
@@ -1355,12 +1381,16 @@ pub fn validate_story(story: &Story) -> Vec<ValidationIssue> {
         }
 
         if let Some(source_story_path) = &story.source_story_path {
-            if !to_forward_slashes(source_story_path).contains("/doc/backlog/") {
+            let is_in_backlog = config.as_ref().is_some_and(|config| {
+                to_forward_slashes(source_story_path).contains(&config.backlog_marker())
+            });
+            if !is_in_backlog {
                 add_issue(
                     story,
                     &mut issues,
                     "invalid-source-path",
-                    "source_path must resolve to a backlog file inside doc/backlog/.".to_string(),
+                    "source_path must resolve to a backlog file inside the configured backlog path."
+                        .to_string(),
                 );
             }
         } else {
@@ -1411,8 +1441,9 @@ pub fn validate_story(story: &Story) -> Vec<ValidationIssue> {
 pub fn validate_repository(repo_root: impl AsRef<Path>) -> Result<ValidationReport> {
     let repository = read_repository(repo_root)?;
     let mut issues = Vec::new();
+    let config = load_kanban_config(&repository.repo_root)?;
 
-    issues.extend(validate_sprint_readmes(&repository.repo_root)?);
+    issues.extend(validate_sprint_readmes(&config)?);
 
     for story in &repository.stories {
         issues.extend(validate_story(story));
@@ -1459,7 +1490,8 @@ pub fn validate_repository(repo_root: impl AsRef<Path>) -> Result<ValidationRepo
 
 fn summarize_sprints_from_repository(repository: &Repository) -> Result<Vec<SprintOverview>> {
     let today = Local::now().date_naive();
-    let specs = discover_sprint_folder_specs(&repository.repo_root)?;
+    let config = load_kanban_config(&repository.repo_root)?;
+    let specs = discover_sprint_folder_specs(&config)?;
     let mut sprints = specs
         .iter()
         .map(|spec| sprint_overview_from_spec(repository, spec, today))
@@ -1524,6 +1556,7 @@ fn sprint_overview_from_spec(
     SprintOverview {
         sprint_name: spec.sprint_name.clone(),
         headline: spec.headline.clone(),
+        sprint_goal: spec.sprint_goal.clone(),
         start_date: spec.start_date.format("%Y-%m-%d").to_string(),
         end_date: spec.end_date.format("%Y-%m-%d").to_string(),
         readme_path: relative_path(&repository.repo_root, &spec.readme_path),
@@ -1658,8 +1691,8 @@ fn doctor_findings_for_sprint(spec: &SprintFolderSpec, today: NaiveDate) -> Vec<
     findings
 }
 
-fn discover_sprint_folder_specs(repo_root: &Path) -> Result<Vec<SprintFolderSpec>> {
-    let sprints_root = repo_root.join("doc/backlog/sprints");
+fn discover_sprint_folder_specs(config: &KanbanConfig) -> Result<Vec<SprintFolderSpec>> {
+    let sprints_root = config.sprints_path();
     let mut specs = Vec::new();
 
     for entry in fs::read_dir(&sprints_root)
@@ -1689,6 +1722,7 @@ fn discover_sprint_folder_specs(repo_root: &Path) -> Result<Vec<SprintFolderSpec
             SprintReadmeInfo {
                 sprint: None,
                 headline: None,
+                sprint_goal: None,
                 status: None,
                 start_date: None,
                 end_date: None,
@@ -1717,6 +1751,7 @@ fn discover_sprint_folder_specs(repo_root: &Path) -> Result<Vec<SprintFolderSpec
         specs.push(SprintFolderSpec {
             sprint_name: folder_name,
             headline,
+            sprint_goal: readme.sprint_goal,
             start_date,
             end_date,
             readme_path,
@@ -1735,6 +1770,7 @@ fn parse_sprint_readme(readme_path: &Path) -> Result<SprintReadmeInfo> {
     Ok(SprintReadmeInfo {
         sprint: parsed.frontmatter.get("sprint").cloned(),
         headline: parsed.frontmatter.get("headline").cloned(),
+        sprint_goal: extract_markdown_section(&parsed.body, "Sprint Goal"),
         status: parsed.frontmatter.get("status").cloned(),
         start_date: parsed
             .frontmatter
@@ -1747,8 +1783,9 @@ fn parse_sprint_readme(readme_path: &Path) -> Result<SprintReadmeInfo> {
     })
 }
 
-fn validate_sprint_readmes(repo_root: &Path) -> Result<Vec<ValidationIssue>> {
-    let sprints_root = repo_root.join("doc/backlog/sprints");
+fn validate_sprint_readmes(config: &KanbanConfig) -> Result<Vec<ValidationIssue>> {
+    let repo_root = &config.repo_root;
+    let sprints_root = config.sprints_path();
     let mut issues = Vec::new();
 
     for entry in fs::read_dir(&sprints_root)
@@ -2490,10 +2527,10 @@ struct StoryLocation {
     folder_status: Option<String>,
 }
 
-fn story_location(file_path: &Path) -> StoryLocation {
+fn story_location(file_path: &Path, config: &KanbanConfig) -> StoryLocation {
     let path_text = to_forward_slashes(file_path);
-    let marker = "/doc/backlog/sprints/";
-    let Some(index) = path_text.find(marker) else {
+    let marker = config.sprints_marker();
+    let Some(index) = path_text.find(&marker) else {
         return StoryLocation {
             kind: StoryKind::Backlog,
             sprint_name: None,
@@ -2532,6 +2569,10 @@ mod tests {
             .unwrap()
     }
 
+    fn init_temp_repo(temp_root: &Path) {
+        init_config(temp_root).unwrap();
+    }
+
     fn write_git_config(repo_root: &Path, name: &str, email: &str) {
         let init_status = Command::new("git")
             .arg("-C")
@@ -2564,7 +2605,7 @@ mod tests {
 
     fn sprint_readme(sprint: &str, headline: &str, start: &str, end: &str, status: &str) -> String {
         format!(
-            "---\nsprint: {sprint}\nheadline: {headline}\nstart_date: {start}\nend_date: {end}\nstatus: {status}\nwip_limit: null\n---\n\n# {sprint}: {headline}\n"
+            "---\nsprint: {sprint}\nheadline: {headline}\nstart_date: {start}\nend_date: {end}\nstatus: {status}\nwip_limit: null\n---\n\n# {sprint}: {headline}\n\n## Sprint Goal\n\nKeep the team aligned on a visible sprint outcome.\n"
         )
     }
 
@@ -2642,6 +2683,7 @@ mod tests {
     #[test]
     fn validate_repository_catches_status_mismatch_and_only_requires_task_file_after_work_starts() {
         let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
         let sprint_directory = temp_root
             .path()
             .join("doc/backlog/sprints/S123.2026-06-01--2026-06-12.demo/02.in-progress");
@@ -2674,6 +2716,7 @@ mod tests {
     #[test]
     fn summarize_current_sprint_uses_folder_dates_and_warns_when_readme_is_not_active() {
         let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
         let sprint_root = temp_root.path().join("doc/backlog/sprints/S001.foundation");
         let sprint_todo = sprint_root.join("01.todo");
         let backlog_dir = temp_root
@@ -2703,12 +2746,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(sprint.sprint_name, "S001.foundation");
-        assert!(
-            sprint
-                .warnings
-                .iter()
-                .any(|warning| { warning.contains("README frontmatter is authoritative") })
+        assert_eq!(
+            sprint.sprint_goal.as_deref(),
+            Some("Keep the team aligned on a visible sprint outcome.")
         );
+        assert!(sprint.warnings.is_empty());
     }
 
     #[test]
@@ -2741,6 +2783,7 @@ mod tests {
     #[test]
     fn doctor_reports_readme_status_disagreement_with_folder_dates() {
         let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
         let sprint_root = temp_root.path().join("doc/backlog/sprints/S001.foundation");
         let sprint_todo = sprint_root.join("01.todo");
         let backlog_dir = temp_root
@@ -2780,6 +2823,7 @@ mod tests {
     #[test]
     fn create_sprint_creates_folder_layout_and_readme() {
         let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
         fs::create_dir_all(temp_root.path().join("doc/backlog/sprints")).unwrap();
         let today = Local::now().date_naive();
         let input = CreateSprintInput {
@@ -2800,8 +2844,36 @@ mod tests {
     }
 
     #[test]
+    fn create_sprint_uses_configured_sprints_path() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        set_config_value(temp_root.path(), "paths.sprints", "planning/sprints").unwrap();
+        let today = Local::now().date_naive();
+        let input = CreateSprintInput {
+            number: 1,
+            start_date: today,
+            end_date: today + Days::new(11),
+            headline: "Foundation Sprint".to_string(),
+        };
+
+        let result = create_sprint(temp_root.path(), &input).unwrap();
+
+        assert_eq!(
+            result.sprint_path,
+            PathBuf::from("planning/sprints/S001.foundation-sprint")
+        );
+        assert!(
+            temp_root
+                .path()
+                .join("planning/sprints/S001.foundation-sprint/README.md")
+                .exists()
+        );
+    }
+
+    #[test]
     fn suggested_next_sprint_dates_use_latest_sprint_folder_end_date() {
         let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
         let sprints_root = temp_root.path().join("doc/backlog/sprints");
         fs::create_dir_all(sprints_root.join("S000.getting-started")).unwrap();
         fs::write(
@@ -2831,8 +2903,54 @@ mod tests {
     }
 
     #[test]
+    fn read_and_validate_story_use_configured_backlog_and_sprint_paths() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        set_config_value(temp_root.path(), "paths.backlog", "planning/backlog").unwrap();
+        set_config_value(temp_root.path(), "paths.sprints", "planning/sprints").unwrap();
+
+        let sprint_root = temp_root.path().join("planning/sprints/S001.foundation");
+        let sprint_todo = sprint_root.join("01.todo");
+        let backlog_dir = temp_root
+            .path()
+            .join("planning/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+        let story_file = "US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md";
+
+        fs::create_dir_all(&sprint_todo).unwrap();
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            sprint_root.join("README.md"),
+            sprint_readme("S001", "foundation", "2099-06-01", "2099-06-12", "planned"),
+        )
+        .unwrap();
+        fs::write(
+            backlog_dir.join(story_file),
+            "---\nid: US-F1-052\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add read-only CLI for sprint and backlog inspection\n",
+        )
+        .unwrap();
+        fs::write(
+            sprint_todo.join(story_file),
+            "---\nid: US-F1-052\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\nsource_path: ../../../backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md\ntask_file: US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add read-only CLI for sprint and backlog inspection\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(sprint_todo.join(story_file), temp_root.path()).unwrap();
+        let validation = validate_repository(temp_root.path()).unwrap();
+
+        assert_eq!(story.kind, StoryKind::Sprint);
+        assert_eq!(story.sprint_name.as_deref(), Some("S001.foundation"));
+        assert!(
+            !validation
+                .issues
+                .iter()
+                .any(|issue| issue.rule == "invalid-source-path")
+        );
+    }
+
+    #[test]
     fn move_story_to_status_moves_story_and_task_and_sets_work_started() {
         let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
         write_git_config(temp_root.path(), "Test User", "test@example.com");
         let sprint_root = temp_root.path().join("doc/backlog/sprints/S001.foundation");
         let todo_root = sprint_root.join("01.todo");
@@ -2881,6 +2999,7 @@ mod tests {
     #[test]
     fn move_story_to_in_progress_refreshes_assignee_when_already_in_progress() {
         let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
         write_git_config(temp_root.path(), "Test User", "test@example.com");
         let sprint_root = temp_root
             .path()
@@ -2920,6 +3039,7 @@ mod tests {
     #[test]
     fn move_story_to_in_progress_uses_assignee_override() {
         let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
         let sprint_root = temp_root.path().join("doc/backlog/sprints/S001.foundation");
         let todo_root = sprint_root.join("01.todo");
         let progress_root = sprint_root.join("02.in-progress");
@@ -2964,6 +3084,7 @@ mod tests {
     #[test]
     fn move_story_rejects_invalid_assignee_override_before_moving_files() {
         let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
         let sprint_root = temp_root.path().join("doc/backlog/sprints/S001.foundation");
         let todo_root = sprint_root.join("01.todo");
         let progress_root = sprint_root.join("02.in-progress");
@@ -3005,6 +3126,7 @@ mod tests {
     #[test]
     fn move_story_to_done_refreshes_existing_work_done() {
         let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
         let sprint_root = temp_root.path().join("doc/backlog/sprints/S001.foundation");
         let progress_root = sprint_root.join("02.in-progress");
         let done_root = sprint_root.join("04.done");
@@ -3047,6 +3169,7 @@ mod tests {
     #[test]
     fn task_mutations_update_sibling_task_file_only() {
         let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
         let sprint_root = temp_root
             .path()
             .join("doc/backlog/sprints/S001.foundation/02.in-progress");
@@ -3127,6 +3250,7 @@ mod tests {
     #[test]
     fn rollover_moves_unfinished_stories_and_updates_closed_summary() {
         let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
         let sprint_root = temp_root.path().join("doc/backlog/sprints/S001.foundation");
         let todo_root = sprint_root.join("01.todo");
         let done_root = sprint_root.join("04.done");

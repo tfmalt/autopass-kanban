@@ -1,20 +1,12 @@
-use std::path::PathBuf;
 use std::process::{Command, Output};
+
+use tempfile::tempdir;
 
 fn kanban(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_kanban"))
         .args(args)
         .output()
         .expect("kanban binary should run")
-}
-
-fn repo_root() -> String {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../../")
-        .canonicalize()
-        .expect("repo root should resolve")
-        .display()
-        .to_string()
 }
 
 #[test]
@@ -108,6 +100,22 @@ fn zsh_completion_includes_dynamic_epic_id_helper() {
 }
 
 #[test]
+fn zsh_completion_replaces_default_for_config_key_and_value_args() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("_kanban_config_keys"));
+    assert!(stdout.contains("_kanban_config_values"));
+    assert!(stdout.contains(
+        "':key -- Configuration key, for example paths.backlog or theme.color_mode.:_kanban_config_keys'"
+    ));
+    assert!(stdout.contains(
+        "':value -- Configuration value. Use comma-separated values for story_points.allowed_values.:_kanban_config_values'"
+    ));
+}
+
+#[test]
 fn zsh_completion_replaces_default_for_sprint_name_args() {
     let output = kanban(&["completion", "zsh"]);
 
@@ -177,6 +185,17 @@ fn bash_completion_includes_dynamic_story_completion() {
 }
 
 #[test]
+fn bash_completion_includes_dynamic_config_completion() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("kanban__subcmd__config__subcmd__get"));
+    assert!(stdout.contains("config_keys=\"paths.backlog paths.sprints theme.color_mode"));
+    assert!(stdout.contains("color_modes=\"auto always never\""));
+}
+
+#[test]
 fn completion_help_explains_bash_and_zsh_setup() {
     for args in [["completion", "help"], ["completion", "--help"]] {
         let output = kanban(&args);
@@ -204,7 +223,19 @@ fn unsupported_completion_shell_fails_clearly() {
 
 #[test]
 fn hidden_story_completion_listing_includes_ids_and_titles() {
-    let repo_root = repo_root();
+    let temp_root = tempdir().expect("temp repo should be created");
+    let backlog_dir = temp_root.path().join("doc/backlog/phase-1-test/01.demo");
+    std::fs::create_dir_all(&backlog_dir).expect("backlog dir should exist");
+    std::fs::write(
+        backlog_dir.join("US-F1-010-ci-pipeline-build-and-unit-tests.md"),
+        "---\nid: US-F1-010\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: \nassignee: TBD\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: CI pipeline with build and unit tests\n",
+    )
+    .expect("story fixture should be written");
+
+    let repo_root = temp_root.path().display().to_string();
+    let init_output = kanban(&["init", &repo_root]);
+    assert!(init_output.status.success());
+
     let output = kanban(&["list-ids", "stories-with-titles", &repo_root]);
 
     assert!(output.status.success());
@@ -212,5 +243,59 @@ fn hidden_story_completion_listing_includes_ids_and_titles() {
     assert!(
         stdout.contains("US-F1-010\tCI pipeline with build and unit tests"),
         "story completion listing should emit tab-separated ID and title"
+    );
+}
+
+#[test]
+fn bare_kanban_with_missing_config_prints_only_init_guidance() {
+    let temp_root = tempdir().expect("temp repo should be created");
+    let output = Command::new(env!("CARGO_BIN_EXE_kanban"))
+        .current_dir(temp_root.path())
+        .output()
+        .expect("kanban binary should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(stdout.is_empty(), "stdout should be empty, got: {stdout}");
+    assert!(
+        stderr.starts_with("   "),
+        "stderr should start with warning symbol, got: {stderr}"
+    );
+    assert!(stderr.contains("No `.kanban` configuration found"));
+    assert!(stderr.contains("\n    Run `kanban init` to initialize this repository"));
+}
+
+#[test]
+fn sprint_commands_use_theme_config_from_target_repo_root() {
+    let temp_root = tempdir().expect("temp repo should be created");
+    let repo_root = temp_root.path().display().to_string();
+
+    let init_output = kanban(&["init", &repo_root]);
+    assert!(init_output.status.success());
+
+    let set_output = kanban(&["config", "set", "theme.color_mode", "always", &repo_root]);
+    assert!(set_output.status.success());
+
+    let sprint_root = temp_root.path().join("doc/backlog/sprints/S001.foundation");
+    std::fs::create_dir_all(&sprint_root).expect("sprint dir should exist");
+    std::fs::write(
+        sprint_root.join("README.md"),
+        "---\nsprint: S001\nheadline: foundation\nstart_date: 2099-06-01\nend_date: 2099-06-12\nstatus: planned\nwip_limit: null\n---\n\n# S001: foundation\n",
+    )
+    .expect("sprint readme should be written");
+
+    let outside_root = tempdir().expect("outside dir should be created");
+    let output = Command::new(env!("CARGO_BIN_EXE_kanban"))
+        .current_dir(outside_root.path())
+        .args(["sprint", "list", &repo_root])
+        .output()
+        .expect("kanban binary should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("\u{1b}["),
+        "expected ANSI styling from target repo config, got: {stdout}"
     );
 }

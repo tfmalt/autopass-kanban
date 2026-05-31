@@ -1,12 +1,16 @@
 # Kanban
 
-Rust workspace for the markdown-first backlog tooling.
+Rust workspace for repository-local, markdown-first kanban tooling.
 
 CLI binary name:
 - `kanban`
 - short alias in help/docs: `kb`
 
 Implemented commands:
+- `kanban init [repo_root]`
+- `kanban config show [repo_root]`
+- `kanban config get <key> [repo_root]`
+- `kanban config set <key> <value> [repo_root]`
 - `kanban sprint current [repo_root]`
 - `kanban sprint list [repo_root]`
 - `kanban sprint show <name> [repo_root]`
@@ -22,6 +26,16 @@ Implemented commands:
 - `kanban completion help`
 - `kanban validate [repo_root]`
 - `kanban doctor [repo_root]`
+
+## Repository configuration
+
+Run `kanban init` once per repository. This creates `.kanban/` in the git root with:
+
+- `paths.json` for backlog and sprint folder locations
+- `theme.json` for terminal color behavior
+- `story-points.json` for allowed values and alias conversion
+
+If `.kanban/` is missing, operational commands fail with a prompt to run `kanban init`.
 
 ## Shell completion
 
