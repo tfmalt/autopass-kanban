@@ -195,6 +195,16 @@ fn zsh_completion_replaces_default_for_doctor_fix_target_arg() {
 }
 
 #[test]
+fn zsh_completion_supports_bare_doctor_repo_root_completion() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("_kanban_doctor_command_or_repo_root"));
+    assert!(stdout.contains("repo-root:repository root:_files -/"));
+}
+
+#[test]
 fn bash_completion_includes_dynamic_sprint_completion() {
     let output = kanban(&["completion", "bash"]);
 
@@ -235,6 +245,17 @@ fn bash_completion_includes_dynamic_doctor_fix_target_completion() {
 }
 
 #[test]
+fn bash_completion_supports_bare_doctor_repo_root_completion() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("kanban__subcmd__doctor)"));
+    assert!(stdout.contains("doctor_commands=\"show fix help\""));
+    assert!(stdout.contains("compgen -d -- \"${cur}\""));
+}
+
+#[test]
 fn bash_completion_includes_dynamic_config_completion() {
     let output = kanban(&["completion", "bash"]);
 
@@ -258,6 +279,30 @@ fn completion_help_explains_bash_and_zsh_setup() {
         assert!(stdout.contains("kanban completion zsh"));
         assert!(stdout.contains("Supported shells: bash, zsh"));
     }
+}
+
+#[test]
+fn doctor_help_subcommand_prints_doctor_help() {
+    let output = kanban(&["doctor", "help"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Usage: kanban doctor [REPO_ROOT]"));
+    assert!(stdout.contains("kanban doctor help"));
+    assert!(stdout.contains("show"));
+    assert!(stdout.contains("fix"));
+}
+
+#[test]
+fn doctor_flag_help_prints_doctor_help() {
+    let output = kanban(&["doctor", "--help"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Usage: kanban doctor [REPO_ROOT]"));
+    assert!(stdout.contains("kanban doctor help"));
+    assert!(stdout.contains("show"));
+    assert!(stdout.contains("fix"));
 }
 
 #[test]

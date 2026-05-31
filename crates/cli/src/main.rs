@@ -439,6 +439,7 @@ enum TaskCommand {
 }
 
 const COMPLETION_HELP: &str = "Generate a shell completion script from the current kanban command tree.\n\nInstall zsh completion — add to ~/.zshrc:\n  eval \"$(kanban completion zsh)\"\n\nInstall bash completion — add to ~/.bashrc or ~/.bash_profile:\n  eval \"$(kanban completion bash)\"\n\nNote on direnv: .envrc is evaluated as bash, so eval \"$(kanban completion zsh)\" cannot\nbe placed there. Add the eval line to ~/.zshrc instead; it runs once per shell.\n\nSupported shells: bash, zsh. The command only prints completion scripts and never edits shell config files.";
+const DOCTOR_HELP: &str = "Diagnose and optionally fix repository workflow issues.\n\nUsage shortcuts:\n  kanban doctor [REPO_ROOT]        Same as `kanban doctor show [REPO_ROOT]`\n  kanban doctor help               Print this help text\n\nEffects depend on subcommand; `show` is read-only while `fix` rewrites only the affected markdown files.";
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum CompletionTarget {
@@ -588,7 +589,9 @@ enum Command {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Diagnose and optionally fix repository workflow issues. Effects depend on subcommand; `show` is read-only while `fix` rewrites only the affected markdown files."
+        about = "Diagnose and optionally fix repository workflow issues. Effects depend on subcommand; `show` is read-only while `fix` rewrites only the affected markdown files.",
+        long_about = DOCTOR_HELP,
+        override_usage = "kanban doctor [REPO_ROOT]\n       kanban doctor <COMMAND>"
     )]
     Doctor {
         #[command(subcommand)]
@@ -1623,6 +1626,11 @@ _kanban_doctor_fix_targets() {
     done < <(kanban list-ids stories-with-titles 2>/dev/null)
     compadd -d descriptions -a ids
 }
+_kanban_doctor_command_or_repo_root() {
+    _alternative \
+        'command:doctor command:(show fix help)' \
+        'repo-root:repository root:_files -/'
+}
 _kanban_epic_ids() {
     local -a ids
     local id
@@ -1659,6 +1667,10 @@ fn enhance_zsh_completion(script: &str) -> String {
         .replace(
             "':story_id -- Parent story id for the task, for example US-F1-053.:_default'",
             "':story_id -- Parent story id for the task, for example US-F1-053.:_kanban_story_ids'",
+        )
+        .replace(
+            "\":: :_kanban__subcmd__doctor_commands\"",
+            "\":: :_kanban_doctor_command_or_repo_root\"",
         )
         .replace(
             "'::target -- Optional scope\\: a story id like US-F1-053 or the literal `current`.:_default'",
@@ -1712,6 +1724,45 @@ fn inject_bash_doctor_fix_target(script: &str) -> String {
                 return 0
             fi
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0"#;
+    if script.contains(old) {
+        script.replacen(old, new, 1)
+    } else {
+        script.to_string()
+    }
+}
+
+fn inject_bash_doctor_command_or_repo_root(script: &str) -> String {
+    let old = r#"        kanban__subcmd__doctor)
+            opts="-h --help show fix help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0"#;
+    let new = r#"        kanban__subcmd__doctor)
+            opts="-h --help show fix help"
+            doctor_commands="show fix help"
+            if [[ ${COMP_CWORD} -eq 2 && ${cur} != -* ]] ; then
+                COMPREPLY=( $(compgen -W "${doctor_commands}" -- "${cur}") $(compgen -d -- "${cur}") )
+                return 0
+            fi
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -1823,8 +1874,9 @@ fn inject_bash_config_set(script: &str) -> String {
 /// Enhance the bash completion script with dynamic sprint name, story ID,
 /// and doctor fix target completions.
 fn enhance_bash_completion(script: &str) -> String {
+    let script = inject_bash_doctor_command_or_repo_root(script);
     let script = inject_bash_dynamic(
-        script,
+        &script,
         "kanban__subcmd__sprint__subcmd__show",
         "-h --help <NAME> [REPO_ROOT]",
         "sprints",
@@ -1991,11 +2043,16 @@ fn render_no_args_help_output(theme: &Theme) -> Result<String> {
 }
 
 fn normalize_args(raw_args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    let doctor_passthrough = |arg: &std::ffi::OsString| {
+        matches!(
+            arg.to_str(),
+            Some("show" | "fix" | "help" | "-h" | "--help")
+        )
+    };
+
     if raw_args.len() >= 2
         && raw_args.get(1).is_some_and(|arg| arg == "doctor")
-        && raw_args
-            .get(2)
-            .is_none_or(|arg| arg != "show" && arg != "fix")
+        && raw_args.get(2).is_none_or(|arg| !doctor_passthrough(arg))
     {
         let mut normalized = Vec::with_capacity(raw_args.len() + 1);
         normalized.push(raw_args[0].clone());
@@ -2842,6 +2899,20 @@ mod tests {
             } => assert_eq!(repo_root, PathBuf::from("/tmp/repo")),
             _ => panic!("unexpected command"),
         }
+    }
+
+    #[test]
+    fn doctor_help_is_not_normalized_to_show() {
+        let raw = normalize_args(vec!["kanban".into(), "doctor".into(), "help".into()]);
+
+        assert_eq!(raw, vec!["kanban", "doctor", "help"]);
+    }
+
+    #[test]
+    fn doctor_flag_help_is_not_normalized_to_show() {
+        let raw = normalize_args(vec!["kanban".into(), "doctor".into(), "--help".into()]);
+
+        assert_eq!(raw, vec!["kanban", "doctor", "--help"]);
     }
 
     #[test]
