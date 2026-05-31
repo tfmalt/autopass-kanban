@@ -26,6 +26,7 @@ Implemented commands:
 - `kanban completion help`
 - `kanban validate [repo_root]`
 - `kanban doctor [repo_root]`
+- `kanban doctor help`
 
 ## Repository configuration
 

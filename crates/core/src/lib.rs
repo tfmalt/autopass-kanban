@@ -251,6 +251,52 @@ pub struct DoctorFinding {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DoctorFixKind {
+    Automatic,
+    Guided,
+    ManualOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DoctorPrompt {
+    None,
+    Text {
+        label: String,
+        default: Option<String>,
+    },
+    Choice {
+        label: String,
+        options: Vec<String>,
+        default: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoctorIssue {
+    pub severity: String,
+    pub scope: String,
+    pub file_path: Option<PathBuf>,
+    pub story_id: Option<String>,
+    pub sprint_name: Option<String>,
+    pub rule: String,
+    pub message: String,
+    pub suggestion: String,
+    pub fix_kind: DoctorFixKind,
+    pub prompt: DoctorPrompt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DoctorFixInput {
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoctorFixResult {
+    pub message: String,
+    pub touched_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct SprintFolderSpec {
     sprint_name: String,
     headline: String,
@@ -1252,6 +1298,45 @@ pub fn find_story(repo_root: impl AsRef<Path>, story_id: &str) -> Result<Option<
     Ok(find_story_in_repository(&repository, story_id))
 }
 
+pub fn collect_doctor_issues(repo_root: impl AsRef<Path>) -> Result<Vec<DoctorIssue>> {
+    collect_doctor_issues_at_date(repo_root, Local::now().date_naive())
+}
+
+pub fn collect_doctor_issues_for_story(
+    repo_root: impl AsRef<Path>,
+    story_id: &str,
+) -> Result<Vec<DoctorIssue>> {
+    let normalized_story_id = story_id.trim().to_ascii_uppercase();
+    let issues = collect_doctor_issues(repo_root)?;
+    Ok(issues
+        .into_iter()
+        .filter(|issue| issue.story_id.as_deref() == Some(normalized_story_id.as_str()))
+        .collect())
+}
+
+pub fn collect_doctor_issues_for_current_sprint(
+    repo_root: impl AsRef<Path>,
+) -> Result<Vec<DoctorIssue>> {
+    let repo_root = repo_root.as_ref();
+    let current_sprint = summarize_current_sprint(repo_root)?;
+    let sprint_name = current_sprint.sprint_name.clone();
+    let current_story_ids = flatten_sprint_stories(&current_sprint)
+        .into_iter()
+        .map(|story| story.id)
+        .collect::<BTreeSet<_>>();
+    let issues = collect_doctor_issues(repo_root)?;
+    Ok(issues
+        .into_iter()
+        .filter(|issue| {
+            issue.sprint_name.as_deref() == Some(sprint_name.as_str())
+                || issue
+                    .story_id
+                    .as_ref()
+                    .is_some_and(|story_id| current_story_ids.contains(story_id))
+        })
+        .collect())
+}
+
 pub fn doctor_repository(repo_root: impl AsRef<Path>) -> Result<Vec<DoctorFinding>> {
     doctor_repository_at_date(repo_root, Local::now().date_naive())
 }
@@ -1260,18 +1345,245 @@ pub fn doctor_repository_at_date(
     repo_root: impl AsRef<Path>,
     today: NaiveDate,
 ) -> Result<Vec<DoctorFinding>> {
+    Ok(collect_doctor_issues_at_date(repo_root, today)?
+        .into_iter()
+        .map(|issue| DoctorFinding {
+            severity: issue.severity,
+            scope: issue.scope,
+            message: issue.message,
+        })
+        .collect())
+}
+
+pub fn apply_doctor_fix(
+    repo_root: impl AsRef<Path>,
+    issue: &DoctorIssue,
+    input: &DoctorFixInput,
+) -> Result<DoctorFixResult> {
+    let repo_root = resolve_repo_root(repo_root)?;
+    let Some(file_path) = &issue.file_path else {
+        bail!("Doctor issue cannot be fixed automatically: {}", issue.rule);
+    };
+    let absolute_path = repo_root.join(file_path);
+
+    match issue.rule.as_str() {
+        "missing-field:assignee" => {
+            let assignee = input
+                .value
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(current_git_assignee(&repo_root)?);
+            let validated = validate_assignee_override(&assignee)?;
+            upsert_story_frontmatter_file(
+                &absolute_path,
+                &[("assignee", Some(validated.clone()))],
+            )?;
+            Ok(DoctorFixResult {
+                message: format!("Set assignee to {validated}."),
+                touched_paths: vec![file_path.clone()],
+            })
+        }
+        "missing-work-started" => {
+            let timestamp = doctor_timestamp_input(input)?;
+            upsert_story_frontmatter_file(
+                &absolute_path,
+                &[("work_started", Some(timestamp.clone()))],
+            )?;
+            Ok(DoctorFixResult {
+                message: format!("Set work_started to {timestamp}."),
+                touched_paths: vec![file_path.clone()],
+            })
+        }
+        "missing-work-done" => {
+            let timestamp = doctor_timestamp_input(input)?;
+            upsert_story_frontmatter_file(
+                &absolute_path,
+                &[("work_done", Some(timestamp.clone()))],
+            )?;
+            Ok(DoctorFixResult {
+                message: format!("Set work_done to {timestamp}."),
+                touched_paths: vec![file_path.clone()],
+            })
+        }
+        rule if rule.starts_with("invalid-timestamp:") => {
+            let field_name = rule.trim_start_matches("invalid-timestamp:");
+            let timestamp = doctor_timestamp_input(input)?;
+            upsert_story_frontmatter_file(
+                &absolute_path,
+                &[(field_name, Some(timestamp.clone()))],
+            )?;
+            Ok(DoctorFixResult {
+                message: format!("Set {field_name} to {timestamp}."),
+                touched_paths: vec![file_path.clone()],
+            })
+        }
+        "status-folder-mismatch" => {
+            let story = read_story_file(&absolute_path, &repo_root)?;
+            let folder_status = story.folder_status.ok_or_else(|| {
+                anyhow!(
+                    "Cannot infer sprint folder status for {}",
+                    file_path.display()
+                )
+            })?;
+            upsert_story_frontmatter_file(
+                &absolute_path,
+                &[("status", Some(folder_status.clone()))],
+            )?;
+            Ok(DoctorFixResult {
+                message: format!("Aligned status to sprint folder status {folder_status}."),
+                touched_paths: vec![file_path.clone()],
+            })
+        }
+        "sprint-name-mismatch" => {
+            let story = read_story_file(&absolute_path, &repo_root)?;
+            let sprint_name = story
+                .sprint_name
+                .ok_or_else(|| anyhow!("Cannot infer sprint name for {}", file_path.display()))?;
+            upsert_story_frontmatter_file(
+                &absolute_path,
+                &[("sprint", Some(sprint_name.clone()))],
+            )?;
+            Ok(DoctorFixResult {
+                message: format!("Aligned sprint field to {sprint_name}."),
+                touched_paths: vec![file_path.clone()],
+            })
+        }
+        "missing-task-file" => {
+            let story = read_story_file(&absolute_path, &repo_root)?;
+            let task_file_name = story
+                .frontmatter
+                .get("task_file")
+                .cloned()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| anyhow!("Sprint story is missing task_file frontmatter."))?;
+            let task_file_path = absolute_path.parent().unwrap().join(&task_file_name);
+            let story_id = story.frontmatter.get("id").cloned().unwrap_or_default();
+            let sprint_name = story.frontmatter.get("sprint").cloned().unwrap_or_default();
+            fs::write(
+                &task_file_path,
+                render_empty_task_file(&story_id, &sprint_name),
+            )
+            .with_context(|| format!("write task file {}", task_file_path.display()))?;
+            Ok(DoctorFixResult {
+                message: format!("Created missing task file {task_file_name}."),
+                touched_paths: vec![
+                    file_path.clone(),
+                    relative_path(&repo_root, &task_file_path),
+                ],
+            })
+        }
+        rule if rule.starts_with("missing-sprint-readme-field:") => {
+            let field_name = rule.trim_start_matches("missing-sprint-readme-field:");
+            let readme_update =
+                doctor_readme_field_value(&repo_root, &absolute_path, field_name, input)?;
+            upsert_story_frontmatter_file(
+                &absolute_path,
+                &[(field_name, Some(readme_update.clone()))],
+            )?;
+            Ok(DoctorFixResult {
+                message: format!("Set sprint README field {field_name} to {readme_update}."),
+                touched_paths: vec![file_path.clone()],
+            })
+        }
+        "sprint-readme-folder-mismatch:sprint" => {
+            let folder_name = absolute_path
+                .parent()
+                .and_then(|path| path.file_name())
+                .map(|value| value.to_string_lossy().into_owned())
+                .ok_or_else(|| {
+                    anyhow!("Cannot determine sprint folder for {}", file_path.display())
+                })?;
+            let sprint_id = parse_sprint_folder_name(&folder_name)
+                .map(|(sprint_id, _)| sprint_id)
+                .ok_or_else(|| anyhow!("Invalid sprint folder name: {folder_name}"))?;
+            upsert_story_frontmatter_file(&absolute_path, &[("sprint", Some(sprint_id.clone()))])?;
+            Ok(DoctorFixResult {
+                message: format!("Aligned sprint README sprint field to {sprint_id}."),
+                touched_paths: vec![file_path.clone()],
+            })
+        }
+        "sprint-readme-folder-mismatch:headline" => {
+            let folder_name = absolute_path
+                .parent()
+                .and_then(|path| path.file_name())
+                .map(|value| value.to_string_lossy().into_owned())
+                .ok_or_else(|| {
+                    anyhow!("Cannot determine sprint folder for {}", file_path.display())
+                })?;
+            let headline = parse_sprint_folder_name(&folder_name)
+                .map(|(_, headline)| headline)
+                .ok_or_else(|| anyhow!("Invalid sprint folder name: {folder_name}"))?;
+            upsert_story_frontmatter_file(&absolute_path, &[("headline", Some(headline.clone()))])?;
+            Ok(DoctorFixResult {
+                message: format!("Aligned sprint README headline to {headline}."),
+                touched_paths: vec![file_path.clone()],
+            })
+        }
+        rule if rule.starts_with("invalid-sprint-readme-date:") => {
+            let field_name = rule.trim_start_matches("invalid-sprint-readme-date:");
+            let value = input
+                .value
+                .clone()
+                .filter(|candidate| parse_markdown_date(candidate).is_some())
+                .ok_or_else(|| anyhow!("Enter a date as YYYY-MM-DD."))?;
+            upsert_story_frontmatter_file(&absolute_path, &[(field_name, Some(value.clone()))])?;
+            Ok(DoctorFixResult {
+                message: format!("Set sprint README {field_name} to {value}."),
+                touched_paths: vec![file_path.clone()],
+            })
+        }
+        "invalid-sprint-readme-status"
+        | "sprint-readme-status-not-active"
+        | "sprint-readme-dates-outside-active" => {
+            let value = input.value.clone().unwrap_or_else(|| "active".to_string());
+            if !["planned", "active", "closed"].contains(&value.as_str()) {
+                bail!("Sprint README status must be planned, active, or closed.");
+            }
+            upsert_story_frontmatter_file(&absolute_path, &[("status", Some(value.clone()))])?;
+            Ok(DoctorFixResult {
+                message: format!("Set sprint README status to {value}."),
+                touched_paths: vec![file_path.clone()],
+            })
+        }
+        rule if rule.starts_with("missing-field:") => {
+            let field_name = rule.trim_start_matches("missing-field:");
+            let value = input
+                .value
+                .clone()
+                .ok_or_else(|| anyhow!("A value is required for {field_name}."))?;
+            upsert_story_frontmatter_file(&absolute_path, &[(field_name, Some(value.clone()))])?;
+            Ok(DoctorFixResult {
+                message: format!("Set {field_name} to {value}."),
+                touched_paths: vec![file_path.clone()],
+            })
+        }
+        _ => bail!("Doctor issue is not auto-fixable: {}", issue.rule),
+    }
+}
+
+fn collect_doctor_issues_at_date(
+    repo_root: impl AsRef<Path>,
+    today: NaiveDate,
+) -> Result<Vec<DoctorIssue>> {
     let repository = read_repository(repo_root)?;
     let validation = validate_repository(&repository.repo_root)?;
     let config = load_kanban_config(&repository.repo_root)?;
     let sprint_specs = discover_sprint_folder_specs(&config)?;
     let mut findings = Vec::new();
 
+    let stories_by_path = repository
+        .stories
+        .iter()
+        .map(|story| (story.relative_path.clone(), story))
+        .collect::<BTreeMap<_, _>>();
+
     for issue in validation.issues {
-        findings.push(DoctorFinding {
-            severity: "error".to_string(),
-            scope: issue.file_path.display().to_string(),
-            message: format!("[{}] {}", issue.rule, issue.message),
-        });
+        let story = stories_by_path.get(&issue.file_path).copied();
+        findings.push(doctor_issue_from_validation(
+            &repository.repo_root,
+            story,
+            &issue,
+        ));
     }
 
     let current_by_date: Vec<_> = sprint_specs
@@ -1280,20 +1592,31 @@ pub fn doctor_repository_at_date(
         .collect();
 
     if current_by_date.is_empty() {
-        findings.push(DoctorFinding {
+        findings.push(DoctorIssue {
             severity: "warning".to_string(),
             scope: "sprints".to_string(),
+            file_path: None,
+            story_id: None,
+            sprint_name: None,
+            rule: "missing-current-sprint".to_string(),
             message: format!(
                 "No sprint folder date range includes {}. Current sprint detection cannot succeed until sprint dates are corrected.",
                 today.format("%Y-%m-%d")
             ),
+            suggestion: "Select the sprint that should be current and update its README dates or status.".to_string(),
+            fix_kind: DoctorFixKind::ManualOnly,
+            prompt: DoctorPrompt::None,
         });
     }
 
     if current_by_date.len() > 1 {
-        findings.push(DoctorFinding {
+        findings.push(DoctorIssue {
             severity: "error".to_string(),
             scope: "sprints".to_string(),
+            file_path: None,
+            story_id: None,
+            sprint_name: None,
+            rule: "multiple-current-sprints".to_string(),
             message: format!(
                 "Multiple sprint folders include {}: {}.",
                 today.format("%Y-%m-%d"),
@@ -1303,14 +1626,164 @@ pub fn doctor_repository_at_date(
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            suggestion: "Choose which sprint should stay current, then update the other sprint README dates so only one range includes today.".to_string(),
+            fix_kind: DoctorFixKind::ManualOnly,
+            prompt: DoctorPrompt::None,
         });
     }
 
     for spec in sprint_specs {
-        findings.extend(doctor_findings_for_sprint(&spec, today));
+        findings.extend(doctor_findings_for_sprint(
+            &repository.repo_root,
+            &spec,
+            today,
+        ));
     }
 
     Ok(findings)
+}
+
+fn doctor_issue_from_validation(
+    repo_root: &Path,
+    story: Option<&Story>,
+    issue: &ValidationIssue,
+) -> DoctorIssue {
+    let (suggestion, fix_kind, prompt) = doctor_suggestion_for_validation(repo_root, story, issue);
+    DoctorIssue {
+        severity: "error".to_string(),
+        scope: issue.file_path.display().to_string(),
+        file_path: Some(issue.file_path.clone()),
+        story_id: story.and_then(|story| story.frontmatter.get("id").cloned()),
+        sprint_name: story.and_then(|story| story.sprint_name.clone()),
+        rule: issue.rule.clone(),
+        message: format!("[{}] {}", issue.rule, issue.message),
+        suggestion,
+        fix_kind,
+        prompt,
+    }
+}
+
+fn doctor_suggestion_for_validation(
+    repo_root: &Path,
+    story: Option<&Story>,
+    issue: &ValidationIssue,
+) -> (String, DoctorFixKind, DoctorPrompt) {
+    match issue.rule.as_str() {
+        "missing-field:assignee" => (
+            "Set assignee from git config or enter the correct `Name <email>` value.".to_string(),
+            DoctorFixKind::Guided,
+            DoctorPrompt::Text {
+                label: "Assignee".to_string(),
+                default: current_git_assignee(repo_root).ok(),
+            },
+        ),
+        "missing-work-started" => (
+            "Set `work_started` to the current local ISO 8601 timestamp.".to_string(),
+            DoctorFixKind::Automatic,
+            DoctorPrompt::None,
+        ),
+        "missing-work-done" => (
+            "Set `work_done` to the current local ISO 8601 timestamp.".to_string(),
+            DoctorFixKind::Automatic,
+            DoctorPrompt::None,
+        ),
+        rule if rule.starts_with("invalid-timestamp:") => {
+            let field_name = rule.trim_start_matches("invalid-timestamp:");
+            (
+                format!("Replace `{field_name}` with a valid local ISO 8601 timestamp."),
+                DoctorFixKind::Guided,
+                DoctorPrompt::Text {
+                    label: format!("{field_name} timestamp"),
+                    default: Some(current_timestamp_string()),
+                },
+            )
+        }
+        "status-folder-mismatch" => (
+            "Align the story `status` field to the current sprint folder.".to_string(),
+            DoctorFixKind::Automatic,
+            DoctorPrompt::None,
+        ),
+        "sprint-name-mismatch" => (
+            "Align the story `sprint` field to the parent sprint folder.".to_string(),
+            DoctorFixKind::Automatic,
+            DoctorPrompt::None,
+        ),
+        "missing-task-file" => (
+            "Create the referenced sibling `.tasks.md` file with the standard task log header."
+                .to_string(),
+            DoctorFixKind::Automatic,
+            DoctorPrompt::None,
+        ),
+        rule if rule.starts_with("missing-sprint-readme-field:") => {
+            let field_name = rule.trim_start_matches("missing-sprint-readme-field:");
+            (
+                format!("Insert the missing sprint README frontmatter field `{field_name}`."),
+                DoctorFixKind::Guided,
+                doctor_prompt_for_readme_field(story, field_name),
+            )
+        }
+        "sprint-readme-folder-mismatch:sprint" => (
+            "Align the sprint README `sprint` field to the folder sprint id.".to_string(),
+            DoctorFixKind::Automatic,
+            DoctorPrompt::None,
+        ),
+        "sprint-readme-folder-mismatch:headline" => (
+            "Align the sprint README `headline` field to the folder headline slug.".to_string(),
+            DoctorFixKind::Automatic,
+            DoctorPrompt::None,
+        ),
+        rule if rule.starts_with("invalid-sprint-readme-date:") => {
+            let field_name = rule.trim_start_matches("invalid-sprint-readme-date:");
+            (
+                format!("Replace `{field_name}` with a valid `YYYY-MM-DD` date."),
+                DoctorFixKind::Guided,
+                DoctorPrompt::Text {
+                    label: format!("{field_name} date"),
+                    default: None,
+                },
+            )
+        }
+        "invalid-sprint-readme-status" => (
+            "Set the sprint README status to `planned`, `active`, or `closed`.".to_string(),
+            DoctorFixKind::Guided,
+            DoctorPrompt::Choice {
+                label: "Sprint README status".to_string(),
+                options: vec![
+                    "planned".to_string(),
+                    "active".to_string(),
+                    "closed".to_string(),
+                ],
+                default: Some("planned".to_string()),
+            },
+        ),
+        "missing-source-path" | "invalid-source-path" | "missing-source-story" => (
+            "Repair `source_path` manually after confirming which backlog story is authoritative."
+                .to_string(),
+            DoctorFixKind::ManualOnly,
+            DoctorPrompt::None,
+        ),
+        "missing-sprint-readme" | "invalid-sprint-folder-name" | "duplicated-sprint-metadata" => (
+            "Inspect and update the sprint folder or README manually.".to_string(),
+            DoctorFixKind::ManualOnly,
+            DoctorPrompt::None,
+        ),
+        rule if rule.starts_with("missing-field:") => {
+            let field_name = rule.trim_start_matches("missing-field:");
+            (
+                format!("Enter a value for the missing `{field_name}` frontmatter field."),
+                DoctorFixKind::Guided,
+                DoctorPrompt::Text {
+                    label: field_name.to_string(),
+                    default: None,
+                },
+            )
+        }
+        _ => (
+            "Review and fix this issue manually in the affected markdown file.".to_string(),
+            DoctorFixKind::ManualOnly,
+            DoctorPrompt::None,
+        ),
+    }
 }
 
 pub fn validate_story(story: &Story) -> Vec<ValidationIssue> {
@@ -1672,7 +2145,7 @@ fn sprint_overview_from_spec(
         readme_status: spec.readme_status.clone(),
         stories_by_status,
         blocked_work,
-        warnings: sprint_warnings(spec, today),
+        warnings: sprint_warnings(&repository.repo_root, spec, today),
     }
 }
 
@@ -1770,30 +2243,56 @@ fn find_story_in_repository(repository: &Repository, story_id: &str) -> Option<S
     })
 }
 
-fn doctor_findings_for_sprint(spec: &SprintFolderSpec, today: NaiveDate) -> Vec<DoctorFinding> {
+fn doctor_findings_for_sprint(
+    repo_root: &Path,
+    spec: &SprintFolderSpec,
+    today: NaiveDate,
+) -> Vec<DoctorIssue> {
     let mut findings = Vec::new();
     let in_current_range = date_in_range(today, spec.start_date, spec.end_date);
 
     match (in_current_range, spec.readme_status.as_deref()) {
         (true, Some("active")) => {}
-        (true, other) => findings.push(DoctorFinding {
+        (true, other) => findings.push(DoctorIssue {
             severity: "warning".to_string(),
             scope: spec.sprint_name.clone(),
+            file_path: Some(relative_path(repo_root, &spec.readme_path)),
+            story_id: None,
+            sprint_name: Some(spec.sprint_name.clone()),
+            rule: "sprint-readme-status-not-active".to_string(),
             message: format!(
                 "Sprint README dates include {} but README status is {}. README frontmatter is authoritative. Run `kanban doctor` after updating the sprint README.",
                 today.format("%Y-%m-%d"),
                 other.unwrap_or("missing")
             ),
+            suggestion: "Set the sprint README status to active.".to_string(),
+            fix_kind: DoctorFixKind::Automatic,
+            prompt: DoctorPrompt::None,
         }),
-        (false, Some("active")) => findings.push(DoctorFinding {
+        (false, Some("active")) => findings.push(DoctorIssue {
             severity: "warning".to_string(),
             scope: spec.sprint_name.clone(),
+            file_path: Some(relative_path(repo_root, &spec.readme_path)),
+            story_id: None,
+            sprint_name: Some(spec.sprint_name.clone()),
+            rule: "sprint-readme-dates-outside-active".to_string(),
             message: format!(
                 "README status is active but {} is outside the sprint README date range {}..{}. README frontmatter is authoritative. Run `kanban doctor` after updating the sprint README.",
                 today.format("%Y-%m-%d"),
                 spec.start_date.format("%Y-%m-%d"),
                 spec.end_date.format("%Y-%m-%d")
             ),
+            suggestion: "Set the sprint README status to planned or closed, or update the date range.".to_string(),
+            fix_kind: DoctorFixKind::Guided,
+            prompt: DoctorPrompt::Choice {
+                label: "Sprint README status".to_string(),
+                options: vec![
+                    "planned".to_string(),
+                    "active".to_string(),
+                    "closed".to_string(),
+                ],
+                default: Some("planned".to_string()),
+            },
         }),
         _ => {}
     }
@@ -2207,6 +2706,170 @@ fn update_story_frontmatter_markdown(
     Ok(output.join("\n"))
 }
 
+fn upsert_frontmatter_markdown(
+    markdown: &str,
+    updates: &[(&str, Option<String>)],
+) -> Result<String> {
+    let normalized = markdown.replace("\r\n", "\n");
+    let lines: Vec<&str> = normalized.split('\n').collect();
+    if !normalized.starts_with("---\n") {
+        bail!("Story file is missing YAML frontmatter.");
+    }
+    let closing_index = lines
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find_map(|(index, line)| (*line == "---").then_some(index))
+        .ok_or_else(|| anyhow!("Story file has an unclosed frontmatter block."))?;
+
+    let parsed = parse_frontmatter(&normalized);
+    let mut output = Vec::new();
+    let mut applied = BTreeSet::new();
+
+    output.push("---".to_string());
+    for line in &lines[1..closing_index] {
+        if line.trim().is_empty() {
+            output.push(String::new());
+            continue;
+        }
+        if let Some((key, _)) = line.split_once(':') {
+            let key = key.trim();
+            if let Some((_, value)) = updates.iter().find(|(candidate, _)| *candidate == key) {
+                applied.insert(key.to_string());
+                output.push(format!("{key}: {}", value.clone().unwrap_or_default()));
+                continue;
+            }
+        }
+        output.push((*line).to_string());
+    }
+
+    for (key, value) in updates {
+        if parsed.frontmatter_keys.contains(*key) || applied.contains(*key) {
+            continue;
+        }
+        output.push(format!("{key}: {}", value.clone().unwrap_or_default()));
+    }
+
+    output.push("---".to_string());
+    output.extend(
+        lines[(closing_index + 1)..]
+            .iter()
+            .map(|line| (*line).to_string()),
+    );
+    Ok(output.join("\n"))
+}
+
+fn upsert_story_frontmatter_file(
+    file_path: &Path,
+    updates: &[(&str, Option<String>)],
+) -> Result<()> {
+    let markdown = fs::read_to_string(file_path)
+        .with_context(|| format!("read story file {}", file_path.display()))?;
+    let updated = upsert_frontmatter_markdown(&markdown, updates)?;
+    fs::write(file_path, updated)
+        .with_context(|| format!("write story file {}", file_path.display()))?;
+    Ok(())
+}
+
+fn doctor_timestamp_input(input: &DoctorFixInput) -> Result<String> {
+    let timestamp = input.value.clone().unwrap_or_else(current_timestamp_string);
+    let timestamp_pattern = Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}$")
+        .expect("valid timestamp regex");
+    if !timestamp_pattern.is_match(&timestamp) {
+        bail!("Enter a timestamp as local ISO 8601 with numeric timezone offset.");
+    }
+    Ok(timestamp)
+}
+
+fn doctor_prompt_for_readme_field(story: Option<&Story>, field_name: &str) -> DoctorPrompt {
+    match field_name {
+        "status" => DoctorPrompt::Choice {
+            label: "Sprint README status".to_string(),
+            options: vec![
+                "planned".to_string(),
+                "active".to_string(),
+                "closed".to_string(),
+            ],
+            default: Some("planned".to_string()),
+        },
+        "start_date" | "end_date" => DoctorPrompt::Text {
+            label: format!("{field_name} date"),
+            default: None,
+        },
+        "sprint" => DoctorPrompt::Text {
+            label: "Sprint id".to_string(),
+            default: story.and_then(|story| {
+                story
+                    .file_path
+                    .parent()
+                    .and_then(|path| path.file_name())
+                    .map(|value| value.to_string_lossy().into_owned())
+                    .and_then(|folder_name| {
+                        parse_sprint_folder_name(&folder_name).map(|(sprint, _)| sprint)
+                    })
+            }),
+        },
+        "headline" => DoctorPrompt::Text {
+            label: "Sprint headline".to_string(),
+            default: story.and_then(|story| {
+                story
+                    .file_path
+                    .parent()
+                    .and_then(|path| path.file_name())
+                    .map(|value| value.to_string_lossy().into_owned())
+                    .and_then(|folder_name| {
+                        parse_sprint_folder_name(&folder_name).map(|(_, headline)| headline)
+                    })
+            }),
+        },
+        _ => DoctorPrompt::Text {
+            label: field_name.to_string(),
+            default: None,
+        },
+    }
+}
+
+fn doctor_readme_field_value(
+    repo_root: &Path,
+    readme_path: &Path,
+    field_name: &str,
+    input: &DoctorFixInput,
+) -> Result<String> {
+    if let Some(value) = input.value.clone().filter(|value| !value.trim().is_empty()) {
+        return Ok(value);
+    }
+
+    let folder_name = readme_path
+        .parent()
+        .and_then(|path| path.file_name())
+        .map(|value| value.to_string_lossy().into_owned());
+    let parsed_folder = folder_name.as_deref().and_then(parse_sprint_folder_name);
+
+    let value = match field_name {
+        "sprint" => parsed_folder
+            .map(|(sprint, _)| sprint)
+            .ok_or_else(|| anyhow!("Enter the sprint id for this README."))?,
+        "headline" => parsed_folder
+            .map(|(_, headline)| headline)
+            .ok_or_else(|| anyhow!("Enter the sprint headline for this README."))?,
+        "status" => "planned".to_string(),
+        "start_date" | "end_date" => {
+            bail!("Enter a date as YYYY-MM-DD.");
+        }
+        "wip_limit" => "null".to_string(),
+        other => bail!("Cannot derive sprint README field {other} automatically."),
+    };
+
+    let _ = repo_root;
+    Ok(value)
+}
+
+fn render_empty_task_file(story_id: &str, sprint_name: &str) -> String {
+    format!(
+        "# Tasks for {story_id}\n\nParent User Story: {story_id}\nSprint: {sprint_name}\n\n---\n"
+    )
+}
+
 fn find_sprint_story_for_write<'a>(
     repository: &'a Repository,
     story_id: &str,
@@ -2420,8 +3083,8 @@ fn date_in_range(today: NaiveDate, start_date: NaiveDate, end_date: NaiveDate) -
     today >= start_date && today <= end_date
 }
 
-fn sprint_warnings(spec: &SprintFolderSpec, today: NaiveDate) -> Vec<String> {
-    doctor_findings_for_sprint(spec, today)
+fn sprint_warnings(repo_root: &Path, spec: &SprintFolderSpec, today: NaiveDate) -> Vec<String> {
+    doctor_findings_for_sprint(repo_root, spec, today)
         .into_iter()
         .map(|finding| finding.message)
         .collect()
@@ -3094,6 +3757,78 @@ mod tests {
                     .message
                     .contains("README frontmatter is authoritative")
         }));
+    }
+
+    #[test]
+    fn collect_doctor_issues_for_story_includes_backlog_and_sprint_copies() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let sprint_root = temp_root.path().join("doc/backlog/sprints/S001.foundation");
+        let sprint_progress = sprint_root.join("02.in-progress");
+        let backlog_dir = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+
+        fs::create_dir_all(&sprint_progress).unwrap();
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            sprint_root.join("README.md"),
+            sprint_readme("S001", "foundation", "2099-06-01", "2099-06-12", "active"),
+        )
+        .unwrap();
+        fs::write(
+            backlog_dir.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        )
+        .unwrap();
+        fs::write(
+            sprint_progress.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nstory_points: 8\nwork_started:\nwork_done:\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md\ntask_file: US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        )
+        .unwrap();
+
+        let issues = collect_doctor_issues_for_story(temp_root.path(), "US-F1-053").unwrap();
+
+        assert!(issues.iter().any(|issue| {
+            issue.file_path.as_ref().is_some_and(|path| {
+                path == &PathBuf::from("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md")
+            })
+        }));
+        assert!(issues.iter().any(|issue| {
+            issue.file_path.as_ref().is_some_and(|path| {
+                path == &PathBuf::from("doc/backlog/sprints/S001.foundation/02.in-progress/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md")
+            })
+        }));
+    }
+
+    #[test]
+    fn apply_doctor_fix_sets_missing_assignee_on_story_file() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_git_config(temp_root.path(), "Test User", "test@example.com");
+        fs::create_dir_all(temp_root.path().join("doc/backlog/sprints")).unwrap();
+        let story_path = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-051-build-shared-backlog-parsing-and-validation-core.md");
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-051\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nstory_points: 5\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let issue = collect_doctor_issues_for_story(temp_root.path(), "US-F1-051")
+            .unwrap()
+            .into_iter()
+            .find(|issue| issue.rule == "missing-field:assignee")
+            .unwrap();
+        let result =
+            apply_doctor_fix(temp_root.path(), &issue, &DoctorFixInput::default()).unwrap();
+        let updated = fs::read_to_string(&story_path).unwrap();
+
+        assert!(result.message.contains("Set assignee"));
+        assert!(updated.contains("assignee: Test User <test@example.com>"));
     }
 
     #[test]

@@ -72,6 +72,26 @@ fn zsh_completion_includes_dynamic_story_id_helper() {
 }
 
 #[test]
+fn zsh_completion_includes_dynamic_doctor_fix_target_helper() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("_kanban_doctor_fix_targets"),
+        "zsh completion should define _kanban_doctor_fix_targets"
+    );
+    assert!(
+        stdout.contains("current -- current active sprint"),
+        "doctor fix helper should include the literal current target"
+    );
+    assert!(
+        stdout.contains("list-ids stories-with-titles"),
+        "doctor fix helper should call `kanban list-ids stories-with-titles`"
+    );
+}
+
+#[test]
 fn zsh_completion_helpers_are_redefined_when_completion_is_reevaluated() {
     let output = kanban(&["completion", "zsh"]);
 
@@ -161,6 +181,30 @@ fn zsh_completion_replaces_default_for_story_id_args() {
 }
 
 #[test]
+fn zsh_completion_replaces_default_for_doctor_fix_target_arg() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains(
+            "Optional scope\\: a story id like US-F1-053 or the literal `current`.:_kanban_doctor_fix_targets"
+        ),
+        "doctor fix target arg should use _kanban_doctor_fix_targets"
+    );
+}
+
+#[test]
+fn zsh_completion_supports_bare_doctor_repo_root_completion() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("_kanban_doctor_command_or_repo_root"));
+    assert!(stdout.contains("repo-root:repository root:_files -/"));
+}
+
+#[test]
 fn bash_completion_includes_dynamic_sprint_completion() {
     let output = kanban(&["completion", "bash"]);
 
@@ -182,6 +226,33 @@ fn bash_completion_includes_dynamic_story_completion() {
         stdout.contains("list-ids stories"),
         "bash completion should include `kanban list-ids stories` for story/task commands"
     );
+}
+
+#[test]
+fn bash_completion_includes_dynamic_doctor_fix_target_completion() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("kanban__subcmd__doctor__subcmd__fix"),
+        "bash completion should include the doctor fix case block"
+    );
+    assert!(
+        stdout.contains("current $(kanban list-ids stories 2>/dev/null)"),
+        "bash completion should include current plus story IDs for doctor fix"
+    );
+}
+
+#[test]
+fn bash_completion_supports_bare_doctor_repo_root_completion() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("kanban__subcmd__doctor)"));
+    assert!(stdout.contains("doctor_commands=\"show fix help\""));
+    assert!(stdout.contains("compgen -d -- \"${cur}\""));
 }
 
 #[test]
@@ -208,6 +279,30 @@ fn completion_help_explains_bash_and_zsh_setup() {
         assert!(stdout.contains("kanban completion zsh"));
         assert!(stdout.contains("Supported shells: bash, zsh"));
     }
+}
+
+#[test]
+fn doctor_help_subcommand_prints_doctor_help() {
+    let output = kanban(&["doctor", "help"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Usage: kanban doctor [REPO_ROOT]"));
+    assert!(stdout.contains("kanban doctor help"));
+    assert!(stdout.contains("show"));
+    assert!(stdout.contains("fix"));
+}
+
+#[test]
+fn doctor_flag_help_prints_doctor_help() {
+    let output = kanban(&["doctor", "--help"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Usage: kanban doctor [REPO_ROOT]"));
+    assert!(stdout.contains("kanban doctor help"));
+    assert!(stdout.contains("show"));
+    assert!(stdout.contains("fix"));
 }
 
 #[test]
