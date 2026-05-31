@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use chrono::NaiveDate;
+use clap::builder::styling::{AnsiColor, Effects, Style as ClapStyle, Styles};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use kanban_core::{
     ColorMode, CreateSprintInput, DoctorFinding, PhaseOverview, RolloverResult, SprintOverview,
@@ -17,6 +18,49 @@ use kanban_core::{
 
 const MIN_TERMINAL_WIDTH: usize = 80;
 const DEFAULT_OUTPUT_WIDTH: usize = 100;
+const CLAP_STYLING: Styles = Styles::styled()
+    .header(
+        ClapStyle::new()
+            .bold()
+            .underline()
+            .fg_color(Some(clap::builder::styling::Color::Ansi(AnsiColor::Cyan))),
+    )
+    .usage(
+        ClapStyle::new()
+            .bold()
+            .underline()
+            .fg_color(Some(clap::builder::styling::Color::Ansi(AnsiColor::Blue))),
+    )
+    .literal(
+        ClapStyle::new()
+            .bold()
+            .fg_color(Some(clap::builder::styling::Color::Ansi(AnsiColor::Green))),
+    )
+    .placeholder(
+        ClapStyle::new().fg_color(Some(clap::builder::styling::Color::Ansi(
+            AnsiColor::Magenta,
+        ))),
+    )
+    .error(
+        ClapStyle::new()
+            .bold()
+            .fg_color(Some(clap::builder::styling::Color::Ansi(AnsiColor::Red))),
+    )
+    .valid(
+        ClapStyle::new()
+            .effects(Effects::BOLD)
+            .fg_color(Some(clap::builder::styling::Color::Ansi(AnsiColor::Green))),
+    )
+    .invalid(
+        ClapStyle::new()
+            .effects(Effects::BOLD)
+            .fg_color(Some(clap::builder::styling::Color::Ansi(AnsiColor::Yellow))),
+    )
+    .context(
+        ClapStyle::new().fg_color(Some(clap::builder::styling::Color::Ansi(
+            AnsiColor::BrightBlack,
+        ))),
+    );
 
 #[derive(Copy, Clone)]
 struct Theme {
@@ -193,6 +237,8 @@ fn terminal_width_from_stdout() -> Option<usize> {
 #[command(version)]
 #[command(visible_alias = "kb")]
 #[command(about = "Markdown-first kanban tooling")]
+#[command(styles = CLAP_STYLING)]
+#[command(max_term_width = 100)]
 #[command(
     long_about = "Markdown-first kanban tooling for the AutoPASS IP 2.0 backlog. Commands state whether they are read-only or which markdown files they mutate."
 )]
@@ -574,9 +620,7 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
     if !sprint.warnings.is_empty() {
         push_line(&mut output, "");
         for warning in &sprint.warnings {
-            push_wrapped_hanging_line(&mut output, "  ", warning, layout.width, |v| {
-                theme.warning(v)
-            });
+            push_wrapped_hanging_line(&mut output, "", warning, layout.width, |v| theme.warning(v));
         }
     }
 
@@ -592,12 +636,12 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
         if stories.is_empty() {
             push_line(
                 &mut output,
-                &format!("  {icon_label}  {}  ·  none", theme.count(0)),
+                &format!("{icon_label}  {}  ·  none", theme.count(0)),
             );
         } else {
             push_line(
                 &mut output,
-                &format!("  {icon_label}  {}", theme.count(stories.len())),
+                &format!("{icon_label}  {}", theme.count(stories.len())),
             );
             push_story_table(&mut output, theme, layout.width, stories);
         }
@@ -1618,12 +1662,30 @@ fn print_rollover_result(theme: &Theme, result: &RolloverResult) {
     println!("{} {carried}", theme.label("Carried stories:"));
 }
 
+fn render_styled_output(styled: clap::builder::StyledStr, color: bool) -> String {
+    if color {
+        styled.ansi().to_string()
+    } else {
+        styled.to_string()
+    }
+}
+
+fn render_no_args_help_output(theme: &Theme) -> Result<String> {
+    let version = Args::command().render_version().to_string();
+    let mut command = Args::command();
+    let help = render_styled_output(command.render_help(), theme.color);
+    Ok(format!("{version}{help}\n"))
+}
+
 fn main() -> Result<()> {
     let raw_args = std::env::args_os().collect::<Vec<_>>();
     if raw_args.len() == 1 {
-        println!("{}", Args::command().render_version());
+        let version_line = Args::command().render_version().to_string();
 
-        if let Err(error) = kanban_core::load_kanban_config(".") {
+        let config = kanban_core::load_kanban_config(".");
+
+        if let Err(error) = &config {
+            println!("{}", version_line.trim_end());
             let theme = Theme::for_stdout(ColorMode::Auto);
             let message = error.to_string();
             let init_guidance = "Run `kanban init` to initialize this repository.";
@@ -1635,8 +1697,8 @@ fn main() -> Result<()> {
             return Ok(());
         }
 
-        Args::command().print_help()?;
-        println!();
+        let theme = Theme::for_stdout(config?.theme.color_mode);
+        print!("{}", render_no_args_help_output(&theme)?);
         return Ok(());
     }
 
@@ -2138,8 +2200,56 @@ mod tests {
         let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
         assert!(output.contains("○ todo"), "todo section header missing");
         assert!(
+            output.lines().any(|line| line == "○ todo  0  ·  none"),
+            "todo section should be flush-left"
+        );
+        assert!(
             output.contains("none"),
             "none placeholder missing for empty section"
+        );
+    }
+
+    #[test]
+    fn warnings_and_status_headers_are_flush_left() {
+        let theme = Theme::plain();
+        let mut stories_by_status = BTreeMap::new();
+        stories_by_status.insert(
+            "in-progress".to_string(),
+            vec![StoryOverview {
+                id: "US-F1-002".to_string(),
+                title: "A story in progress".to_string(),
+                status: "in-progress".to_string(),
+                assignee: "Someone <s@example.com>".to_string(),
+                story_points: "3".to_string(),
+                sprint: Some("S001.test".to_string()),
+                kind: StoryKind::Sprint,
+                relative_path: PathBuf::from("02.in-progress/US-F1-002.md"),
+                task_summary: None,
+                task_count: 0,
+            }],
+        );
+        let sprint = SprintOverview {
+            sprint_name: "S001.test".to_string(),
+            headline: "test".to_string(),
+            sprint_goal: Some("Keep the overview readable.".to_string()),
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("README.md"),
+            readme_status: None,
+            stories_by_status,
+            blocked_work: vec![],
+            warnings: vec!["A warning line".to_string()],
+        };
+
+        let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
+
+        assert!(
+            output.lines().any(|line| line == "A warning line"),
+            "warning should be flush-left"
+        );
+        assert!(
+            output.lines().any(|line| line == "→ in-progress  1"),
+            "status header should be flush-left"
         );
     }
 
@@ -2153,5 +2263,54 @@ mod tests {
         };
 
         assert_eq!(command_repo_root(&command), Some(&repo_root));
+    }
+
+    #[test]
+    fn no_args_output_starts_with_version_line() {
+        let output =
+            render_no_args_help_output(&Theme::plain()).expect("no-args output should render");
+        let first_line = output.lines().next().expect("output should have lines");
+
+        assert_eq!(
+            first_line,
+            Args::command().render_version().to_string().trim_end()
+        );
+        assert!(output.contains("Usage: kanban <COMMAND>"));
+    }
+
+    #[test]
+    fn no_args_output_can_emit_ansi_when_color_enabled() {
+        let output =
+            render_no_args_help_output(&Theme::color()).expect("no-args output should render");
+
+        assert!(
+            output.contains("\u{1b}["),
+            "expected ansi color codes in help output"
+        );
+        assert!(output.contains("Commands:"));
+    }
+
+    #[test]
+    fn no_args_help_wraps_command_descriptions_into_two_columns() {
+        let mut command = Args::command();
+        command = command.term_width(60);
+        let output = command.render_help().to_string();
+
+        assert!(
+            output.contains("  init        Initialize `.kanban` in the repository root."),
+            "expected command and description to share the first help row"
+        );
+        assert!(
+            output.contains("              Effect: creates default JSON config files in"),
+            "expected wrapped continuation line to stay in the description column"
+        );
+        assert!(
+            output.contains("              `.kanban/`. Side effects: no backlog files are"),
+            "expected later wrapped lines to remain aligned"
+        );
+        assert!(
+            output.contains("              modified."),
+            "expected final wrapped line to remain aligned"
+        );
     }
 }

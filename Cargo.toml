@@ -10,12 +10,12 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "UNLICENSED"
-version = "26.5.314"
+version = "26.5.319"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
 chrono = { version = "0.4.42", default-features = true }
-clap = { version = "4.5.53", features = ["derive"] }
+clap = { version = "4.5.53", features = ["derive", "wrap_help"] }
 clap_complete = "4.5.61"
 libc = "0.2.186"
 regex = "1.12.2"
