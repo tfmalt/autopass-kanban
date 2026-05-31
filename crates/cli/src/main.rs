@@ -588,8 +588,7 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         push_line(&mut output, "");
-        let icon_label =
-            theme.status_text(status, format!("{} {status}", status_icon(status)));
+        let icon_label = theme.status_text(status, format!("{} {status}", status_icon(status)));
         if stories.is_empty() {
             push_line(
                 &mut output,
@@ -617,9 +616,12 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
         .unwrap_or(0);
     push_line(&mut output, "");
     let done_part = theme.paint(Style::Green, format!("{} done", status_icon("done")));
-    let blocked_style = if blocked_count > 0 { Style::Red } else { Style::Muted };
-    let blocked_part =
-        theme.paint(blocked_style, format!("{} blocked", status_icon("blocked")));
+    let blocked_style = if blocked_count > 0 {
+        Style::Red
+    } else {
+        Style::Muted
+    };
+    let blocked_part = theme.paint(blocked_style, format!("{} blocked", status_icon("blocked")));
     push_line(
         &mut output,
         &format!(
@@ -642,7 +644,6 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
 
     output
 }
-
 
 fn title_case_headline(headline: &str) -> String {
     headline
@@ -985,7 +986,11 @@ fn sprint_status_label(end_date: &str, readme_status: Option<&str>) -> &'static 
 
 fn render_progress_bar(theme: &Theme, done: usize, total: usize, width: usize) -> String {
     let bar_width = (width / 8).clamp(8, 20);
-    let filled = if total == 0 { 0 } else { done * bar_width / total };
+    let filled = if total == 0 {
+        0
+    } else {
+        done * bar_width / total
+    };
     let empty = bar_width.saturating_sub(filled);
     format!(
         "{}{}",
@@ -1045,7 +1050,11 @@ fn push_sprint_header_band(
 
     // Counts per status
     let total: usize = sprint.stories_by_status.values().map(|v| v.len()).sum();
-    let done = sprint.stories_by_status.get("done").map(|v| v.len()).unwrap_or(0);
+    let done = sprint
+        .stories_by_status
+        .get("done")
+        .map(|v| v.len())
+        .unwrap_or(0);
     let in_progress = sprint
         .stories_by_status
         .get("in-progress")
@@ -1056,7 +1065,11 @@ fn push_sprint_header_band(
         .get("ready-for-qa")
         .map(|v| v.len())
         .unwrap_or(0);
-    let todo = sprint.stories_by_status.get("todo").map(|v| v.len()).unwrap_or(0);
+    let todo = sprint
+        .stories_by_status
+        .get("todo")
+        .map(|v| v.len())
+        .unwrap_or(0);
     let blocked = sprint
         .stories_by_status
         .get("blocked")
@@ -1094,7 +1107,10 @@ fn push_sprint_header_band(
         theme.paint(s, format!("{count} {label}"))
     })
     .collect();
-    push_line(output, &format!("  {}", segments.join(&format!("  {dot}  "))));
+    push_line(
+        output,
+        &format!("  {}", segments.join(&format!("  {dot}  "))),
+    );
 
     // Bottom separator: full-width dashes
     push_line(output, &theme.paint(Style::Muted, "─".repeat(layout.width)));
@@ -1102,9 +1118,7 @@ fn push_sprint_header_band(
 
 fn format_compact_task_summary(summary: Option<&TaskSummary>) -> String {
     summary
-        .map(|s| {
-            format!("✓{} ▶{} ·{} ✗{}", s.done, s.in_progress, s.todo, s.blocked)
-        })
+        .map(|s| format!("✓{} ▶{} ·{} ✗{}", s.done, s.in_progress, s.todo, s.blocked))
         .unwrap_or_else(|| "-".to_string())
 }
 
@@ -1606,17 +1620,23 @@ fn print_rollover_result(theme: &Theme, result: &RolloverResult) {
 
 fn main() -> Result<()> {
     let raw_args = std::env::args_os().collect::<Vec<_>>();
-    if raw_args.len() == 1
-        && let Err(error) = kanban_core::load_kanban_config(".")
-    {
-        let theme = Theme::for_stdout(ColorMode::Auto);
-        let message = error.to_string();
-        let init_guidance = "Run `kanban init` to initialize this repository.";
-        let primary = message
-            .strip_suffix(&format!(" {init_guidance}"))
-            .unwrap_or(message.as_str());
-        eprintln!(" {}  {primary}", theme.warning(""));
-        eprintln!("    {init_guidance}");
+    if raw_args.len() == 1 {
+        println!("{}", Args::command().render_version());
+
+        if let Err(error) = kanban_core::load_kanban_config(".") {
+            let theme = Theme::for_stdout(ColorMode::Auto);
+            let message = error.to_string();
+            let init_guidance = "Run `kanban init` to initialize this repository.";
+            let primary = message
+                .strip_suffix(&format!(" {init_guidance}"))
+                .unwrap_or(message.as_str());
+            eprintln!(" {}  {primary}", theme.warning(""));
+            eprintln!("    {init_guidance}");
+            return Ok(());
+        }
+
+        Args::command().print_help()?;
+        println!();
         return Ok(());
     }
 
@@ -2004,11 +2024,13 @@ mod tests {
             let non_empty: Vec<&str> = output.lines().filter(|l| !l.is_empty()).collect();
             // First line = top separator, last line = bottom separator — both full-width.
             assert_eq!(
-                display_width(non_empty[0]), width,
+                display_width(non_empty[0]),
+                width,
                 "top separator at width {width}"
             );
             assert_eq!(
-                display_width(non_empty[non_empty.len() - 1]), width,
+                display_width(non_empty[non_empty.len() - 1]),
+                width,
                 "bottom separator at width {width}"
             );
         }
@@ -2025,15 +2047,29 @@ mod tests {
 
     #[test]
     fn assignee_strips_email() {
-        assert_eq!(extract_assignee_name("Geir Ivar Jerstad <g@v.no>"), "Geir Ivar Jerstad");
-        assert_eq!(extract_assignee_name("Thomas Malt <thomas.malt@vegvesen.no>"), "Thomas Malt");
-        assert_eq!(extract_assignee_name("Sondre Bjerkerud and Erik Itland"), "Sondre Bjerkerud and Erik Itland");
+        assert_eq!(
+            extract_assignee_name("Geir Ivar Jerstad <g@v.no>"),
+            "Geir Ivar Jerstad"
+        );
+        assert_eq!(
+            extract_assignee_name("Thomas Malt <thomas.malt@vegvesen.no>"),
+            "Thomas Malt"
+        );
+        assert_eq!(
+            extract_assignee_name("Sondre Bjerkerud and Erik Itland"),
+            "Sondre Bjerkerud and Erik Itland"
+        );
         assert_eq!(extract_assignee_name("TBD"), "TBD");
     }
 
     #[test]
     fn task_symbols_replace_old_format() {
-        let summary = TaskSummary { todo: 2, in_progress: 1, blocked: 0, done: 4 };
+        let summary = TaskSummary {
+            todo: 2,
+            in_progress: 1,
+            blocked: 0,
+            done: 4,
+        };
         let plain = format_compact_task_summary(Some(&summary));
         assert!(plain.contains("✓4"), "done symbol missing: {plain}");
         assert!(plain.contains("▶1"), "active symbol missing: {plain}");
@@ -2078,7 +2114,10 @@ mod tests {
         // Done count appears in summary line and header band
         assert!(output.contains("✓ done"), "done summary line missing");
         // But the story itself should NOT appear as an individual row
-        assert!(!output.contains("A completed story"), "done story listed individually");
+        assert!(
+            !output.contains("A completed story"),
+            "done story listed individually"
+        );
     }
 
     #[test]
@@ -2098,7 +2137,10 @@ mod tests {
         };
         let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
         assert!(output.contains("○ todo"), "todo section header missing");
-        assert!(output.contains("none"), "none placeholder missing for empty section");
+        assert!(
+            output.contains("none"),
+            "none placeholder missing for empty section"
+        );
     }
 
     #[test]
