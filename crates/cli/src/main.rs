@@ -1,7 +1,13 @@
-use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::{IsTerminal, Read, Seek, SeekFrom, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command as ProcessCommand, Stdio};
+use std::thread;
+use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use chrono::NaiveDate;
 use clap::builder::styling::{AnsiColor, Effects, Style as ClapStyle, Styles};
 use clap::{ArgGroup, CommandFactory, Parser, Subcommand, ValueEnum};
@@ -13,10 +19,10 @@ use kanban_core::{
     doctor_repository, find_story, get_config_json, get_config_value, init_config,
     list_all_stories, list_current_sprint_stories, list_epic_ids, list_next_sprint_stories,
     list_sprint_names, list_stories_in_sprint, list_story_completion_items, list_story_ids,
-    move_story_to_status_with_assignee, plan_story_into_sprint, rollover_sprint, set_config_value,
-    suggested_next_sprint_dates, suggested_next_sprint_number, suggested_sprint_dates,
-    summarize_current_sprint, summarize_phase, summarize_sprint, summarize_sprints,
-    update_task_in_story, validate_repository,
+    load_kanban_config, move_story_to_status_with_assignee, plan_story_into_sprint,
+    rollover_sprint, set_config_value, suggested_next_sprint_dates, suggested_next_sprint_number,
+    suggested_sprint_dates, summarize_current_sprint, summarize_phase, summarize_sprint,
+    summarize_sprints, update_task_in_story, validate_repository,
 };
 
 const MIN_TERMINAL_WIDTH: usize = 80;
@@ -573,6 +579,82 @@ enum DoctorCommand {
 }
 
 #[derive(Subcommand)]
+enum WebCommand {
+    #[command(
+        about = "Start the local kanban web UI. Effect: launches tools/kanban-web and writes .kanban/run/web.pid plus .kanban/run/web.log. Side effects: no backlog markdown is modified."
+    )]
+    Start {
+        #[arg(long, help = "Run in the foreground instead of writing a PID file.")]
+        foreground: bool,
+        #[arg(
+            long,
+            help = "Open the configured web URL in the default browser after start."
+        )]
+        open: bool,
+        #[arg(long, help = "Run the web server through npm run dev:server.")]
+        dev: bool,
+        #[arg(
+            long,
+            help = "Build tools/kanban-web before starting in production mode."
+        )]
+        build: bool,
+        #[arg(help = "Repository root to serve. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        about = "Stop the local kanban web UI. Effect: sends SIGTERM to the recorded PID and removes stale runtime files. Side effects: no backlog markdown is modified."
+    )]
+    Stop {
+        #[arg(
+            help = "Repository root whose web UI should stop. Defaults to the current directory."
+        )]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        about = "Restart the local kanban web UI. Effect: stop then start using the supplied start flags. Side effects: updates .kanban/run runtime files only."
+    )]
+    Restart {
+        #[arg(
+            long,
+            help = "Open the configured web URL in the default browser after restart."
+        )]
+        open: bool,
+        #[arg(long, help = "Run the web server through npm run dev:server.")]
+        dev: bool,
+        #[arg(
+            long,
+            help = "Build tools/kanban-web before starting in production mode."
+        )]
+        build: bool,
+        #[arg(help = "Repository root to serve. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        about = "Show local kanban web UI process status. Effect: reads .kanban/run/web.pid. Side effects: none."
+    )]
+    Status {
+        #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        about = "Print the local kanban web UI log. Effect: reads .kanban/run/web.log. Side effects: none."
+    )]
+    Log {
+        #[arg(long, value_name = "N", help = "Only print the last N log lines.")]
+        lines: Option<usize>,
+        #[arg(short, long, help = "Follow appended log output until interrupted.")]
+        follow: bool,
+        #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 enum Command {
     #[command(
         about = "Initialize `.kanban` in the repository root. Effect: creates default JSON config files in `.kanban/`. Side effects: no backlog files are modified."
@@ -616,6 +698,13 @@ enum Command {
     Task {
         #[command(subcommand)]
         command: TaskCommand,
+    },
+    #[command(
+        about = "Control the local kanban web UI process. Effects are limited to .kanban/run runtime files and the local web server process."
+    )]
+    Web {
+        #[command(subcommand)]
+        command: WebCommand,
     },
     #[command(
         about = "Generate shell completion scripts. Effect: read-only output to stdout. Side effects: none.",
@@ -688,6 +777,13 @@ fn command_repo_root(command: &Command) -> Option<&PathBuf> {
                 Some(repo_root)
             }
         },
+        Command::Web { command } => match command {
+            WebCommand::Start { repo_root, .. }
+            | WebCommand::Stop { repo_root }
+            | WebCommand::Restart { repo_root, .. }
+            | WebCommand::Status { repo_root }
+            | WebCommand::Log { repo_root, .. } => Some(repo_root),
+        },
         Command::Doctor { command } => match command {
             DoctorCommand::Show { repo_root } | DoctorCommand::Fix { repo_root, .. } => {
                 Some(repo_root)
@@ -706,6 +802,397 @@ fn theme_for_command(command: &Command) -> Theme {
         })
         .unwrap_or(ColorMode::Auto);
     Theme::for_stdout(color_mode)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WebRuntimePaths {
+    run_dir: PathBuf,
+    pid_file: PathBuf,
+    log_file: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WebStartCommandSpec {
+    program: String,
+    args: Vec<String>,
+    cwd: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WebProcessState {
+    Stopped,
+    Running(u32),
+    Stale(Option<u32>),
+}
+
+fn web_runtime_paths(repo_root: &Path) -> WebRuntimePaths {
+    let run_dir = repo_root.join(".kanban/run");
+    WebRuntimePaths {
+        pid_file: run_dir.join("web.pid"),
+        log_file: run_dir.join("web.log"),
+        run_dir,
+    }
+}
+
+fn web_app_dir(repo_root: &Path) -> PathBuf {
+    repo_root.join("tools/kanban-web")
+}
+
+fn web_production_entry(repo_root: &Path) -> PathBuf {
+    web_app_dir(repo_root).join("dist/server/index.js")
+}
+
+fn build_web_start_command_spec(repo_root: &Path, dev: bool) -> WebStartCommandSpec {
+    let web_dir = web_app_dir(repo_root);
+    if dev {
+        WebStartCommandSpec {
+            program: "npm".to_string(),
+            args: vec![
+                "--prefix".to_string(),
+                web_dir.to_string_lossy().into_owned(),
+                "run".to_string(),
+                "dev:server".to_string(),
+            ],
+            cwd: repo_root.to_path_buf(),
+        }
+    } else {
+        WebStartCommandSpec {
+            program: "node".to_string(),
+            args: vec![
+                web_production_entry(repo_root)
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+            cwd: repo_root.to_path_buf(),
+        }
+    }
+}
+
+fn build_web_build_command_spec(repo_root: &Path) -> WebStartCommandSpec {
+    WebStartCommandSpec {
+        program: "npm".to_string(),
+        args: vec![
+            "--prefix".to_string(),
+            web_app_dir(repo_root).to_string_lossy().into_owned(),
+            "run".to_string(),
+            "build".to_string(),
+        ],
+        cwd: repo_root.to_path_buf(),
+    }
+}
+
+fn process_from_spec(spec: &WebStartCommandSpec) -> ProcessCommand {
+    let mut command = ProcessCommand::new(&spec.program);
+    command.args(&spec.args).current_dir(&spec.cwd);
+    command
+}
+
+fn read_web_process_state(paths: &WebRuntimePaths) -> Result<WebProcessState> {
+    if !paths.pid_file.exists() {
+        return Ok(WebProcessState::Stopped);
+    }
+
+    let raw = fs::read_to_string(&paths.pid_file)
+        .with_context(|| format!("read web PID file {}", paths.pid_file.display()))?;
+    let trimmed = raw.trim();
+    let Ok(pid) = trimmed.parse::<u32>() else {
+        return Ok(WebProcessState::Stale(None));
+    };
+    if pid == 0 {
+        return Ok(WebProcessState::Stale(None));
+    }
+
+    if process_exists(pid) {
+        Ok(WebProcessState::Running(pid))
+    } else {
+        Ok(WebProcessState::Stale(Some(pid)))
+    }
+}
+
+#[cfg(unix)]
+fn process_exists(pid: u32) -> bool {
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn process_exists(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn terminate_process(pid: u32) -> Result<()> {
+    let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+    if result == 0 || !process_exists(pid) {
+        Ok(())
+    } else {
+        bail!("failed to stop web process {pid}");
+    }
+}
+
+#[cfg(not(unix))]
+fn terminate_process(_pid: u32) -> Result<()> {
+    bail!("kanban web stop is only implemented on Unix-like systems.")
+}
+
+fn remove_pid_file(paths: &WebRuntimePaths) -> Result<()> {
+    if paths.pid_file.exists() {
+        fs::remove_file(&paths.pid_file)
+            .with_context(|| format!("remove PID file {}", paths.pid_file.display()))?;
+    }
+    Ok(())
+}
+
+fn run_web_build(repo_root: &Path) -> Result<()> {
+    let spec = build_web_build_command_spec(repo_root);
+    let status = process_from_spec(&spec)
+        .status()
+        .with_context(|| format!("run {} {}", spec.program, spec.args.join(" ")))?;
+    if !status.success() {
+        bail!("web build failed with status {status}");
+    }
+    Ok(())
+}
+
+fn open_browser_url(url: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut command = ProcessCommand::new("open");
+    #[cfg(target_os = "linux")]
+    let mut command = ProcessCommand::new("xdg-open");
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = ProcessCommand::new("cmd");
+        command.arg("/C").arg("start");
+        command
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        bail!("opening a browser is not supported on this platform");
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    {
+        command.arg(url);
+        let status = command
+            .status()
+            .with_context(|| format!("open browser URL {url}"))?;
+        if !status.success() {
+            bail!("open browser command failed with status {status}");
+        }
+        Ok(())
+    }
+}
+
+fn start_web(
+    theme: &Theme,
+    repo_root: &Path,
+    foreground: bool,
+    open: bool,
+    dev: bool,
+    build: bool,
+) -> Result<()> {
+    if dev && build {
+        bail!("--build cannot be combined with --dev.");
+    }
+    let config = load_kanban_config(repo_root)?;
+    let repo_root = config.repo_root;
+    let paths = web_runtime_paths(&repo_root);
+    fs::create_dir_all(&paths.run_dir)
+        .with_context(|| format!("create web runtime directory {}", paths.run_dir.display()))?;
+
+    match read_web_process_state(&paths)? {
+        WebProcessState::Running(pid) => bail!(
+            "kanban web is already running with PID {pid}. Use `kanban web status` or `kanban web restart`."
+        ),
+        WebProcessState::Stale(_) => remove_pid_file(&paths)?,
+        WebProcessState::Stopped => {}
+    }
+
+    if build {
+        println!("{}", theme.label("Building kanban web UI..."));
+        run_web_build(&repo_root)?;
+    }
+    if !dev && !web_production_entry(&repo_root).is_file() {
+        bail!(
+            "built web server not found at {}. Run `kanban web start --build` or use `kanban web start --dev`.",
+            web_production_entry(&repo_root).display()
+        );
+    }
+
+    let url = format!("http://{}:{}", config.web.host, config.web.port);
+    let spec = build_web_start_command_spec(&repo_root, dev);
+    if foreground {
+        println!("{} {url}", theme.success("Starting kanban web UI:"));
+        if open && let Err(error) = open_browser_url(&url) {
+            eprintln!("{} {error}", theme.warning("Could not open browser:"));
+        }
+        let status = process_from_spec(&spec)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .with_context(|| format!("start web server with {}", spec.program))?;
+        if !status.success() {
+            bail!("web server exited with status {status}");
+        }
+        return Ok(());
+    }
+
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&paths.log_file)
+        .with_context(|| format!("open web log {}", paths.log_file.display()))?;
+    let stderr = log
+        .try_clone()
+        .with_context(|| format!("clone web log handle {}", paths.log_file.display()))?;
+    let mut command = process_from_spec(&spec);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(stderr));
+    #[cfg(unix)]
+    command.process_group(0);
+    let child = command
+        .spawn()
+        .with_context(|| format!("start web server with {}", spec.program))?;
+    fs::write(&paths.pid_file, format!("{}\n", child.id()))
+        .with_context(|| format!("write PID file {}", paths.pid_file.display()))?;
+
+    println!("{} {url}", theme.success("Started kanban web UI:"));
+    println!("{} {}", theme.label("PID:"), child.id());
+    println!(
+        "{} {}",
+        theme.label("Log:"),
+        theme.path(paths.log_file.display())
+    );
+    if open && let Err(error) = open_browser_url(&url) {
+        eprintln!("{} {error}", theme.warning("Could not open browser:"));
+    }
+    Ok(())
+}
+
+fn stop_web(theme: &Theme, repo_root: &Path, quiet: bool) -> Result<bool> {
+    let config = load_kanban_config(repo_root)?;
+    let paths = web_runtime_paths(&config.repo_root);
+    match read_web_process_state(&paths)? {
+        WebProcessState::Stopped => {
+            if !quiet {
+                println!("{}", theme.warning("kanban web UI is not running."));
+            }
+            Ok(false)
+        }
+        WebProcessState::Stale(pid) => {
+            remove_pid_file(&paths)?;
+            if !quiet {
+                match pid {
+                    Some(pid) => println!("{} stale PID {pid}", theme.warning("Removed")),
+                    None => println!("{}", theme.warning("Removed stale web PID file.")),
+                }
+            }
+            Ok(false)
+        }
+        WebProcessState::Running(pid) => {
+            terminate_process(pid)?;
+            for _ in 0..30 {
+                if !process_exists(pid) {
+                    remove_pid_file(&paths)?;
+                    if !quiet {
+                        println!("{} PID {pid}", theme.success("Stopped kanban web UI:"));
+                    }
+                    return Ok(true);
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            bail!("web process {pid} did not stop after SIGTERM");
+        }
+    }
+}
+
+fn print_web_status(theme: &Theme, repo_root: &Path) -> Result<()> {
+    let config = load_kanban_config(repo_root)?;
+    let paths = web_runtime_paths(&config.repo_root);
+    let url = format!("http://{}:{}", config.web.host, config.web.port);
+    match read_web_process_state(&paths)? {
+        WebProcessState::Running(pid) => {
+            println!("{} running", theme.success("kanban web UI:"));
+            println!("{} {pid}", theme.label("PID:"));
+            println!("{} {url}", theme.label("URL:"));
+            println!(
+                "{} {}",
+                theme.label("Log:"),
+                theme.path(paths.log_file.display())
+            );
+        }
+        WebProcessState::Stopped => {
+            println!("{} stopped", theme.warning("kanban web UI:"));
+            println!("{} {url}", theme.label("URL:"));
+        }
+        WebProcessState::Stale(pid) => {
+            match pid {
+                Some(pid) => println!("{} stale PID {pid}", theme.warning("kanban web UI:")),
+                None => println!("{} stale PID file", theme.warning("kanban web UI:")),
+            }
+            println!(
+                "{} {}",
+                theme.label("PID file:"),
+                theme.path(paths.pid_file.display())
+            );
+        }
+    }
+    Ok(())
+}
+
+fn print_log_tail(content: &str, lines: Option<usize>) {
+    match lines {
+        Some(0) => {}
+        Some(limit) => {
+            let selected = content.lines().rev().take(limit).collect::<Vec<_>>();
+            for line in selected.iter().rev() {
+                println!("{line}");
+            }
+        }
+        None => print!("{content}"),
+    }
+}
+
+fn print_web_log(
+    theme: &Theme,
+    repo_root: &Path,
+    lines: Option<usize>,
+    follow: bool,
+) -> Result<()> {
+    let config = load_kanban_config(repo_root)?;
+    let paths = web_runtime_paths(&config.repo_root);
+    if !paths.log_file.exists() {
+        println!(
+            "{} {}",
+            theme.warning("No web log found:"),
+            theme.path(paths.log_file.display())
+        );
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&paths.log_file)
+        .with_context(|| format!("read web log {}", paths.log_file.display()))?;
+    print_log_tail(&content, lines);
+    if !follow {
+        return Ok(());
+    }
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open(&paths.log_file)
+        .with_context(|| format!("open web log {}", paths.log_file.display()))?;
+    file.seek(SeekFrom::End(0))?;
+    loop {
+        let mut appended = String::new();
+        file.read_to_string(&mut appended)?;
+        if !appended.is_empty() {
+            print!("{appended}");
+            std::io::stdout().flush()?;
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
 }
 
 fn print_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOverview) {
@@ -2541,6 +3028,33 @@ fn main() -> Result<()> {
                 );
             }
         },
+        Command::Web { command } => match command {
+            WebCommand::Start {
+                foreground,
+                open,
+                dev,
+                build,
+                repo_root,
+            } => start_web(&theme, &repo_root, foreground, open, dev, build)?,
+            WebCommand::Stop { repo_root } => {
+                stop_web(&theme, &repo_root, false)?;
+            }
+            WebCommand::Restart {
+                open,
+                dev,
+                build,
+                repo_root,
+            } => {
+                stop_web(&theme, &repo_root, true)?;
+                start_web(&theme, &repo_root, false, open, dev, build)?;
+            }
+            WebCommand::Status { repo_root } => print_web_status(&theme, &repo_root)?,
+            WebCommand::Log {
+                lines,
+                follow,
+                repo_root,
+            } => print_web_log(&theme, &repo_root, lines, follow)?,
+        },
         Command::Completion { target } => {
             let mut command = Args::command();
             if let Some(generator) = target.generator() {
@@ -3156,5 +3670,128 @@ mod tests {
             }
             _ => panic!("unexpected command"),
         }
+    }
+
+    #[test]
+    fn web_start_command_parses_flags() {
+        let args = Args::try_parse_from(["kanban", "web", "start", "--dev", "--open", "/tmp/repo"])
+            .unwrap();
+
+        match args.command {
+            Command::Web {
+                command:
+                    WebCommand::Start {
+                        foreground,
+                        open,
+                        dev,
+                        build,
+                        repo_root,
+                    },
+            } => {
+                assert!(!foreground);
+                assert!(open);
+                assert!(dev);
+                assert!(!build);
+                assert_eq!(repo_root, PathBuf::from("/tmp/repo"));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn web_restart_command_parses_build_flag() {
+        let args = Args::try_parse_from(["kanban", "web", "restart", "--build"]).unwrap();
+
+        match args.command {
+            Command::Web {
+                command:
+                    WebCommand::Restart {
+                        open,
+                        dev,
+                        build,
+                        repo_root,
+                    },
+            } => {
+                assert!(!open);
+                assert!(!dev);
+                assert!(build);
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn web_log_command_parses_lines_and_follow() {
+        let args = Args::try_parse_from([
+            "kanban",
+            "web",
+            "log",
+            "--lines",
+            "50",
+            "--follow",
+            "/tmp/repo",
+        ])
+        .unwrap();
+
+        match args.command {
+            Command::Web {
+                command:
+                    WebCommand::Log {
+                        lines,
+                        follow,
+                        repo_root,
+                    },
+            } => {
+                assert_eq!(lines, Some(50));
+                assert!(follow);
+                assert_eq!(repo_root, PathBuf::from("/tmp/repo"));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn command_repo_root_uses_web_subcommand_repo_root() {
+        let repo_root = PathBuf::from("/tmp/kanban-repo");
+        let command = Command::Web {
+            command: WebCommand::Status {
+                repo_root: repo_root.clone(),
+            },
+        };
+
+        assert_eq!(command_repo_root(&command), Some(&repo_root));
+    }
+
+    #[test]
+    fn web_runtime_paths_live_under_kanban_run() {
+        let paths = web_runtime_paths(Path::new("/tmp/repo"));
+
+        assert_eq!(paths.run_dir, PathBuf::from("/tmp/repo/.kanban/run"));
+        assert_eq!(
+            paths.pid_file,
+            PathBuf::from("/tmp/repo/.kanban/run/web.pid")
+        );
+        assert_eq!(
+            paths.log_file,
+            PathBuf::from("/tmp/repo/.kanban/run/web.log")
+        );
+    }
+
+    #[test]
+    fn web_start_specs_select_production_or_dev_command() {
+        let repo_root = Path::new("/tmp/repo");
+
+        let production = build_web_start_command_spec(repo_root, false);
+        assert_eq!(production.program, "node");
+        assert_eq!(production.cwd, PathBuf::from("/tmp/repo"));
+        assert!(production.args[0].ends_with("tools/kanban-web/dist/server/index.js"));
+
+        let dev = build_web_start_command_spec(repo_root, true);
+        assert_eq!(dev.program, "npm");
+        assert_eq!(dev.cwd, PathBuf::from("/tmp/repo"));
+        assert_eq!(dev.args[0], "--prefix");
+        assert!(dev.args[1].ends_with("tools/kanban-web"));
+        assert_eq!(&dev.args[2..], ["run", "dev:server"]);
     }
 }
