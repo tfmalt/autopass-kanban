@@ -20,6 +20,7 @@ fn bash_completion_covers_current_command_tree() {
     assert!(stdout.contains("sprint"));
     assert!(stdout.contains("story"));
     assert!(stdout.contains("task"));
+    assert!(stdout.contains("web"));
 }
 
 #[test]
@@ -33,6 +34,45 @@ fn zsh_completion_covers_current_command_tree() {
     assert!(stdout.contains("sprint"));
     assert!(stdout.contains("story"));
     assert!(stdout.contains("task"));
+    assert!(stdout.contains("web"));
+}
+
+#[test]
+fn zsh_completion_includes_web_subcommands_and_flags() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("_kanban__subcmd__web_commands"));
+    assert!(stdout.contains("'start:Start the local kanban web UI."));
+    assert!(stdout.contains("'stop:Stop the local kanban web UI."));
+    assert!(stdout.contains("'restart:Restart the local kanban web UI."));
+    assert!(stdout.contains("'status:Show local kanban web UI process status."));
+    assert!(stdout.contains("'log:Print the local kanban web UI log."));
+    assert!(
+        stdout.contains("'--foreground[Run in the foreground instead of writing a PID file.]'")
+    );
+    assert!(
+        stdout
+            .contains("'--open[Open the configured web URL in the default browser after start.]'")
+    );
+    assert!(stdout.contains("'--dev[Run the web server through npm run dev\\:server.]'"));
+    assert!(
+        stdout.contains("'--build[Build tools/kanban-web before starting in production mode.]'")
+    );
+}
+
+#[test]
+fn zsh_completion_does_not_treat_web_log_lines_as_files() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("'--lines=[Only print the last N log lines.]:N:'"));
+    assert!(
+        !stdout.contains("'--lines=[Only print the last N log lines.]:N:_default'"),
+        "web log --lines should not fall back to file completion"
+    );
 }
 
 #[test]
@@ -315,6 +355,36 @@ fn bash_completion_includes_dynamic_config_completion() {
     assert!(stdout.contains("kanban__subcmd__config__subcmd__get"));
     assert!(stdout.contains("config_keys=\"paths.backlog paths.sprints theme.color_mode"));
     assert!(stdout.contains("color_modes=\"auto always never\""));
+}
+
+#[test]
+fn bash_completion_includes_web_subcommands_and_flags() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("kanban__subcmd__web)"));
+    assert!(stdout.contains("opts=\"-h --help start stop restart status log help\""));
+    assert!(stdout.contains("kanban__subcmd__web__subcmd__start)"));
+    assert!(stdout.contains("opts=\"-h --foreground --open --dev --build --help [REPO_ROOT]\""));
+    assert!(stdout.contains("kanban__subcmd__web__subcmd__restart)"));
+    assert!(stdout.contains("opts=\"-h --open --dev --build --help [REPO_ROOT]\""));
+    assert!(stdout.contains("kanban__subcmd__web__subcmd__log)"));
+    assert!(stdout.contains("opts=\"-f -h --lines --follow --help [REPO_ROOT]\""));
+}
+
+#[test]
+fn bash_completion_does_not_treat_web_log_lines_as_files() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("kanban__subcmd__web__subcmd__log"));
+    assert!(stdout.contains("--lines)\n                    COMPREPLY=()"));
+    assert!(
+        !stdout.contains("--lines)\n                    COMPREPLY=($(compgen -f \"${cur}\"))"),
+        "web log --lines should not use file completion"
+    );
 }
 
 #[test]

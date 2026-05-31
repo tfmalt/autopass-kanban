@@ -10,7 +10,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "UNLICENSED"
-version = "26.5.3118"
+version = "26.5.3119"
 
 [workspace.dependencies]
 anyhow = "1.0.100"

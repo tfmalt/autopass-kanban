@@ -2234,6 +2234,10 @@ fn enhance_zsh_completion(script: &str) -> String {
         .replace(
             "'--end=[End date. Defaults to the suggested next end date.]:YYYY-MM-DD:_default'",
             "'--end=[End date. Defaults to the suggested next end date.]:YYYY-MM-DD:'",
+        )
+        .replace(
+            "'--lines=[Only print the last N log lines.]:N:_default'",
+            "'--lines=[Only print the last N log lines.]:N:'",
         );
     format!("{enhanced}{ZSH_DYNAMIC_HELPERS}")
 }
@@ -2491,6 +2495,48 @@ fn inject_bash_sprint_create(script: &str) -> String {
     }
 }
 
+fn inject_bash_web_log(script: &str) -> String {
+    let old = r#"        kanban__subcmd__web__subcmd__log)
+            opts="-f -h --lines --follow --help [REPO_ROOT]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --lines)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0"#;
+    let new = r#"        kanban__subcmd__web__subcmd__log)
+            opts="-f -h --lines --follow --help [REPO_ROOT]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --lines)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0"#;
+    if script.contains(old) {
+        script.replacen(old, new, 1)
+    } else {
+        script.to_string()
+    }
+}
+
 /// Enhance the bash completion script with dynamic sprint name, story ID,
 /// and doctor fix target completions.
 fn enhance_bash_completion(script: &str) -> String {
@@ -2540,7 +2586,8 @@ fn enhance_bash_completion(script: &str) -> String {
     );
     let script = inject_bash_doctor_fix_target(&script);
     let script = inject_bash_config_get(&script);
-    inject_bash_config_set(&script)
+    let script = inject_bash_config_set(&script);
+    inject_bash_web_log(&script)
 }
 
 fn prompt(message: &str) -> Result<String> {
