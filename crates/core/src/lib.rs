@@ -947,7 +947,7 @@ pub fn move_story_to_status_with_assignee(
     };
 
     let target_folder_name = status_to_folder_name(&normalized_status)?;
-    let target_story_path = story
+    let target_status_dir = story
         .file_path
         .parent()
         .and_then(Path::parent)
@@ -957,8 +957,14 @@ pub fn move_story_to_status_with_assignee(
                 story.file_path.display()
             )
         })?
-        .join(target_folder_name)
-        .join(&story.file_name);
+        .join(target_folder_name);
+    fs::create_dir_all(&target_status_dir).with_context(|| {
+        format!(
+            "create sprint status folder {}",
+            target_status_dir.display()
+        )
+    })?;
+    let target_story_path = target_status_dir.join(&story.file_name);
     fs::rename(&story.file_path, &target_story_path).with_context(|| {
         format!(
             "move sprint story {} -> {}",
@@ -4132,6 +4138,44 @@ mod tests {
         assert!(backlog_story.contains("assignee: Test User <test@example.com>"));
         assert!(moved_story.contains("work_started: 20"));
         assert!(temp_root.path().join("doc/backlog/sprints/S001.foundation/02.in-progress/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.tasks.md").exists());
+    }
+
+    #[test]
+    fn move_story_to_status_creates_missing_target_status_folder() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let sprint_root = temp_root.path().join("doc/backlog/sprints/S001.foundation");
+        let progress_root = sprint_root.join("02.in-progress");
+        let backlog_dir = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+        let story_file = "US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md";
+
+        fs::create_dir_all(&progress_root).unwrap();
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            sprint_root.join("README.md"),
+            sprint_readme("S001", "foundation", "2099-06-01", "2099-06-12", "active"),
+        )
+        .unwrap();
+        fs::write(
+            backlog_dir.join(story_file),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        )
+        .unwrap();
+        fs::write(
+            progress_root.join(story_file),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        )
+        .unwrap();
+
+        let result = move_story_to_status(temp_root.path(), "US-F1-053", "ready-for-qa").unwrap();
+
+        let target_path = temp_root.path().join(result.story_path);
+        let moved_story = fs::read_to_string(&target_path).unwrap();
+        assert_eq!(result.to_status, "ready-for-qa");
+        assert!(target_path.ends_with("doc/backlog/sprints/S001.foundation/03.ready-for-qa/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"));
+        assert!(moved_story.contains("status: ready-for-qa"));
     }
 
     #[test]
