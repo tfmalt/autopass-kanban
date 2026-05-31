@@ -1580,29 +1580,30 @@ fn select_current_sprint(sprints: &[SprintOverview], today: NaiveDate) -> Result
         })
         .cloned()
         .collect::<Vec<_>>();
+    let active_readmes = sprints
+        .iter()
+        .filter(|sprint| sprint.readme_status.as_deref() == Some("active"))
+        .cloned()
+        .collect::<Vec<_>>();
 
     match current_sprints.as_slice() {
         [current] => Ok(current.clone()),
-        [] => {
-            let active_readmes = sprints
-                .iter()
-                .filter(|sprint| sprint.readme_status.as_deref() == Some("active"))
-                .map(|sprint| sprint.sprint_name.as_str())
-                .collect::<Vec<_>>();
-
-            if active_readmes.is_empty() {
-                Err(anyhow!(
-                    "No sprint folder date range includes {}.",
-                    today.format("%Y-%m-%d")
-                ))
-            } else {
-                Err(anyhow!(
-                    "No sprint folder date range includes {} even though README status is Active for {}. Run `kanban doctor` to inspect the mismatch.",
-                    today.format("%Y-%m-%d"),
-                    active_readmes.join(", ")
-                ))
-            }
-        }
+        [] => match active_readmes.as_slice() {
+            [current] => Ok(current.clone()),
+            [] => Err(anyhow!(
+                "No sprint folder date range includes {}.",
+                today.format("%Y-%m-%d")
+            )),
+            _ => Err(anyhow!(
+                "No sprint folder date range includes {} and multiple sprint READMEs are marked active: {}. Run `kanban doctor` to inspect the mismatch.",
+                today.format("%Y-%m-%d"),
+                active_readmes
+                    .iter()
+                    .map(|sprint| sprint.sprint_name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        },
         _ => Err(anyhow!(
             "Multiple sprint folders include {}: {}. Run `kanban doctor` to inspect the overlap.",
             today.format("%Y-%m-%d"),
@@ -2751,6 +2752,42 @@ mod tests {
             Some("Keep the team aligned on a visible sprint outcome.")
         );
         assert!(sprint.warnings.is_empty());
+    }
+
+    #[test]
+    fn summarize_current_sprint_prefers_single_active_readme_when_sprint_is_overdue() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let sprint_root = temp_root.path().join("doc/backlog/sprints/S001.foundation");
+        let sprint_todo = sprint_root.join("01.todo");
+        let backlog_dir = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+
+        fs::create_dir_all(&sprint_todo).unwrap();
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            sprint_root.join("README.md"),
+            sprint_readme("S001", "foundation", "2026-05-18", "2026-05-29", "active"),
+        )
+        .unwrap();
+        fs::write(
+            backlog_dir.join("US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md"),
+            "---\nid: US-F1-052\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add read-only CLI for sprint and backlog inspection\n",
+        ).unwrap();
+        fs::write(
+            sprint_todo.join("US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md"),
+            "---\nid: US-F1-052\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md\ntask_file: US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add read-only CLI for sprint and backlog inspection\n",
+        ).unwrap();
+
+        let sprint = summarize_current_sprint_at_date(
+            temp_root.path(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(sprint.sprint_name, "S001.foundation");
+        assert_eq!(sprint.readme_status.as_deref(), Some("active"));
     }
 
     #[test]

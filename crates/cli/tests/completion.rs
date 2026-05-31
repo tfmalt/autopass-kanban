@@ -257,13 +257,48 @@ fn bare_kanban_with_missing_config_prints_only_init_guidance() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
-    assert!(stdout.is_empty(), "stdout should be empty, got: {stdout}");
+    assert!(
+        stdout.starts_with(&format!("kanban {}", env!("CARGO_PKG_VERSION"))),
+        "stdout should start with the version line, got: {stdout}"
+    );
+    assert_eq!(
+        stdout.trim_end().lines().count(),
+        1,
+        "stdout should only contain the version line, got: {stdout}"
+    );
     assert!(
         stderr.starts_with("   "),
         "stderr should start with warning symbol, got: {stderr}"
     );
     assert!(stderr.contains("No `.kanban` configuration found"));
     assert!(stderr.contains("\n    Run `kanban init` to initialize this repository"));
+}
+
+#[test]
+fn bare_kanban_with_config_prints_version_before_help() {
+    let temp_root = tempdir().expect("temp repo should be created");
+    let repo_root = temp_root.path().display().to_string();
+
+    let init_output = kanban(&["init", &repo_root]);
+    assert!(init_output.status.success());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_kanban"))
+        .current_dir(temp_root.path())
+        .output()
+        .expect("kanban binary should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+
+    assert!(stderr.is_empty(), "stderr should be empty, got: {stderr}");
+    assert!(
+        stdout.starts_with(&format!("kanban {}\n", env!("CARGO_PKG_VERSION"))),
+        "stdout should start with version on the first line, got: {stdout}"
+    );
+    assert!(stdout.contains("Markdown-first kanban tooling"));
+    assert!(stdout.contains("Usage:"));
+    assert!(stdout.contains("kanban <COMMAND>"));
 }
 
 #[test]
