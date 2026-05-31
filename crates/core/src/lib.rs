@@ -646,6 +646,55 @@ pub fn summarize_phase(repo_root: impl AsRef<Path>, phase: &str) -> Result<Phase
     })
 }
 
+pub fn list_all_stories(repo_root: impl AsRef<Path>) -> Result<Vec<StoryOverview>> {
+    let repository = read_repository(repo_root)?;
+    Ok(unique_story_overviews(&repository))
+}
+
+pub fn list_current_sprint_stories(
+    repo_root: impl AsRef<Path>,
+) -> Result<(String, Vec<StoryOverview>)> {
+    let sprint = summarize_current_sprint(repo_root)?;
+    let sprint_name = sprint.sprint_name.clone();
+    Ok((sprint_name, flatten_sprint_stories(&sprint)))
+}
+
+pub fn list_next_sprint_stories(
+    repo_root: impl AsRef<Path>,
+) -> Result<(String, Vec<StoryOverview>)> {
+    let repository = read_repository(repo_root)?;
+    let sprints = summarize_sprints_from_repository(&repository)?;
+    let current = select_current_sprint(&sprints, Local::now().date_naive())?;
+    let current_number = parse_sprint_number(&current.sprint_name).ok_or_else(|| {
+        anyhow!(
+            "Current sprint name does not use the expected SNNN.headline format: {}",
+            current.sprint_name
+        )
+    })?;
+
+    let next = sprints
+        .into_iter()
+        .filter_map(|sprint| {
+            parse_sprint_number(&sprint.sprint_name)
+                .filter(|number| *number > current_number)
+                .map(|number| (number, sprint))
+        })
+        .min_by_key(|(number, _)| *number)
+        .map(|(_, sprint)| sprint)
+        .ok_or_else(|| anyhow!("No later sprint exists after {}.", current.sprint_name))?;
+
+    let sprint_name = next.sprint_name.clone();
+    Ok((sprint_name, flatten_sprint_stories(&next)))
+}
+
+pub fn list_stories_in_sprint(
+    repo_root: impl AsRef<Path>,
+    sprint_name: &str,
+) -> Result<Vec<StoryOverview>> {
+    let sprint = summarize_sprint(repo_root, sprint_name)?;
+    Ok(flatten_sprint_stories(&sprint))
+}
+
 pub fn suggested_next_sprint_number(repo_root: impl AsRef<Path>) -> Result<u32> {
     let config = load_kanban_config(repo_root)?;
     let specs = discover_sprint_folder_specs(&config)?;
@@ -1506,6 +1555,58 @@ fn summarize_sprints_from_repository(repository: &Repository) -> Result<Vec<Spri
         .collect::<Vec<_>>();
     sprints.sort_by(|left, right| left.sprint_name.cmp(&right.sprint_name));
     Ok(sprints)
+}
+
+fn unique_story_overviews(repository: &Repository) -> Vec<StoryOverview> {
+    let mut selected = BTreeMap::<String, &Story>::new();
+
+    for story in &repository.stories {
+        let Some(id) = story.frontmatter.get("id") else {
+            continue;
+        };
+        let normalized_id = id.trim().to_ascii_uppercase();
+        if normalized_id.is_empty() {
+            continue;
+        }
+
+        let replace_existing = selected
+            .get(&normalized_id)
+            .map(|existing| should_prefer_story(story, existing))
+            .unwrap_or(true);
+        if replace_existing {
+            selected.insert(normalized_id, story);
+        }
+    }
+
+    selected.into_values().map(story_overview).collect()
+}
+
+fn should_prefer_story(candidate: &Story, existing: &Story) -> bool {
+    match (&candidate.kind, &existing.kind) {
+        (StoryKind::Sprint, StoryKind::Backlog) => true,
+        (StoryKind::Backlog, StoryKind::Sprint) => false,
+        _ => candidate.relative_path < existing.relative_path,
+    }
+}
+
+fn flatten_sprint_stories(sprint: &SprintOverview) -> Vec<StoryOverview> {
+    let mut stories = Vec::new();
+    let mut seen_statuses = BTreeSet::new();
+
+    for status in SPRINT_STATUS_DISPLAY_ORDER {
+        seen_statuses.insert(status);
+        if let Some(items) = sprint.stories_by_status.get(status) {
+            stories.extend(items.iter().cloned());
+        }
+    }
+
+    for (status, items) in &sprint.stories_by_status {
+        if !seen_statuses.contains(status.as_str()) {
+            stories.extend(items.iter().cloned());
+        }
+    }
+
+    stories
 }
 
 fn sprint_overview_from_spec(
@@ -2829,6 +2930,103 @@ mod tests {
 
         assert_eq!(sprint.sprint_name, "S001.foundation");
         assert_eq!(sprint.readme_status.as_deref(), Some("active"));
+    }
+
+    #[test]
+    fn list_current_sprint_stories_returns_flattened_sprint_story_rows() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let sprint_root = temp_root.path().join("doc/backlog/sprints/S001.foundation");
+        let todo_root = sprint_root.join("01.todo");
+        let progress_root = sprint_root.join("02.in-progress");
+        let backlog_dir = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+
+        fs::create_dir_all(&todo_root).unwrap();
+        fs::create_dir_all(&progress_root).unwrap();
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            sprint_root.join("README.md"),
+            sprint_readme("S001", "foundation", "2026-05-18", "2026-05-29", "active"),
+        )
+        .unwrap();
+        fs::write(
+            backlog_dir.join("US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md"),
+            "---\nid: US-F1-052\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add read-only CLI for sprint and backlog inspection\n",
+        ).unwrap();
+        fs::write(
+            backlog_dir.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: Test User <test@example.com>\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+        fs::write(
+            todo_root.join("US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md"),
+            "---\nid: US-F1-052\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md\ntask_file: US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add read-only CLI for sprint and backlog inspection\n",
+        ).unwrap();
+        fs::write(
+            progress_root.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: Test User <test@example.com>\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md\ntask_file: US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+
+        let (sprint_name, stories) = list_current_sprint_stories(temp_root.path()).unwrap();
+
+        assert_eq!(sprint_name, "S001.foundation");
+        assert_eq!(stories.len(), 2);
+        assert_eq!(stories[0].id, "US-F1-052");
+        assert_eq!(stories[1].id, "US-F1-053");
+    }
+
+    #[test]
+    fn list_next_sprint_stories_uses_next_numbered_sprint_after_current() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let sprints_root = temp_root.path().join("doc/backlog/sprints");
+        let current_todo = sprints_root.join("S001.foundation/01.todo");
+        let next_todo = sprints_root.join("S002.delivery/01.todo");
+        let backlog_dir = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+
+        fs::create_dir_all(&current_todo).unwrap();
+        fs::create_dir_all(&next_todo).unwrap();
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            sprints_root.join("S001.foundation/README.md"),
+            sprint_readme("S001", "foundation", "2026-05-18", "2026-05-29", "active"),
+        )
+        .unwrap();
+        fs::write(
+            sprints_root.join("S002.delivery/README.md"),
+            sprint_readme("S002", "delivery", "2026-06-01", "2026-06-12", "planned"),
+        )
+        .unwrap();
+        fs::write(
+            backlog_dir.join("US-F1-054-add-cli-support-for-completing-tasks-from-the-terminal.md"),
+            "---\nid: US-F1-054\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S002.delivery\nassignee: TBD\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for completing tasks from the terminal\n",
+        ).unwrap();
+        fs::write(
+            next_todo.join("US-F1-054-add-cli-support-for-completing-tasks-from-the-terminal.md"),
+            "---\nid: US-F1-054\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S002.delivery\nassignee: TBD\nstory_points: 3\nwork_started:\nwork_done:\nsource_path: ../../../phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-054-add-cli-support-for-completing-tasks-from-the-terminal.md\ntask_file: US-F1-054-add-cli-support-for-completing-tasks-from-the-terminal.tasks.md\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add CLI support for completing tasks from the terminal\n",
+        ).unwrap();
+
+        let (sprint_name, stories) = list_next_sprint_stories(temp_root.path()).unwrap();
+
+        assert_eq!(sprint_name, "S002.delivery");
+        assert_eq!(stories.len(), 1);
+        assert_eq!(stories[0].id, "US-F1-054");
+    }
+
+    #[test]
+    fn list_all_stories_prefers_sprint_copy_when_backlog_and_sprint_versions_exist() {
+        let repo_root = repo_root();
+
+        let stories = list_all_stories(&repo_root).unwrap();
+        let story = stories
+            .into_iter()
+            .find(|story| story.id == "US-F1-010")
+            .unwrap();
+
+        assert_eq!(story.kind, StoryKind::Sprint);
     }
 
     #[test]

@@ -4,12 +4,13 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use chrono::NaiveDate;
 use clap::builder::styling::{AnsiColor, Effects, Style as ClapStyle, Styles};
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, CommandFactory, Parser, Subcommand, ValueEnum};
 use kanban_core::{
     ColorMode, CreateSprintInput, DoctorFinding, PhaseOverview, RolloverResult, SprintOverview,
     StoryDetails, StoryKind, StoryOverview, TaskSummary, add_task_to_story, create_sprint,
-    doctor_repository, find_story, get_config_json, get_config_value, init_config, list_epic_ids,
-    list_sprint_names, list_story_completion_items, list_story_ids,
+    doctor_repository, find_story, get_config_json, get_config_value, init_config,
+    list_all_stories, list_current_sprint_stories, list_epic_ids, list_next_sprint_stories,
+    list_sprint_names, list_stories_in_sprint, list_story_completion_items, list_story_ids,
     move_story_to_status_with_assignee, rollover_sprint, set_config_value,
     suggested_next_sprint_dates, suggested_next_sprint_number, suggested_sprint_dates,
     summarize_current_sprint, summarize_phase, summarize_sprint, summarize_sprints,
@@ -322,6 +323,34 @@ enum StoryCommand {
         repo_root: PathBuf,
     },
     #[command(
+        about = "List stories. Effect: read-only inspection of sprint folders and/or backlog stories. Side effects: none."
+    )]
+    #[command(group(
+        ArgGroup::new("scope")
+            .args(["current", "all", "next", "sprint"])
+            .multiple(false)
+    ))]
+    List {
+        #[arg(long, help = "List stories in the current or active sprint.")]
+        current: bool,
+        #[arg(long, help = "List all stories across backlog and sprint copies.")]
+        all: bool,
+        #[arg(
+            long,
+            help = "List stories in the next sprint after the current sprint."
+        )]
+        next: bool,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "List stories in the specified sprint folder, for example S001.foundation."
+        )]
+        sprint: Option<String>,
+        #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
         about = "Move a sprint story to another status. Effect: moves the story and task file between sprint status folders and updates frontmatter. Side effects: in-progress sets assignee/work_started; done refreshes work_done."
     )]
     Move {
@@ -577,9 +606,9 @@ fn command_repo_root(command: &Command) -> Option<&PathBuf> {
             PhaseCommand::Show { repo_root, .. } => Some(repo_root),
         },
         Command::Story { command } => match command {
-            StoryCommand::Show { repo_root, .. } | StoryCommand::Move { repo_root, .. } => {
-                Some(repo_root)
-            }
+            StoryCommand::Show { repo_root, .. }
+            | StoryCommand::List { repo_root, .. }
+            | StoryCommand::Move { repo_root, .. } => Some(repo_root),
         },
         Command::Task { command } => match command {
             TaskCommand::Add { repo_root, .. } | TaskCommand::Update { repo_root, .. } => {
@@ -1185,6 +1214,33 @@ fn print_phase_overview(theme: &Theme, phase: &PhaseOverview) {
             story.title
         );
     }
+}
+
+fn print_story_list(theme: &Theme, scope: &str, stories: &[StoryOverview]) {
+    print!("{}", render_story_list(theme, scope, stories));
+}
+
+fn render_story_list(theme: &Theme, scope: &str, stories: &[StoryOverview]) -> String {
+    let mut output = String::new();
+    output.push_str(&format!(
+        "{} {}\n",
+        theme.label("Stories:"),
+        theme.count(stories.len())
+    ));
+    output.push_str(&format!("{} {scope}\n", theme.label("Scope:")));
+    for story in stories {
+        let sprint = story.sprint.as_deref().unwrap_or("~");
+        output.push_str(&format!(
+            "- {} [{}] sprint={} assignee={} points={} {}\n",
+            theme.id(&story.id),
+            theme.status(&story.status),
+            sprint,
+            story.assignee,
+            theme.count(&story.story_points),
+            story.title
+        ));
+    }
+    output
 }
 
 fn print_story_details(theme: &Theme, details: &StoryDetails) {
@@ -1823,6 +1879,34 @@ fn main() -> Result<()> {
                 Some(details) => print_story_details(&theme, &details),
                 None => println!("{} {id}", theme.warning("Story not found:")),
             },
+            StoryCommand::List {
+                current,
+                all,
+                next,
+                sprint,
+                repo_root,
+            } => {
+                let (scope, stories) = if all {
+                    ("all stories".to_string(), list_all_stories(repo_root)?)
+                } else if next {
+                    let (sprint_name, stories) = list_next_sprint_stories(repo_root)?;
+                    (format!("next sprint ({sprint_name})"), stories)
+                } else if let Some(sprint_name) = sprint {
+                    (
+                        format!("sprint {sprint_name}"),
+                        list_stories_in_sprint(repo_root, &sprint_name)?,
+                    )
+                } else {
+                    let (sprint_name, stories) = list_current_sprint_stories(repo_root)?;
+                    let label = if current {
+                        format!("current sprint ({sprint_name})")
+                    } else {
+                        format!("active sprint ({sprint_name})")
+                    };
+                    (label, stories)
+                };
+                print_story_list(&theme, &scope, &stories);
+            }
             StoryCommand::Move {
                 id,
                 status,
@@ -2312,5 +2396,46 @@ mod tests {
             output.contains("              modified."),
             "expected final wrapped line to remain aligned"
         );
+    }
+
+    #[test]
+    fn print_story_list_renders_scope_and_story_rows() {
+        let theme = Theme::plain();
+        let stories = vec![StoryOverview {
+            id: "US-F1-010".to_string(),
+            title: "CI pipeline with build and unit tests".to_string(),
+            status: "in-progress".to_string(),
+            assignee: "Ada Lovelace <ada@example.test>".to_string(),
+            story_points: "3".to_string(),
+            sprint: Some("S000.getting-started".to_string()),
+            kind: StoryKind::Sprint,
+            relative_path: PathBuf::from(
+                "doc/backlog/sprints/S000.getting-started/02.in-progress/US-F1-010.md",
+            ),
+            task_summary: None,
+            task_count: 0,
+        }];
+
+        let output = render_story_list(&theme, "active sprint (S000.getting-started)", &stories);
+
+        assert!(output.contains("Stories: 1"));
+        assert!(output.contains("Scope: active sprint (S000.getting-started)"));
+        assert!(output.contains("US-F1-010 [in-progress] sprint=S000.getting-started"));
+    }
+
+    #[test]
+    fn story_list_command_reuses_story_repo_root() {
+        let repo_root = PathBuf::from("/tmp/kanban-repo");
+        let command = Command::Story {
+            command: StoryCommand::List {
+                current: false,
+                all: false,
+                next: false,
+                sprint: None,
+                repo_root: repo_root.clone(),
+            },
+        };
+
+        assert_eq!(command_repo_root(&command), Some(&repo_root));
     }
 }
