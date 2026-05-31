@@ -280,9 +280,19 @@ enum SprintCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Create a sprint folder. Effect: writes a sprint README and status folders under the configured sprint path from `.kanban/paths.json`. Side effects: prompts for sprint metadata."
+        about = "Create a sprint folder. Effect: writes a sprint README and status folders under the configured sprint path from `.kanban/paths.json`. Side effects: prompts for metadata unless --non-interactive or all of --number/--headline/--start/--end are supplied."
     )]
     Create {
+        #[arg(long, value_name = "N", help = "Sprint number. Defaults to the next suggested number.")]
+        number: Option<u32>,
+        #[arg(long, value_name = "SLUG", help = "Sprint headline slug. Required in non-interactive mode.")]
+        headline: Option<String>,
+        #[arg(long, value_name = "YYYY-MM-DD", help = "Start date. Defaults to the suggested next start date.")]
+        start: Option<String>,
+        #[arg(long, value_name = "YYYY-MM-DD", help = "End date. Defaults to the suggested next end date.")]
+        end: Option<String>,
+        #[arg(long, help = "Do not prompt; build the sprint from flags and suggested defaults.")]
+        non_interactive: bool,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
         #[arg(default_value = ".")]
         repo_root: PathBuf,
@@ -625,7 +635,7 @@ fn command_repo_root(command: &Command) -> Option<&PathBuf> {
             SprintCommand::Current { repo_root }
             | SprintCommand::List { repo_root }
             | SprintCommand::Show { repo_root, .. }
-            | SprintCommand::Create { repo_root }
+            | SprintCommand::Create { repo_root, .. }
             | SprintCommand::Rollover { repo_root, .. } => Some(repo_root),
         },
         Command::Phase { command } => match command {
@@ -1952,12 +1962,23 @@ fn prompt_date(label: &str, default: NaiveDate) -> Result<NaiveDate> {
     }
 }
 
+fn suggested_sprint_defaults(repo_root: &PathBuf) -> Result<(u32, Option<(NaiveDate, NaiveDate)>)> {
+    let config = kanban_core::load_kanban_config(repo_root)?;
+    if !config.sprints_path().is_dir() {
+        return Ok((0, None));
+    }
+    Ok((
+        suggested_next_sprint_number(repo_root)?,
+        suggested_next_sprint_dates(repo_root)?,
+    ))
+}
+
 fn prompt_create_sprint(
     repo_root: &PathBuf,
     suggested_start: Option<NaiveDate>,
     suggested_end: Option<NaiveDate>,
 ) -> Result<CreateSprintInput> {
-    let suggested_number = suggested_next_sprint_number(repo_root)?;
+    let (suggested_number, repo_suggestion) = suggested_sprint_defaults(repo_root)?;
     let number = loop {
         let value = prompt_with_default("Sprint number", &format!("{suggested_number}"))?;
         match value.parse::<u32>() {
@@ -1966,7 +1987,6 @@ fn prompt_create_sprint(
         }
     };
     let today = chrono::Local::now().date_naive();
-    let repo_suggestion = suggested_next_sprint_dates(repo_root)?;
     let default_start = suggested_start
         .or_else(|| repo_suggestion.map(|(start_date, _)| start_date))
         .unwrap_or(today);
@@ -2161,8 +2181,48 @@ fn main() -> Result<()> {
                 let sprint = summarize_sprint(repo_root, &name)?;
                 print_sprint_overview(&theme, OutputLayout::for_stdout()?, &sprint);
             }
-            SprintCommand::Create { repo_root } => {
-                let input = prompt_create_sprint(&repo_root, None, None)?;
+            SprintCommand::Create {
+                number,
+                headline,
+                start,
+                end,
+                non_interactive,
+                repo_root,
+            } => {
+                let any_flag = number.is_some() || headline.is_some() || start.is_some() || end.is_some();
+                let input = if non_interactive || any_flag {
+                    let headline = headline.ok_or_else(|| {
+                        anyhow::anyhow!("--headline is required when creating a sprint non-interactively.")
+                    })?;
+                    let number = match number {
+                        Some(value) => value,
+                        None => suggested_sprint_defaults(&repo_root)?.0,
+                    };
+                    let repo_suggestion = suggested_sprint_defaults(&repo_root)?.1;
+                    let today = chrono::Local::now().date_naive();
+                    let start_date = match start {
+                        Some(value) => NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
+                            .map_err(|_| anyhow::anyhow!("--start must be a date as YYYY-MM-DD."))?,
+                        None => repo_suggestion
+                            .map(|(start_date, _)| start_date)
+                            .unwrap_or(today),
+                    };
+                    let end_date = match end {
+                        Some(value) => NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
+                            .map_err(|_| anyhow::anyhow!("--end must be a date as YYYY-MM-DD."))?,
+                        None => repo_suggestion
+                            .map(|(_, end_date)| end_date)
+                            .unwrap_or_else(|| suggested_sprint_dates(start_date).1),
+                    };
+                    CreateSprintInput {
+                        number,
+                        start_date,
+                        end_date,
+                        headline,
+                    }
+                } else {
+                    prompt_create_sprint(&repo_root, None, None)?
+                };
                 let result = create_sprint(repo_root, &input)?;
                 println!(
                     "{} {}",
