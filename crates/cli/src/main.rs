@@ -8,9 +8,8 @@ use clap::{ArgGroup, CommandFactory, Parser, Subcommand, ValueEnum};
 use kanban_core::{
     ColorMode, CreateSprintInput, DoctorFinding, DoctorFixInput, DoctorFixKind, DoctorIssue,
     DoctorPrompt, PhaseOverview, RolloverResult, SprintOverview, StoryDetails, StoryKind,
-    StoryOverview, TaskSummary, add_task_to_story,
-    apply_doctor_fix, collect_doctor_issues, collect_doctor_issues_for_current_sprint,
-    collect_doctor_issues_for_story, create_sprint,
+    StoryOverview, TaskSummary, add_task_to_story, apply_doctor_fix, collect_doctor_issues,
+    collect_doctor_issues_for_current_sprint, collect_doctor_issues_for_story, create_sprint,
     doctor_repository, find_story, get_config_json, get_config_value, init_config,
     list_all_stories, list_current_sprint_stories, list_epic_ids, list_next_sprint_stories,
     list_sprint_names, list_stories_in_sprint, list_story_completion_items, list_story_ids,
@@ -283,15 +282,34 @@ enum SprintCommand {
         about = "Create a sprint folder. Effect: writes a sprint README and status folders under the configured sprint path from `.kanban/paths.json`. Side effects: prompts for metadata unless --non-interactive or all of --number/--headline/--start/--end are supplied."
     )]
     Create {
-        #[arg(long, value_name = "N", help = "Sprint number. Defaults to the next suggested number.")]
+        #[arg(
+            long,
+            value_name = "N",
+            help = "Sprint number. Defaults to the next suggested number."
+        )]
         number: Option<u32>,
-        #[arg(long, value_name = "SLUG", help = "Sprint headline slug. Required in non-interactive mode.")]
+        #[arg(
+            long,
+            value_name = "SLUG",
+            help = "Sprint headline slug. Required in non-interactive mode."
+        )]
         headline: Option<String>,
-        #[arg(long, value_name = "YYYY-MM-DD", help = "Start date. Defaults to the suggested next start date.")]
+        #[arg(
+            long,
+            value_name = "YYYY-MM-DD",
+            help = "Start date. Defaults to the suggested next start date."
+        )]
         start: Option<String>,
-        #[arg(long, value_name = "YYYY-MM-DD", help = "End date. Defaults to the suggested next end date.")]
+        #[arg(
+            long,
+            value_name = "YYYY-MM-DD",
+            help = "End date. Defaults to the suggested next end date."
+        )]
         end: Option<String>,
-        #[arg(long, help = "Do not prompt; build the sprint from flags and suggested defaults.")]
+        #[arg(
+            long,
+            help = "Do not prompt; build the sprint from flags and suggested defaults."
+        )]
         non_interactive: bool,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
         #[arg(default_value = ".")]
@@ -2206,10 +2224,13 @@ fn main() -> Result<()> {
                 non_interactive,
                 repo_root,
             } => {
-                let any_flag = number.is_some() || headline.is_some() || start.is_some() || end.is_some();
+                let any_flag =
+                    number.is_some() || headline.is_some() || start.is_some() || end.is_some();
                 let input = if non_interactive || any_flag {
                     let headline = headline.ok_or_else(|| {
-                        anyhow::anyhow!("--headline is required when creating a sprint non-interactively.")
+                        anyhow::anyhow!(
+                            "--headline is required when creating a sprint non-interactively."
+                        )
                     })?;
                     let number = match number {
                         Some(value) => value,
@@ -2219,7 +2240,9 @@ fn main() -> Result<()> {
                     let today = chrono::Local::now().date_naive();
                     let start_date = match start {
                         Some(value) => NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
-                            .map_err(|_| anyhow::anyhow!("--start must be a date as YYYY-MM-DD."))?,
+                            .map_err(|_| {
+                                anyhow::anyhow!("--start must be a date as YYYY-MM-DD.")
+                            })?,
                         None => repo_suggestion
                             .map(|(start_date, _)| start_date)
                             .unwrap_or(today),
@@ -2368,7 +2391,11 @@ fn main() -> Result<()> {
                     theme.path(result.story_path.display())
                 );
                 if let Some(task_path) = result.task_path {
-                    println!("{} {}", theme.label("Tasks:"), theme.path(task_path.display()));
+                    println!(
+                        "{} {}",
+                        theme.label("Tasks:"),
+                        theme.path(task_path.display())
+                    );
                 }
             }
         },

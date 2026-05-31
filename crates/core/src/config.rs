@@ -594,7 +594,10 @@ mod tests {
 
         let config = load_kanban_config(temp_root.path()).unwrap();
         assert_eq!(config.web.port, 4000);
-        assert_eq!(get_config_value(temp_root.path(), "web.port").unwrap(), "4000");
+        assert_eq!(
+            get_config_value(temp_root.path(), "web.port").unwrap(),
+            "4000"
+        );
     }
 
     #[test]

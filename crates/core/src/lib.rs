@@ -4342,7 +4342,10 @@ mod tests {
         assert!(!backlog_story.exists());
 
         let story = read_story_file(&moved, temp_root.path()).unwrap();
-        assert_eq!(story.frontmatter.get("status").map(String::as_str), Some("todo"));
+        assert_eq!(
+            story.frontmatter.get("status").map(String::as_str),
+            Some("todo")
+        );
         assert_eq!(
             story.frontmatter.get("sprint").map(String::as_str),
             Some("S001.planning")
