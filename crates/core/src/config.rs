@@ -259,6 +259,9 @@ pub fn get_config_value(repo_root: impl AsRef<Path>, key: &str) -> Result<String
             ColorMode::Always => "always".to_string(),
             ColorMode::Never => "never".to_string(),
         }),
+        "web.port" => Ok(config.web.port.to_string()),
+        "web.host" => Ok(config.web.host),
+        "web.style" => Ok(config.web.style),
         "story_points.allowed_values" => {
             serde_json::to_string_pretty(&config.story_points.allowed_values)
                 .context("serialize story point values")
@@ -300,6 +303,7 @@ pub fn set_config_value(
     let mut theme = read_json_or_default::<ThemeConfig>(&config_dir.join(THEME_FILE_NAME))?;
     let mut story_points =
         read_json_or_default::<StoryPointsConfig>(&config_dir.join(STORY_POINTS_FILE_NAME))?;
+    let mut web = read_json_or_default::<WebConfig>(&config_dir.join(WEB_FILE_NAME))?;
 
     let file_path = match key {
         "paths.backlog" => {
@@ -318,6 +322,30 @@ pub fn set_config_value(
             theme.color_mode = parse_color_mode(trimmed_value)?;
             write_json(&config_dir.join(THEME_FILE_NAME), &theme)?;
             config_dir.join(THEME_FILE_NAME)
+        }
+        "web.port" => {
+            let port: u16 = trimmed_value
+                .parse()
+                .map_err(|_| anyhow!("web.port must be a number between 1 and 65535."))?;
+            if port == 0 {
+                bail!("web.port must be a number between 1 and 65535.");
+            }
+            web.port = port;
+            write_json(&config_dir.join(WEB_FILE_NAME), &web)?;
+            config_dir.join(WEB_FILE_NAME)
+        }
+        "web.host" => {
+            web.host = trimmed_value.to_string();
+            write_json(&config_dir.join(WEB_FILE_NAME), &web)?;
+            config_dir.join(WEB_FILE_NAME)
+        }
+        "web.style" => {
+            if !WEB_STYLES.contains(&trimmed_value) {
+                bail!("web.style must be one of: {}.", WEB_STYLES.join(", "));
+            }
+            web.style = trimmed_value.to_string();
+            write_json(&config_dir.join(WEB_FILE_NAME), &web)?;
+            config_dir.join(WEB_FILE_NAME)
         }
         "story_points.allowed_values" => {
             story_points.allowed_values = trimmed_value
@@ -500,7 +528,7 @@ fn relative_path(repo_root: &Path, path: &Path) -> PathBuf {
 
 fn unsupported_key<T>(key: &str) -> Result<T> {
     bail!(
-        "Unsupported config key `{key}`. Supported keys: paths.backlog, paths.sprints, theme.color_mode, story_points.allowed_values, story_points.aliases.<NAME>."
+        "Unsupported config key `{key}`. Supported keys: paths.backlog, paths.sprints, theme.color_mode, story_points.allowed_values, story_points.aliases.<NAME>, web.port, web.host, web.style."
     )
 }
 
@@ -554,5 +582,36 @@ mod tests {
         assert_eq!(config.web.port, 3000);
         assert_eq!(config.web.host, "127.0.0.1");
         assert_eq!(config.web.style, "calm-light");
+    }
+
+    #[test]
+    fn set_and_get_web_port_round_trips() {
+        let temp_root = tempdir().unwrap();
+        init_config(temp_root.path()).unwrap();
+
+        let result = set_config_value(temp_root.path(), "web.port", "4000").unwrap();
+        assert_eq!(result.file_path, PathBuf::from(".kanban/web.json"));
+
+        let config = load_kanban_config(temp_root.path()).unwrap();
+        assert_eq!(config.web.port, 4000);
+        assert_eq!(get_config_value(temp_root.path(), "web.port").unwrap(), "4000");
+    }
+
+    #[test]
+    fn set_web_port_rejects_non_numeric() {
+        let temp_root = tempdir().unwrap();
+        init_config(temp_root.path()).unwrap();
+
+        let err = set_config_value(temp_root.path(), "web.port", "abc").unwrap_err();
+        assert!(err.to_string().contains("web.port"));
+    }
+
+    #[test]
+    fn set_web_style_rejects_unknown_value() {
+        let temp_root = tempdir().unwrap();
+        init_config(temp_root.path()).unwrap();
+
+        let err = set_config_value(temp_root.path(), "web.style", "neon").unwrap_err();
+        assert!(err.to_string().contains("web.style"));
     }
 }
