@@ -839,7 +839,7 @@ fn push_story_table(output: &mut String, theme: &Theme, width: usize, stories: &
         .iter()
         .map(|story| {
             vec![
-                TableCell::styled(&story.id, CellStyle::Id),
+                TableCell::styled(format_story_status_label(story), CellStyle::Id),
                 TableCell::new(&story.title),
                 TableCell::new(extract_assignee_name(&story.assignee)),
                 TableCell::styled(
@@ -880,10 +880,10 @@ fn story_table_columns(width: usize, stories: &[StoryOverview]) -> Vec<(&'static
     let available = row_content_width(width, 4);
     let id_width = stories
         .iter()
-        .map(|story| display_width(&story.id))
+        .map(|story| display_width(&format_story_status_label(story)))
         .max()
         .unwrap_or(5)
-        .clamp(5, 12);
+        .clamp(5, 18);
     let task_width = stories
         .iter()
         .map(|story| display_width(&format_compact_task_summary(story.task_summary.as_ref())))
@@ -1069,6 +1069,21 @@ fn status_icon(status: &str) -> &'static str {
     }
 }
 
+fn parse_story_points(story_points: &str) -> usize {
+    story_points.trim().parse().unwrap_or(0)
+}
+
+fn sum_story_points<'a>(stories: impl IntoIterator<Item = &'a StoryOverview>) -> usize {
+    stories
+        .into_iter()
+        .map(|story| parse_story_points(&story.story_points))
+        .sum()
+}
+
+fn format_story_status_label(story: &StoryOverview) -> String {
+    format!("{} ({}pt)", story.id, story.story_points)
+}
+
 fn sprint_status_label(end_date: &str, readme_status: Option<&str>) -> &'static str {
     if readme_status
         .map(|s| matches!(s, "completed" | "closed" | "done"))
@@ -1149,11 +1164,20 @@ fn push_sprint_header_band(
     );
 
     // Counts per status
-    let total: usize = sprint.stories_by_status.values().map(|v| v.len()).sum();
+    let total_points: usize = sprint
+        .stories_by_status
+        .values()
+        .map(|stories| sum_story_points(stories.iter()))
+        .sum();
     let done = sprint
         .stories_by_status
         .get("done")
         .map(|v| v.len())
+        .unwrap_or(0);
+    let done_points = sprint
+        .stories_by_status
+        .get("done")
+        .map(|stories| sum_story_points(stories.iter()))
         .unwrap_or(0);
     let in_progress = sprint
         .stories_by_status
@@ -1177,8 +1201,12 @@ fn push_sprint_header_band(
         .unwrap_or(0);
 
     // Progress line
-    let bar = render_progress_bar(theme, done, total, layout.width);
-    let pct = if total == 0 { 0 } else { done * 100 / total };
+    let bar = render_progress_bar(theme, done_points, total_points, layout.width);
+    let pct = if total_points == 0 {
+        0
+    } else {
+        done_points * 100 / total_points
+    };
     push_line(
         output,
         &format!(
@@ -1186,8 +1214,8 @@ fn push_sprint_header_band(
             sprint.start_date,
             sprint.end_date,
             bar,
-            theme.count(done),
-            theme.count(total),
+            theme.count(done_points),
+            theme.count(total_points),
             theme.paint(Style::Muted, format!("{pct}%")),
         ),
     );
@@ -1525,7 +1553,8 @@ fn format_task_summary(summary: &TaskSummary) -> String {
 }
 
 /// ZSH helper functions appended after the clap_complete-generated script.
-/// These provide dynamic completion for config keys/values, sprint names, story IDs, and epic IDs.
+/// These provide dynamic completion for config keys/values, sprint names, story IDs,
+/// doctor fix targets, and epic IDs.
 const ZSH_DYNAMIC_HELPERS: &str = r#"
 _kanban_config_keys() {
     local -a keys
@@ -1578,6 +1607,22 @@ _kanban_story_ids() {
     done < <(kanban list-ids stories-with-titles 2>/dev/null)
     compadd -d descriptions -a ids
 }
+_kanban_doctor_fix_targets() {
+    local -a ids descriptions
+    local id title
+    ids=( current )
+    descriptions=( "current -- current active sprint" )
+    while IFS=$'\t' read -r id title; do
+        [[ -z "$id" ]] && continue
+        ids+=( "$id" )
+        if [[ -n "$title" ]]; then
+            descriptions+=( "$id -- $title" )
+        else
+            descriptions+=( "$id" )
+        fi
+    done < <(kanban list-ids stories-with-titles 2>/dev/null)
+    compadd -d descriptions -a ids
+}
 _kanban_epic_ids() {
     local -a ids
     local id
@@ -1589,7 +1634,7 @@ _kanban_epic_ids() {
 "#;
 
 /// Enhance the zsh completion script by replacing `_default` completions for
-/// sprint name and story ID arguments with dynamic lookup helpers.
+/// sprint name, story ID, and doctor fix target arguments with dynamic lookup helpers.
 fn enhance_zsh_completion(script: &str) -> String {
     let enhanced = script
         // Sprint name arguments
@@ -1616,6 +1661,10 @@ fn enhance_zsh_completion(script: &str) -> String {
             "':story_id -- Parent story id for the task, for example US-F1-053.:_kanban_story_ids'",
         )
         .replace(
+            "'::target -- Optional scope\\: a story id like US-F1-053 or the literal `current`.:_default'",
+            "'::target -- Optional scope\\: a story id like US-F1-053 or the literal `current`.:_kanban_doctor_fix_targets'",
+        )
+        .replace(
             "':key -- Configuration key, for example paths.backlog or theme.color_mode.:_default'",
             "':key -- Configuration key, for example paths.backlog or theme.color_mode.:_kanban_config_keys'",
         )
@@ -1637,6 +1686,44 @@ fn inject_bash_dynamic(script: &str, label: &str, opts: &str, kind: &str, pos: u
     );
     if script.contains(&old) {
         script.replacen(&old, &new, 1)
+    } else {
+        script.to_string()
+    }
+}
+
+fn inject_bash_doctor_fix_target(script: &str) -> String {
+    let old = r#"        kanban__subcmd__doctor__subcmd__fix)
+            opts="-h --help [TARGET] [REPO_ROOT]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0"#;
+    let new = r#"        kanban__subcmd__doctor__subcmd__fix)
+            opts="-h --help [TARGET] [REPO_ROOT]"
+            if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
+                COMPREPLY=( $(compgen -W "current $(kanban list-ids stories 2>/dev/null)" -- "${cur}") )
+                return 0
+            fi
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0"#;
+    if script.contains(old) {
+        script.replacen(old, new, 1)
     } else {
         script.to_string()
     }
@@ -1733,7 +1820,8 @@ fn inject_bash_config_set(script: &str) -> String {
     }
 }
 
-/// Enhance the bash completion script with dynamic sprint name and story ID completions.
+/// Enhance the bash completion script with dynamic sprint name, story ID,
+/// and doctor fix target completions.
 fn enhance_bash_completion(script: &str) -> String {
     let script = inject_bash_dynamic(
         script,
@@ -1777,6 +1865,7 @@ fn enhance_bash_completion(script: &str) -> String {
         "stories",
         3,
     );
+    let script = inject_bash_doctor_fix_target(&script);
     let script = inject_bash_config_get(&script);
     inject_bash_config_set(&script)
 }
@@ -2384,6 +2473,65 @@ mod tests {
     }
 
     #[test]
+    fn sprint_progress_uses_story_points() {
+        let theme = Theme::plain();
+        let mut stories_by_status = BTreeMap::new();
+        stories_by_status.insert(
+            "done".to_string(),
+            vec![StoryOverview {
+                id: "US-F1-001".to_string(),
+                title: "Completed high-value story".to_string(),
+                status: "done".to_string(),
+                assignee: "TBD".to_string(),
+                story_points: "8".to_string(),
+                sprint: Some("S001.test".to_string()),
+                kind: StoryKind::Sprint,
+                relative_path: PathBuf::from("04.done/US-F1-001.md"),
+                task_summary: None,
+                task_count: 0,
+            }],
+        );
+        stories_by_status.insert(
+            "todo".to_string(),
+            vec![StoryOverview {
+                id: "US-F1-002".to_string(),
+                title: "Remaining smaller story".to_string(),
+                status: "todo".to_string(),
+                assignee: "TBD".to_string(),
+                story_points: "2".to_string(),
+                sprint: Some("S001.test".to_string()),
+                kind: StoryKind::Sprint,
+                relative_path: PathBuf::from("01.todo/US-F1-002.md"),
+                task_summary: None,
+                task_count: 0,
+            }],
+        );
+        let sprint = SprintOverview {
+            sprint_name: "S001.test".to_string(),
+            headline: "test".to_string(),
+            sprint_goal: None,
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("README.md"),
+            readme_status: None,
+            stories_by_status,
+            blocked_work: vec![],
+            warnings: vec![],
+        };
+
+        let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
+
+        assert!(
+            output.contains("8 / 10"),
+            "progress line should use story points: {output}"
+        );
+        assert!(
+            output.contains("80%"),
+            "progress percentage should use story points: {output}"
+        );
+    }
+
+    #[test]
     fn assignee_strips_email() {
         assert_eq!(
             extract_assignee_name("Geir Ivar Jerstad <g@v.no>"),
@@ -2415,6 +2563,46 @@ mod tests {
         assert!(plain.contains("✗0"), "blocked symbol missing: {plain}");
         assert!(!plain.contains("T:"), "old T: format present: {plain}");
         assert!(!plain.contains("IP:"), "old IP: format present: {plain}");
+    }
+
+    #[test]
+    fn story_status_rows_include_story_points() {
+        let theme = Theme::plain();
+        let mut stories_by_status = BTreeMap::new();
+        stories_by_status.insert(
+            "in-progress".to_string(),
+            vec![StoryOverview {
+                id: "US-F1-002".to_string(),
+                title: "A story in progress".to_string(),
+                status: "in-progress".to_string(),
+                assignee: "Someone <s@example.com>".to_string(),
+                story_points: "3".to_string(),
+                sprint: Some("S001.test".to_string()),
+                kind: StoryKind::Sprint,
+                relative_path: PathBuf::from("02.in-progress/US-F1-002.md"),
+                task_summary: None,
+                task_count: 0,
+            }],
+        );
+        let sprint = SprintOverview {
+            sprint_name: "S001.test".to_string(),
+            headline: "test".to_string(),
+            sprint_goal: None,
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("README.md"),
+            readme_status: None,
+            stories_by_status,
+            blocked_work: vec![],
+            warnings: vec![],
+        };
+
+        let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
+
+        assert!(
+            output.contains("US-F1-002 (3pt)"),
+            "story row should include story points: {output}"
+        );
     }
 
     #[test]
