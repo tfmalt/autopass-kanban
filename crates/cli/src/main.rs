@@ -6,8 +6,10 @@ use chrono::NaiveDate;
 use clap::builder::styling::{AnsiColor, Effects, Style as ClapStyle, Styles};
 use clap::{ArgGroup, CommandFactory, Parser, Subcommand, ValueEnum};
 use kanban_core::{
-    ColorMode, CreateSprintInput, DoctorFinding, PhaseOverview, RolloverResult, SprintOverview,
-    StoryDetails, StoryKind, StoryOverview, TaskSummary, add_task_to_story, create_sprint,
+    ColorMode, CreateSprintInput, DoctorFinding, DoctorFixInput, DoctorFixKind, DoctorIssue,
+    DoctorPrompt, PhaseOverview, RolloverResult, SprintOverview, StoryDetails, StoryKind,
+    StoryOverview, TaskSummary, add_task_to_story, apply_doctor_fix, collect_doctor_issues,
+    collect_doctor_issues_for_current_sprint, collect_doctor_issues_for_story, create_sprint,
     doctor_repository, find_story, get_config_json, get_config_value, init_config,
     list_all_stories, list_current_sprint_stories, list_epic_ids, list_next_sprint_stories,
     list_sprint_names, list_stories_in_sprint, list_story_completion_items, list_story_ids,
@@ -501,6 +503,28 @@ enum ConfigCommand {
 }
 
 #[derive(Subcommand)]
+enum DoctorCommand {
+    #[command(
+        about = "Diagnose repository workflow issues. Effect: read-only inspection with actionable findings. Side effects: none."
+    )]
+    Show {
+        #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        about = "Guide fixes for doctor findings. Effect: rewrites affected markdown files one issue at a time. Side effects: prompts before each fix."
+    )]
+    Fix {
+        #[arg(help = "Optional scope: a story id like US-F1-053 or the literal `current`.")]
+        target: Option<String>,
+        #[arg(help = "Repository root to update. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 enum Command {
     #[command(
         about = "Initialize `.kanban` in the repository root. Effect: creates default JSON config files in `.kanban/`. Side effects: no backlog files are modified."
@@ -564,12 +588,11 @@ enum Command {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Diagnose repository workflow issues. Effect: read-only inspection with actionable findings. Side effects: none."
+        about = "Diagnose and optionally fix repository workflow issues. Effects depend on subcommand; `show` is read-only while `fix` rewrites only the affected markdown files."
     )]
     Doctor {
-        #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
-        repo_root: PathBuf,
+        #[command(subcommand)]
+        command: DoctorCommand,
     },
     #[command(
         hide = true,
@@ -588,7 +611,6 @@ fn command_repo_root(command: &Command) -> Option<&PathBuf> {
     match command {
         Command::Init { repo_root }
         | Command::Validate { repo_root }
-        | Command::Doctor { repo_root }
         | Command::ListIds { repo_root, .. } => Some(repo_root),
         Command::Config { command } => match command {
             ConfigCommand::Show { repo_root }
@@ -612,6 +634,11 @@ fn command_repo_root(command: &Command) -> Option<&PathBuf> {
         },
         Command::Task { command } => match command {
             TaskCommand::Add { repo_root, .. } | TaskCommand::Update { repo_root, .. } => {
+                Some(repo_root)
+            }
+        },
+        Command::Doctor { command } => match command {
+            DoctorCommand::Show { repo_root } | DoctorCommand::Fix { repo_root, .. } => {
                 Some(repo_root)
             }
         },
@@ -1349,6 +1376,147 @@ fn print_doctor_findings(theme: &Theme, findings: &[DoctorFinding]) {
     }
 }
 
+fn print_doctor_issue(theme: &Theme, index: usize, total: usize, issue: &DoctorIssue) {
+    println!(
+        "{} {} / {}",
+        theme.heading("Doctor Issue"),
+        theme.count(index),
+        theme.count(total)
+    );
+    println!(
+        "{} {}",
+        theme.label("Severity:"),
+        theme.severity(&issue.severity)
+    );
+    println!("{} {}", theme.label("Rule:"), issue.rule);
+    println!("{} {}", theme.label("Scope:"), issue.scope);
+    if let Some(story_id) = &issue.story_id {
+        println!("{} {}", theme.label("Story:"), theme.id(story_id));
+    }
+    if let Some(path) = &issue.file_path {
+        println!("{} {}", theme.label("File:"), theme.path(path.display()));
+    }
+    println!("{} {}", theme.label("Problem:"), issue.message);
+    println!("{} {}", theme.label("Suggested fix:"), issue.suggestion);
+}
+
+fn resolve_doctor_fix_issues(
+    repo_root: &PathBuf,
+    target: Option<&str>,
+) -> Result<Vec<DoctorIssue>> {
+    match target.map(str::trim).filter(|value| !value.is_empty()) {
+        None => collect_doctor_issues(repo_root),
+        Some("current") => collect_doctor_issues_for_current_sprint(repo_root),
+        Some(story_id) => collect_doctor_issues_for_story(repo_root, story_id),
+    }
+}
+
+fn prompt_doctor_fix_action(issue: &DoctorIssue) -> Result<String> {
+    loop {
+        let input = prompt("Apply fix? [y]es / [s]kip / [q]uit: ")?;
+        let normalized = if input.trim().is_empty() {
+            "y".to_string()
+        } else {
+            input.trim().to_ascii_lowercase()
+        };
+        match normalized.as_str() {
+            "y" | "yes" | "s" | "skip" | "q" | "quit" => return Ok(normalized),
+            _ => {
+                if matches!(issue.fix_kind, DoctorFixKind::ManualOnly) {
+                    println!("Enter skip or quit.");
+                } else {
+                    println!("Enter yes, skip, or quit.");
+                }
+            }
+        }
+    }
+}
+
+fn collect_doctor_fix_input(issue: &DoctorIssue) -> Result<DoctorFixInput> {
+    let value = match &issue.prompt {
+        DoctorPrompt::None => None,
+        DoctorPrompt::Text { label, default } => {
+            if let Some(default) = default {
+                Some(prompt_with_default(label, default)?)
+            } else {
+                Some(prompt(&format!("{label}: "))?)
+            }
+        }
+        DoctorPrompt::Choice {
+            label,
+            options,
+            default,
+        } => loop {
+            let options_text = options.join(", ");
+            let value = if let Some(default) = default {
+                prompt_with_default(label, default)?
+            } else {
+                prompt(&format!("{label} [{options_text}]: "))?
+            };
+            if options.iter().any(|option| option == &value) {
+                break Some(value);
+            }
+            println!("Choose one of: {options_text}.");
+        },
+    };
+    Ok(DoctorFixInput { value })
+}
+
+fn run_doctor_fix_wizard(theme: &Theme, repo_root: &PathBuf, target: Option<&str>) -> Result<()> {
+    let mut issues = resolve_doctor_fix_issues(repo_root, target)?;
+    if issues.is_empty() {
+        println!("{}", theme.success("No doctor findings to fix."));
+        return Ok(());
+    }
+
+    let mut index = 0;
+    while index < issues.len() {
+        let total = issues.len();
+        let issue = issues[index].clone();
+        print_doctor_issue(theme, index + 1, total, &issue);
+        if matches!(issue.fix_kind, DoctorFixKind::ManualOnly) {
+            println!(
+                "{} Manual-only issue; no automatic fix is available.",
+                theme.warning("Note:")
+            );
+        }
+        let action = prompt_doctor_fix_action(&issue)?;
+        match action.as_str() {
+            "q" | "quit" => {
+                println!("{}", theme.warning("Doctor fix aborted."));
+                return Ok(());
+            }
+            "s" | "skip" => {
+                index += 1;
+            }
+            _ => {
+                if matches!(issue.fix_kind, DoctorFixKind::ManualOnly) {
+                    println!("{}", theme.warning("Skipping manual-only issue."));
+                    index += 1;
+                    continue;
+                }
+                let input = collect_doctor_fix_input(&issue)?;
+                let result = apply_doctor_fix(repo_root, &issue, &input)?;
+                println!("{} {}", theme.success("Applied:"), result.message);
+                for path in result.touched_paths {
+                    println!("{} {}", theme.label("Updated:"), theme.path(path.display()));
+                }
+                issues = resolve_doctor_fix_issues(repo_root, target)?;
+                if issues.is_empty() {
+                    println!(
+                        "{}",
+                        theme.success("All scoped doctor findings are resolved.")
+                    );
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    println!("{}", theme.success("Doctor fix wizard completed."));
+    Ok(())
+}
+
 fn format_task_summary(summary: &TaskSummary) -> String {
     format!(
         "tasks(todo={}, in-progress={}, blocked={}, done={})",
@@ -1733,8 +1901,26 @@ fn render_no_args_help_output(theme: &Theme) -> Result<String> {
     Ok(format!("{version}{help}\n"))
 }
 
+fn normalize_args(raw_args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    if raw_args.len() >= 2
+        && raw_args.get(1).is_some_and(|arg| arg == "doctor")
+        && raw_args
+            .get(2)
+            .is_none_or(|arg| arg != "show" && arg != "fix")
+    {
+        let mut normalized = Vec::with_capacity(raw_args.len() + 1);
+        normalized.push(raw_args[0].clone());
+        normalized.push(raw_args[1].clone());
+        normalized.push(std::ffi::OsString::from("show"));
+        normalized.extend(raw_args.into_iter().skip(2));
+        normalized
+    } else {
+        raw_args
+    }
+}
+
 fn main() -> Result<()> {
-    let raw_args = std::env::args_os().collect::<Vec<_>>();
+    let raw_args = normalize_args(std::env::args_os().collect::<Vec<_>>());
     if raw_args.len() == 1 {
         let version_line = Args::command().render_version().to_string();
 
@@ -1758,7 +1944,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let args = Args::parse();
+    let args = Args::parse_from(raw_args);
     let theme = theme_for_command(&args.command);
 
     match args.command {
@@ -2026,10 +2212,15 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Command::Doctor { repo_root } => {
-            let findings = doctor_repository(repo_root)?;
-            print_doctor_findings(&theme, &findings);
-        }
+        Command::Doctor { command } => match command {
+            DoctorCommand::Show { repo_root } => {
+                let findings = doctor_repository(repo_root)?;
+                print_doctor_findings(&theme, &findings);
+            }
+            DoctorCommand::Fix { target, repo_root } => {
+                run_doctor_fix_wizard(&theme, &repo_root, target.as_deref())?;
+            }
+        },
         Command::ListIds { kind, repo_root } => match kind {
             ListIdsKind::Sprints => {
                 for id in list_sprint_names(repo_root)? {
@@ -2061,6 +2252,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use std::collections::BTreeMap;
 
     #[test]
@@ -2437,5 +2629,60 @@ mod tests {
         };
 
         assert_eq!(command_repo_root(&command), Some(&repo_root));
+    }
+
+    #[test]
+    fn doctor_show_subcommand_parses() {
+        let args = Args::try_parse_from(["kanban", "doctor", "show"]).unwrap();
+
+        match args.command {
+            Command::Doctor {
+                command: DoctorCommand::Show { repo_root },
+            } => assert_eq!(repo_root, PathBuf::from(".")),
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn bare_doctor_is_normalized_to_show() {
+        let raw = normalize_args(vec!["kanban".into(), "doctor".into(), "/tmp/repo".into()]);
+        let args = Args::parse_from(raw);
+
+        match args.command {
+            Command::Doctor {
+                command: DoctorCommand::Show { repo_root },
+            } => assert_eq!(repo_root, PathBuf::from("/tmp/repo")),
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn doctor_fix_current_parses() {
+        let args = Args::try_parse_from(["kanban", "doctor", "fix", "current"]).unwrap();
+
+        match args.command {
+            Command::Doctor {
+                command: DoctorCommand::Fix { target, repo_root },
+            } => {
+                assert_eq!(target.as_deref(), Some("current"));
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn doctor_fix_story_parses() {
+        let args = Args::try_parse_from(["kanban", "doctor", "fix", "US-F1-053"]).unwrap();
+
+        match args.command {
+            Command::Doctor {
+                command: DoctorCommand::Fix { target, repo_root },
+            } => {
+                assert_eq!(target.as_deref(), Some("US-F1-053"));
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
     }
 }
