@@ -5,13 +5,14 @@ use anyhow::{Result, bail};
 use chrono::NaiveDate;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use kanban_core::{
-    CreateSprintInput, DoctorFinding, PhaseOverview, RolloverResult, SprintOverview, StoryDetails,
-    StoryKind, StoryOverview, TaskSummary, add_task_to_story, create_sprint, doctor_repository,
-    find_story, list_epic_ids, list_sprint_names, list_story_completion_items, list_story_ids,
-    move_story_to_status_with_assignee, rollover_sprint, suggested_next_sprint_dates,
-    suggested_next_sprint_number, suggested_sprint_dates, summarize_current_sprint,
-    summarize_phase, summarize_sprint, summarize_sprints, update_task_in_story,
-    validate_repository,
+    ColorMode, CreateSprintInput, DoctorFinding, PhaseOverview, RolloverResult, SprintOverview,
+    StoryDetails, StoryKind, StoryOverview, TaskSummary, add_task_to_story, create_sprint,
+    doctor_repository, find_story, get_config_json, get_config_value, init_config, list_epic_ids,
+    list_sprint_names, list_story_completion_items, list_story_ids,
+    move_story_to_status_with_assignee, rollover_sprint, set_config_value,
+    suggested_next_sprint_dates, suggested_next_sprint_number, suggested_sprint_dates,
+    summarize_current_sprint, summarize_phase, summarize_sprint, summarize_sprints,
+    update_task_in_story, validate_repository,
 };
 
 const MIN_TERMINAL_WIDTH: usize = 80;
@@ -35,11 +36,17 @@ enum Style {
 }
 
 impl Theme {
-    fn for_stdout() -> Self {
+    fn for_stdout(color_mode: ColorMode) -> Self {
         Self {
-            color: std::io::stdout().is_terminal()
-                && std::env::var_os("NO_COLOR").is_none()
-                && std::env::var_os("TERM").is_none_or(|term| term != "dumb"),
+            color: match color_mode {
+                ColorMode::Always => true,
+                ColorMode::Never => false,
+                ColorMode::Auto => {
+                    std::io::stdout().is_terminal()
+                        && std::env::var_os("NO_COLOR").is_none()
+                        && std::env::var_os("TERM").is_none_or(|term| term != "dumb")
+                }
+            },
         }
     }
 
@@ -107,6 +114,17 @@ impl Theme {
             "done" => self.paint(Style::Green, status),
             "blocked" => self.paint(Style::Red, status),
             _ => status.to_string(),
+        }
+    }
+
+    fn status_text(&self, status: &str, text: impl std::fmt::Display) -> String {
+        match status {
+            "todo" => self.paint(Style::Muted, text),
+            "in-progress" => self.paint(Style::Blue, text),
+            "ready-for-qa" => self.paint(Style::Purple, text),
+            "done" => self.paint(Style::Green, text),
+            "blocked" => self.paint(Style::Red, text),
+            _ => text.to_string(),
         }
     }
 
@@ -194,7 +212,7 @@ enum SprintCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "List sprint folders. Effect: read-only inspection of doc/backlog/sprints. Side effects: none."
+        about = "List sprint folders. Effect: read-only inspection of the configured sprint path from `.kanban/paths.json`. Side effects: none."
     )]
     List {
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
@@ -212,7 +230,7 @@ enum SprintCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Create a sprint folder. Effect: writes a sprint README and status folders under doc/backlog/sprints. Side effects: prompts for sprint metadata."
+        about = "Create a sprint folder. Effect: writes a sprint README and status folders under the configured sprint path from `.kanban/paths.json`. Side effects: prompts for sprint metadata."
     )]
     Create {
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
@@ -372,7 +390,58 @@ enum ListIdsKind {
 }
 
 #[derive(Subcommand)]
+enum ConfigCommand {
+    #[command(
+        about = "Show effective kanban configuration. Effect: read-only inspection of `.kanban/*.json`. Side effects: none."
+    )]
+    Show {
+        #[arg(help = "Repository path to inspect. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        about = "Get one config value. Effect: read-only inspection of `.kanban/*.json`. Side effects: none."
+    )]
+    Get {
+        #[arg(help = "Configuration key, for example paths.backlog or theme.color_mode.")]
+        key: String,
+        #[arg(help = "Repository path to inspect. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        about = "Set one config value. Effect: rewrites the owning JSON file in `.kanban/`. Side effects: creates no files outside `.kanban/`."
+    )]
+    Set {
+        #[arg(help = "Configuration key, for example paths.backlog or theme.color_mode.")]
+        key: String,
+        #[arg(
+            help = "Configuration value. Use comma-separated values for story_points.allowed_values."
+        )]
+        value: String,
+        #[arg(help = "Repository path to update. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 enum Command {
+    #[command(
+        about = "Initialize `.kanban` in the repository root. Effect: creates default JSON config files in `.kanban/`. Side effects: no backlog files are modified."
+    )]
+    Init {
+        #[arg(help = "Repository path to initialize. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        about = "Inspect or change repository-local kanban configuration. Effects depend on subcommand; write subcommands only touch `.kanban/*.json`."
+    )]
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     #[command(
         about = "Inspect and maintain sprint folders. Effects depend on subcommand; write subcommands state their markdown side effects."
     )]
@@ -440,73 +509,154 @@ enum Command {
     },
 }
 
+fn command_repo_root(command: &Command) -> Option<&PathBuf> {
+    match command {
+        Command::Init { repo_root }
+        | Command::Validate { repo_root }
+        | Command::Doctor { repo_root }
+        | Command::ListIds { repo_root, .. } => Some(repo_root),
+        Command::Config { command } => match command {
+            ConfigCommand::Show { repo_root }
+            | ConfigCommand::Get { repo_root, .. }
+            | ConfigCommand::Set { repo_root, .. } => Some(repo_root),
+        },
+        Command::Sprint { command } => match command {
+            SprintCommand::Current { repo_root }
+            | SprintCommand::List { repo_root }
+            | SprintCommand::Show { repo_root, .. }
+            | SprintCommand::Create { repo_root }
+            | SprintCommand::Rollover { repo_root, .. } => Some(repo_root),
+        },
+        Command::Phase { command } => match command {
+            PhaseCommand::Show { repo_root, .. } => Some(repo_root),
+        },
+        Command::Story { command } => match command {
+            StoryCommand::Show { repo_root, .. } | StoryCommand::Move { repo_root, .. } => {
+                Some(repo_root)
+            }
+        },
+        Command::Task { command } => match command {
+            TaskCommand::Add { repo_root, .. } | TaskCommand::Update { repo_root, .. } => {
+                Some(repo_root)
+            }
+        },
+        Command::Completion { .. } => None,
+    }
+}
+
+fn theme_for_command(command: &Command) -> Theme {
+    let color_mode = command_repo_root(command)
+        .and_then(|repo_root| {
+            kanban_core::load_kanban_config(repo_root)
+                .ok()
+                .map(|config| config.theme.color_mode)
+        })
+        .unwrap_or(ColorMode::Auto);
+    Theme::for_stdout(color_mode)
+}
+
 fn print_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOverview) {
     print!("{}", render_sprint_overview(theme, layout, sprint));
 }
 
 fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOverview) -> String {
     let mut output = String::new();
-    push_line(
-        &mut output,
-        &theme.heading(format!("Sprint {}", sprint.sprint_name)),
-    );
-    push_wrapped_label_value(
-        &mut output,
-        theme,
-        "Headline:",
-        &sprint.headline,
-        layout.width,
-    );
-    push_wrapped_label_value(
-        &mut output,
-        theme,
-        "Dates:",
-        &format!("{} .. {}", sprint.start_date, sprint.end_date),
-        layout.width,
-    );
-    let readme = sprint
-        .readme_status
-        .as_deref()
-        .map(|status| format!("{} (status: {status})", sprint.readme_path.display()))
-        .unwrap_or_else(|| sprint.readme_path.display().to_string());
-    push_wrapped_label_value(&mut output, theme, "README:", &readme, layout.width);
 
+    // Dashboard header band: top separator, progress line, count line, bottom separator
+    push_sprint_header_band(&mut output, theme, layout, sprint);
+
+    // Sprint goal (below bottom separator)
+    if let Some(goal) = &sprint.sprint_goal {
+        push_wrapped_label_value(&mut output, theme, "Sprint Goal:", goal, layout.width);
+    }
+
+    // Warnings
     if !sprint.warnings.is_empty() {
-        push_line(&mut output, &theme.warning("Warnings:"));
+        push_line(&mut output, "");
         for warning in &sprint.warnings {
-            push_wrapped_hanging_line(&mut output, "- ", warning, layout.width, |value| {
-                theme.warning(value)
+            push_wrapped_hanging_line(&mut output, "  ", warning, layout.width, |v| {
+                theme.warning(v)
             });
         }
     }
 
-    push_line(&mut output, &theme.heading("Stories by status"));
-    for status in ["todo", "in-progress", "ready-for-qa", "done", "blocked"] {
-        push_line(&mut output, "");
+    // Status sections: todo, in-progress, ready-for-qa (expanded with story rows)
+    for status in ["todo", "in-progress", "ready-for-qa"] {
         let stories = sprint
             .stories_by_status
             .get(status)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        push_line(
-            &mut output,
-            &format!("{} ({})", theme.status(status), theme.count(stories.len())),
-        );
+        push_line(&mut output, "");
+        let icon_label =
+            theme.status_text(status, format!("{} {status}", status_icon(status)));
         if stories.is_empty() {
-            push_line(&mut output, "  - none");
+            push_line(
+                &mut output,
+                &format!("  {icon_label}  {}  ·  none", theme.count(0)),
+            );
         } else {
+            push_line(
+                &mut output,
+                &format!("  {icon_label}  {}", theme.count(stories.len())),
+            );
             push_story_table(&mut output, theme, layout.width, stories);
         }
     }
 
+    // Summary footer: ✓ done N   ✗ blocked N
+    let done_count = sprint
+        .stories_by_status
+        .get("done")
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let blocked_count = sprint
+        .stories_by_status
+        .get("blocked")
+        .map(|v| v.len())
+        .unwrap_or(0);
+    push_line(&mut output, "");
+    let done_part = theme.paint(Style::Green, format!("{} done", status_icon("done")));
+    let blocked_style = if blocked_count > 0 { Style::Red } else { Style::Muted };
+    let blocked_part =
+        theme.paint(blocked_style, format!("{} blocked", status_icon("blocked")));
+    push_line(
+        &mut output,
+        &format!(
+            "  {}  {}   {}  {}",
+            done_part,
+            theme.count(done_count),
+            blocked_part,
+            theme.count(blocked_count),
+        ),
+    );
+
+    // Blocked work detail callout
+    push_line(&mut output, "");
     push_line(&mut output, &theme.heading("Blocked work"));
     if sprint.blocked_work.is_empty() {
-        push_line(&mut output, "- none");
+        push_line(&mut output, "  - none");
     } else {
         push_blocked_work_table(&mut output, theme, layout.width, &sprint.blocked_work);
     }
 
     output
+}
+
+
+fn title_case_headline(headline: &str) -> String {
+    headline
+        .split([' ', '-', '_'])
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            let mut characters = word.chars();
+            match characters.next() {
+                Some(first) => format!("{}{}", first.to_ascii_uppercase(), characters.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn push_line(output: &mut String, line: &str) {
@@ -557,8 +707,8 @@ fn push_wrapped_hanging_line(
 #[derive(Copy, Clone)]
 enum CellStyle {
     Id,
-    Path,
     Warning,
+    Precolored,
 }
 
 struct TableCell {
@@ -590,10 +740,10 @@ fn push_story_table(output: &mut String, theme: &Theme, width: usize, stories: &
             vec![
                 TableCell::styled(&story.id, CellStyle::Id),
                 TableCell::new(&story.title),
-                TableCell::new(&story.assignee),
+                TableCell::new(extract_assignee_name(&story.assignee)),
                 TableCell::styled(
-                    format_compact_task_summary(story.task_summary.as_ref()),
-                    CellStyle::Path,
+                    format_colored_task_summary(theme, story.task_summary.as_ref()),
+                    CellStyle::Precolored,
                 ),
             ]
         })
@@ -639,13 +789,15 @@ fn story_table_columns(width: usize, stories: &[StoryOverview]) -> Vec<(&'static
         .max()
         .unwrap_or(5)
         .clamp(5, 17);
-    let assignee_width = stories
+    let raw_assignee_width = stories
         .iter()
-        .flat_map(|story| story.assignee.split_whitespace())
-        .map(display_width)
+        .map(|story| display_width(extract_assignee_name(&story.assignee)))
         .max()
         .unwrap_or(8)
         .max(8);
+    // Clamp assignee so title always gets at least 20 columns.
+    let max_assignee = available.saturating_sub(id_width + task_width + 20);
+    let assignee_width = raw_assignee_width.min(max_assignee.max(8));
     let title_width = available
         .saturating_sub(id_width + assignee_width + task_width)
         .max(1);
@@ -736,8 +888,8 @@ fn push_wrapped_table_row(
 fn style_table_cell(theme: &Theme, style: Option<CellStyle>, value: &str) -> String {
     match style {
         Some(CellStyle::Id) => theme.id(value),
-        Some(CellStyle::Path) => theme.path(value),
         Some(CellStyle::Warning) => theme.warning(value),
+        Some(CellStyle::Precolored) => value.to_string(),
         None => value.to_string(),
     }
 }
@@ -748,7 +900,17 @@ fn pad_to_width(value: &str, width: usize) -> String {
 }
 
 fn display_width(value: &str) -> usize {
-    value.chars().count()
+    let mut count = 0;
+    let mut in_escape = false;
+    for ch in value.chars() {
+        match ch {
+            '\x1b' => in_escape = true,
+            'm' if in_escape => in_escape = false,
+            _ if !in_escape => count += 1,
+            _ => {}
+        }
+    }
+    count
 }
 
 fn wrap_text(value: &str, width: usize) -> Vec<String> {
@@ -788,13 +950,160 @@ fn push_word_wrapped(lines: &mut Vec<String>, current: &mut String, word: &str, 
     *current = chunk;
 }
 
+fn extract_assignee_name(assignee: &str) -> &str {
+    assignee
+        .find('<')
+        .map(|pos| assignee[..pos].trim())
+        .unwrap_or_else(|| assignee.trim())
+}
+
+fn status_icon(status: &str) -> &'static str {
+    match status {
+        "todo" => "○",
+        "in-progress" => "→",
+        "ready-for-qa" => "◎",
+        "done" => "✓",
+        "blocked" => "✗",
+        _ => "·",
+    }
+}
+
+fn sprint_status_label(end_date: &str, readme_status: Option<&str>) -> &'static str {
+    if readme_status
+        .map(|s| matches!(s, "completed" | "closed" | "done"))
+        .unwrap_or(false)
+    {
+        return "completed";
+    }
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(end_date, "%Y-%m-%d") {
+        let today = chrono::Local::now().date_naive();
+        if date >= today { "active" } else { "overdue" }
+    } else {
+        "active"
+    }
+}
+
+fn render_progress_bar(theme: &Theme, done: usize, total: usize, width: usize) -> String {
+    let bar_width = (width / 8).clamp(8, 20);
+    let filled = if total == 0 { 0 } else { done * bar_width / total };
+    let empty = bar_width.saturating_sub(filled);
+    format!(
+        "{}{}",
+        theme.paint(Style::Blue, "█".repeat(filled)),
+        theme.paint(Style::Muted, "░".repeat(empty)),
+    )
+}
+
+fn format_colored_task_summary(theme: &Theme, summary: Option<&TaskSummary>) -> String {
+    summary
+        .map(|s| {
+            format!(
+                "{} {} {} {}",
+                theme.paint(Style::Green, format!("✓{}", s.done)),
+                theme.paint(Style::Blue, format!("▶{}", s.in_progress)),
+                theme.paint(Style::Muted, format!("·{}", s.todo)),
+                theme.paint(Style::Red, format!("✗{}", s.blocked)),
+            )
+        })
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn push_sprint_header_band(
+    output: &mut String,
+    theme: &Theme,
+    layout: OutputLayout,
+    sprint: &SprintOverview,
+) {
+    let sprint_id = sprint
+        .sprint_name
+        .split_once('.')
+        .map(|(id, _)| id)
+        .unwrap_or(&sprint.sprint_name);
+    let headline = title_case_headline(&sprint.headline);
+    let status_label = sprint_status_label(&sprint.end_date, sprint.readme_status.as_deref());
+
+    // Top separator: ─── S000 · Headline [fill] status ───
+    let prefix_text = format!("─── {} · {} ", sprint_id, headline);
+    let suffix_text = format!(" {} ───", status_label);
+    let fill = layout
+        .width
+        .saturating_sub(display_width(&prefix_text) + display_width(&suffix_text));
+    let colored_status = match status_label {
+        "overdue" => theme.paint(Style::Yellow, status_label),
+        "completed" => theme.paint(Style::Muted, status_label),
+        _ => status_label.to_string(),
+    };
+    push_line(
+        output,
+        &format!(
+            "{} {} {}",
+            theme.paint(Style::Muted, format!("{}{}", prefix_text, "─".repeat(fill))),
+            colored_status,
+            theme.paint(Style::Muted, "───"),
+        ),
+    );
+
+    // Counts per status
+    let total: usize = sprint.stories_by_status.values().map(|v| v.len()).sum();
+    let done = sprint.stories_by_status.get("done").map(|v| v.len()).unwrap_or(0);
+    let in_progress = sprint
+        .stories_by_status
+        .get("in-progress")
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let qa = sprint
+        .stories_by_status
+        .get("ready-for-qa")
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let todo = sprint.stories_by_status.get("todo").map(|v| v.len()).unwrap_or(0);
+    let blocked = sprint
+        .stories_by_status
+        .get("blocked")
+        .map(|v| v.len())
+        .unwrap_or(0);
+
+    // Progress line
+    let bar = render_progress_bar(theme, done, total, layout.width);
+    let pct = if total == 0 { 0 } else { done * 100 / total };
+    push_line(
+        output,
+        &format!(
+            "  {} → {}   {}  {} / {}  {}",
+            sprint.start_date,
+            sprint.end_date,
+            bar,
+            theme.count(done),
+            theme.count(total),
+            theme.paint(Style::Muted, format!("{pct}%")),
+        ),
+    );
+
+    // Count line: N done · N in progress · N in qa · N todo · N blocked
+    let dot = theme.paint(Style::Muted, "·");
+    let segments: Vec<String> = [
+        (done, "done", Style::Green),
+        (in_progress, "in progress", Style::Blue),
+        (qa, "in qa", Style::Purple),
+        (todo, "todo", Style::Muted),
+        (blocked, "blocked", Style::Red),
+    ]
+    .into_iter()
+    .map(|(count, label, style)| {
+        let s = if count == 0 { Style::Muted } else { style };
+        theme.paint(s, format!("{count} {label}"))
+    })
+    .collect();
+    push_line(output, &format!("  {}", segments.join(&format!("  {dot}  "))));
+
+    // Bottom separator: full-width dashes
+    push_line(output, &theme.paint(Style::Muted, "─".repeat(layout.width)));
+}
+
 fn format_compact_task_summary(summary: Option<&TaskSummary>) -> String {
     summary
-        .map(|summary| {
-            format!(
-                "T:{} IP:{} B:{} D:{}",
-                summary.todo, summary.in_progress, summary.blocked, summary.done
-            )
+        .map(|s| {
+            format!("✓{} ▶{} ·{} ✗{}", s.done, s.in_progress, s.todo, s.blocked)
         })
         .unwrap_or_else(|| "-".to_string())
 }
@@ -934,8 +1243,37 @@ fn format_task_summary(summary: &TaskSummary) -> String {
 }
 
 /// ZSH helper functions appended after the clap_complete-generated script.
-/// These provide dynamic completion for sprint names, story IDs, and epic IDs.
+/// These provide dynamic completion for config keys/values, sprint names, story IDs, and epic IDs.
 const ZSH_DYNAMIC_HELPERS: &str = r#"
+_kanban_config_keys() {
+    local -a keys
+    keys=(
+        paths.backlog
+        paths.sprints
+        theme.color_mode
+        story_points.allowed_values
+        story_points.aliases.XS
+        story_points.aliases.S
+        story_points.aliases.M
+        story_points.aliases.L
+        story_points.aliases.XL
+    )
+    compadd -a keys
+}
+_kanban_config_values() {
+    local key="$words[3]"
+    case "$key" in
+        theme.color_mode)
+            compadd auto always never
+            ;;
+        paths.backlog|paths.sprints)
+            _files -/
+            ;;
+        *)
+            _default
+            ;;
+    esac
+}
 _kanban_sprint_names() {
     local -a names
     local name
@@ -994,6 +1332,14 @@ fn enhance_zsh_completion(script: &str) -> String {
         .replace(
             "':story_id -- Parent story id for the task, for example US-F1-053.:_default'",
             "':story_id -- Parent story id for the task, for example US-F1-053.:_kanban_story_ids'",
+        )
+        .replace(
+            "':key -- Configuration key, for example paths.backlog or theme.color_mode.:_default'",
+            "':key -- Configuration key, for example paths.backlog or theme.color_mode.:_kanban_config_keys'",
+        )
+        .replace(
+            "':value -- Configuration value. Use comma-separated values for story_points.allowed_values.:_default'",
+            "':value -- Configuration value. Use comma-separated values for story_points.allowed_values.:_kanban_config_values'",
         );
     format!("{enhanced}{ZSH_DYNAMIC_HELPERS}")
 }
@@ -1009,6 +1355,97 @@ fn inject_bash_dynamic(script: &str, label: &str, opts: &str, kind: &str, pos: u
     );
     if script.contains(&old) {
         script.replacen(&old, &new, 1)
+    } else {
+        script.to_string()
+    }
+}
+
+fn inject_bash_config_get(script: &str) -> String {
+    let old = r#"        kanban__subcmd__config__subcmd__get)
+            opts="-h --help <KEY> [REPO_ROOT]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0"#;
+    let new = r#"        kanban__subcmd__config__subcmd__get)
+            opts="-h --help <KEY> [REPO_ROOT]"
+            config_keys="paths.backlog paths.sprints theme.color_mode story_points.allowed_values story_points.aliases.XS story_points.aliases.S story_points.aliases.M story_points.aliases.L story_points.aliases.XL"
+            if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
+                COMPREPLY=( $(compgen -W "${config_keys}" -- "${cur}") )
+                return 0
+            fi
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0"#;
+    if script.contains(old) {
+        script.replacen(old, new, 1)
+    } else {
+        script.to_string()
+    }
+}
+
+fn inject_bash_config_set(script: &str) -> String {
+    let old = r#"        kanban__subcmd__config__subcmd__set)
+            opts="-h --help <KEY> <VALUE> [REPO_ROOT]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0"#;
+    let new = r#"        kanban__subcmd__config__subcmd__set)
+            opts="-h --help <KEY> <VALUE> [REPO_ROOT]"
+            config_keys="paths.backlog paths.sprints theme.color_mode story_points.allowed_values story_points.aliases.XS story_points.aliases.S story_points.aliases.M story_points.aliases.L story_points.aliases.XL"
+            color_modes="auto always never"
+            if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
+                COMPREPLY=( $(compgen -W "${config_keys}" -- "${cur}") )
+                return 0
+            fi
+            if [[ ${COMP_CWORD} -eq 4 && ${cur} != -* ]] ; then
+                case "${prev}" in
+                    theme.color_mode)
+                        COMPREPLY=( $(compgen -W "${color_modes}" -- "${cur}") )
+                        return 0
+                        ;;
+                    paths.backlog|paths.sprints)
+                        COMPREPLY=( $(compgen -d -- "${cur}") )
+                        return 0
+                        ;;
+                esac
+            fi
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0"#;
+    if script.contains(old) {
+        script.replacen(old, new, 1)
     } else {
         script.to_string()
     }
@@ -1051,13 +1488,15 @@ fn enhance_bash_completion(script: &str) -> String {
         "stories",
         3,
     );
-    inject_bash_dynamic(
+    let script = inject_bash_dynamic(
         &script,
         "kanban__subcmd__task__subcmd__update",
         "-h --title --status --tags --description --help <STORY_ID> <TASK_ID> [REPO_ROOT]",
         "stories",
         3,
-    )
+    );
+    let script = inject_bash_config_get(&script);
+    inject_bash_config_set(&script)
 }
 
 fn prompt(message: &str) -> Result<String> {
@@ -1166,10 +1605,66 @@ fn print_rollover_result(theme: &Theme, result: &RolloverResult) {
 }
 
 fn main() -> Result<()> {
+    let raw_args = std::env::args_os().collect::<Vec<_>>();
+    if raw_args.len() == 1
+        && let Err(error) = kanban_core::load_kanban_config(".")
+    {
+        let theme = Theme::for_stdout(ColorMode::Auto);
+        let message = error.to_string();
+        let init_guidance = "Run `kanban init` to initialize this repository.";
+        let primary = message
+            .strip_suffix(&format!(" {init_guidance}"))
+            .unwrap_or(message.as_str());
+        eprintln!(" {}  {primary}", theme.warning(""));
+        eprintln!("    {init_guidance}");
+        return Ok(());
+    }
+
     let args = Args::parse();
-    let theme = Theme::for_stdout();
+    let theme = theme_for_command(&args.command);
 
     match args.command {
+        Command::Init { repo_root } => {
+            let result = init_config(repo_root)?;
+            println!(
+                "{} {}",
+                theme.success("Initialized config:"),
+                theme.path(result.config_dir.display())
+            );
+            if result.created_files.is_empty() {
+                println!("{} none", theme.label("Created files:"));
+            } else {
+                for file in result.created_files {
+                    println!("- {}", theme.path(file.display()));
+                }
+            }
+        }
+        Command::Config { command } => match command {
+            ConfigCommand::Show { repo_root } => {
+                println!("{}", get_config_json(repo_root)?);
+            }
+            ConfigCommand::Get { key, repo_root } => {
+                println!("{}", get_config_value(repo_root, &key)?);
+            }
+            ConfigCommand::Set {
+                key,
+                value,
+                repo_root,
+            } => {
+                let result = set_config_value(repo_root, &key, &value)?;
+                println!(
+                    "{} {} = {}",
+                    theme.success("Updated"),
+                    theme.id(&result.key),
+                    result.value
+                );
+                println!(
+                    "{} {}",
+                    theme.label("File:"),
+                    theme.path(result.file_path.display())
+                );
+            }
+        },
         Command::Sprint { command } => match command {
             SprintCommand::Current { repo_root } => {
                 let sprint = summarize_current_sprint(repo_root)?;
@@ -1446,7 +1941,10 @@ mod tests {
         );
         let sprint = SprintOverview {
             sprint_name: "S999.test".to_string(),
-            headline: "Terminal wrapping".to_string(),
+            headline: "terminal-wrapping".to_string(),
+            sprint_goal: Some(
+                "Keep sprint output useful without repeating implementation file paths.".to_string(),
+            ),
             start_date: "2026-05-29".to_string(),
             end_date: "2026-06-12".to_string(),
             readme_path: PathBuf::from("doc/backlog/sprints/S999.test/README.md"),
@@ -1463,6 +1961,9 @@ mod tests {
 
         let output = render_sprint_overview(&theme, OutputLayout { width: 80 }, &sprint);
 
+        assert!(output.contains("S999 · Terminal Wrapping"));
+        assert!(output.contains("Sprint Goal:"));
+        assert!(!output.contains("README:"));
         assert!(output.contains("US-F1-999"));
         assert!(!output.contains('|'));
         for line in output.lines() {
@@ -1471,5 +1972,144 @@ mod tests {
                 "line exceeded 80 columns: {line}"
             );
         }
+    }
+
+    #[test]
+    fn display_width_ignores_ansi_codes() {
+        assert_eq!(display_width("\x1b[1;32mhello\x1b[0m"), 5);
+        assert_eq!(display_width("hello"), 5);
+        assert_eq!(display_width("\x1b[2m✓4\x1b[0m"), 2);
+        assert_eq!(display_width(""), 0);
+    }
+
+    #[test]
+    fn header_band_fills_terminal_width() {
+        let theme = Theme::plain();
+        let sprint = SprintOverview {
+            sprint_name: "S001.foundation".to_string(),
+            headline: "foundation".to_string(),
+            sprint_goal: None,
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("doc/backlog/sprints/S001.foundation/README.md"),
+            readme_status: Some("active".to_string()),
+            stories_by_status: BTreeMap::new(),
+            blocked_work: vec![],
+            warnings: vec![],
+        };
+
+        for width in [80, 100, 120] {
+            let mut output = String::new();
+            push_sprint_header_band(&mut output, &theme, OutputLayout { width }, &sprint);
+            let non_empty: Vec<&str> = output.lines().filter(|l| !l.is_empty()).collect();
+            // First line = top separator, last line = bottom separator — both full-width.
+            assert_eq!(
+                display_width(non_empty[0]), width,
+                "top separator at width {width}"
+            );
+            assert_eq!(
+                display_width(non_empty[non_empty.len() - 1]), width,
+                "bottom separator at width {width}"
+            );
+        }
+    }
+
+    #[test]
+    fn progress_bar_scales_with_terminal_width() {
+        let theme = Theme::plain();
+        let bar_80 = render_progress_bar(&theme, 6, 14, 80);
+        let bar_120 = render_progress_bar(&theme, 6, 14, 120);
+        assert_eq!(display_width(&bar_80), 80 / 8);
+        assert_eq!(display_width(&bar_120), 120 / 8);
+    }
+
+    #[test]
+    fn assignee_strips_email() {
+        assert_eq!(extract_assignee_name("Geir Ivar Jerstad <g@v.no>"), "Geir Ivar Jerstad");
+        assert_eq!(extract_assignee_name("Thomas Malt <thomas.malt@vegvesen.no>"), "Thomas Malt");
+        assert_eq!(extract_assignee_name("Sondre Bjerkerud and Erik Itland"), "Sondre Bjerkerud and Erik Itland");
+        assert_eq!(extract_assignee_name("TBD"), "TBD");
+    }
+
+    #[test]
+    fn task_symbols_replace_old_format() {
+        let summary = TaskSummary { todo: 2, in_progress: 1, blocked: 0, done: 4 };
+        let plain = format_compact_task_summary(Some(&summary));
+        assert!(plain.contains("✓4"), "done symbol missing: {plain}");
+        assert!(plain.contains("▶1"), "active symbol missing: {plain}");
+        assert!(plain.contains("·2"), "todo symbol missing: {plain}");
+        assert!(plain.contains("✗0"), "blocked symbol missing: {plain}");
+        assert!(!plain.contains("T:"), "old T: format present: {plain}");
+        assert!(!plain.contains("IP:"), "old IP: format present: {plain}");
+    }
+
+    #[test]
+    fn done_section_collapsed_in_overview() {
+        let theme = Theme::plain();
+        let mut stories_by_status = BTreeMap::new();
+        stories_by_status.insert(
+            "done".to_string(),
+            vec![StoryOverview {
+                id: "US-F1-001".to_string(),
+                title: "A completed story".to_string(),
+                status: "done".to_string(),
+                assignee: "Someone <s@example.com>".to_string(),
+                story_points: "2".to_string(),
+                sprint: Some("S001.test".to_string()),
+                kind: StoryKind::Sprint,
+                relative_path: PathBuf::from("04.done/US-F1-001.md"),
+                task_summary: None,
+                task_count: 0,
+            }],
+        );
+        let sprint = SprintOverview {
+            sprint_name: "S001.test".to_string(),
+            headline: "test".to_string(),
+            sprint_goal: None,
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("README.md"),
+            readme_status: None,
+            stories_by_status,
+            blocked_work: vec![],
+            warnings: vec![],
+        };
+        let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
+        // Done count appears in summary line and header band
+        assert!(output.contains("✓ done"), "done summary line missing");
+        // But the story itself should NOT appear as an individual row
+        assert!(!output.contains("A completed story"), "done story listed individually");
+    }
+
+    #[test]
+    fn zero_count_section_shows_single_muted_line() {
+        let theme = Theme::plain();
+        let sprint = SprintOverview {
+            sprint_name: "S001.test".to_string(),
+            headline: "test".to_string(),
+            sprint_goal: None,
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("README.md"),
+            readme_status: None,
+            stories_by_status: BTreeMap::new(),
+            blocked_work: vec![],
+            warnings: vec![],
+        };
+        let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
+        assert!(output.contains("○ todo"), "todo section header missing");
+        assert!(output.contains("none"), "none placeholder missing for empty section");
+    }
+
+    #[test]
+    fn command_repo_root_uses_subcommand_repo_root() {
+        let repo_root = PathBuf::from("/tmp/kanban-repo");
+        let command = Command::Sprint {
+            command: SprintCommand::List {
+                repo_root: repo_root.clone(),
+            },
+        };
+
+        assert_eq!(command_repo_root(&command), Some(&repo_root));
     }
 }
