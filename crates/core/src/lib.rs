@@ -204,6 +204,14 @@ pub struct MoveStoryResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanStoryResult {
+    pub story_id: String,
+    pub sprint_name: String,
+    pub story_path: PathBuf,
+    pub task_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskMutationResult {
     pub story_id: String,
     pub task_id: String,
@@ -1064,6 +1072,125 @@ pub fn move_story_to_status_with_assignee(
         to_status: normalized_status,
         story_path: relative_path(&repository.repo_root, &target_story_path),
         task_path: target_task_path.map(|path| relative_path(&repository.repo_root, &path)),
+    })
+}
+
+pub fn plan_story_into_sprint(
+    repo_root: impl AsRef<Path>,
+    story_id: &str,
+    sprint_name: &str,
+) -> Result<PlanStoryResult> {
+    let config = load_kanban_config(repo_root)?;
+    let repo_root = config.repo_root.clone();
+    let normalized_story_id = story_id.trim().to_ascii_uppercase();
+
+    let sprint_query = sprint_name.trim();
+    if !config.sprints_path().is_dir() {
+        bail!("Sprint not found: {sprint_query}");
+    }
+    let sprint_names = list_sprint_names(&repo_root)?;
+    let sprint_folder = sprint_names
+        .iter()
+        .find(|name| name.as_str() == sprint_query)
+        .or_else(|| {
+            sprint_names
+                .iter()
+                .find(|name| name.starts_with(&format!("{sprint_query}.")))
+        })
+        .cloned()
+        .ok_or_else(|| anyhow!("Sprint not found: {sprint_query}"))?;
+
+    let repository = read_repository(&repo_root)?;
+    let story = repository
+        .stories
+        .iter()
+        .find(|story| {
+            matches!(story.kind, StoryKind::Backlog)
+                && story
+                    .frontmatter
+                    .get("id")
+                    .map(|id| id.eq_ignore_ascii_case(&normalized_story_id))
+                    .unwrap_or(false)
+        })
+        .cloned()
+        .ok_or_else(|| anyhow!("Backlog story not found: {normalized_story_id}"))?;
+
+    let todo_folder = status_to_folder_name("todo")?;
+    let target_dir = config.sprints_path().join(&sprint_folder).join(todo_folder);
+    if !target_dir.is_dir() {
+        bail!(
+            "Sprint status folder does not exist: {}",
+            relative_path(&repo_root, &target_dir).display()
+        );
+    }
+
+    let target_story_path = target_dir.join(&story.file_name);
+    if target_story_path.exists() {
+        bail!(
+            "Story already present in sprint: {}",
+            relative_path(&repo_root, &target_story_path).display()
+        );
+    }
+
+    fs::rename(&story.file_path, &target_story_path).with_context(|| {
+        format!(
+            "move backlog story {} -> {}",
+            story.file_path.display(),
+            target_story_path.display()
+        )
+    })?;
+
+    let target_task_path = if story.file_name.ends_with(STORY_FILE_SUFFIX) {
+        let task_file_name = story
+            .file_name
+            .trim_end_matches(STORY_FILE_SUFFIX)
+            .to_string()
+            + TASK_FILE_SUFFIX;
+        let source_task_path = story.file_path.with_file_name(&task_file_name);
+        if source_task_path.exists() {
+            let target_task_path = target_dir.join(&task_file_name);
+            fs::rename(&source_task_path, &target_task_path).with_context(|| {
+                format!(
+                    "move backlog task file {} -> {}",
+                    source_task_path.display(),
+                    target_task_path.display()
+                )
+            })?;
+            Some(target_task_path)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let now = current_timestamp_string();
+    let today = Local::now().date_naive().format("%Y-%m-%d").to_string();
+    let activated = story
+        .frontmatter
+        .get("activated")
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .or(Some(today));
+    let moved_markdown = fs::read_to_string(&target_story_path)
+        .with_context(|| format!("read planned story {}", target_story_path.display()))?;
+    let moved_markdown = update_story_frontmatter_markdown(
+        &moved_markdown,
+        &[
+            ("status", Some("todo".to_string())),
+            ("sprint", Some(sprint_folder.clone())),
+            ("activated", activated),
+            ("updated", Some(now)),
+        ],
+    )?;
+    fs::write(&target_story_path, moved_markdown)
+        .with_context(|| format!("rewrite planned story {}", target_story_path.display()))?;
+
+    Ok(PlanStoryResult {
+        story_id: normalized_story_id,
+        sprint_name: sprint_folder,
+        story_path: relative_path(&repo_root, &target_story_path),
+        task_path: target_task_path.map(|path| relative_path(&repo_root, &path)),
     })
 }
 
@@ -4175,6 +4302,74 @@ mod tests {
         assert!(!backlog_story.contains("work_done: 1999-01-01T00:00:00+0100"));
         assert!(moved_story.contains("work_done: 20"));
         assert!(backlog_story.contains("work_done: 20"));
+    }
+
+    #[test]
+    fn plan_story_into_sprint_moves_backlog_story_into_todo() {
+        let temp_root = tempdir().unwrap();
+        write_git_config(temp_root.path(), "Test User", "test@example.com");
+        init_temp_repo(temp_root.path());
+
+        let sprint_dir = temp_root.path().join("doc/backlog/sprints/S001.planning");
+        for (folder_name, _) in SPRINT_STATUS_FOLDERS {
+            fs::create_dir_all(sprint_dir.join(folder_name)).unwrap();
+        }
+        fs::write(
+            sprint_dir.join("README.md"),
+            sprint_readme("S001", "planning", "2999-01-04", "2999-01-15", "planned"),
+        )
+        .unwrap();
+
+        let backlog_dir = temp_root
+            .path()
+            .join("doc/backlog/phase-2-core-logic/01.passage-ingestion");
+        fs::create_dir_all(&backlog_dir).unwrap();
+        let backlog_story = backlog_dir.join("US-F2-001-ingest-passage-events.md");
+        fs::write(
+            &backlog_story,
+            "---\nid: US-F2-001\ntype: user-story\nstatus: todo\nepic: EP-F2-01\nsprint:\nstory_points: 8\nactivated:\ncreated: 2026-05-20\nupdated: 2026-05-20\n---\n\n# User Story: Ingest passage events\n",
+        )
+        .unwrap();
+
+        let result =
+            plan_story_into_sprint(temp_root.path(), "US-F2-001", "S001.planning").unwrap();
+
+        assert_eq!(result.story_id, "US-F2-001");
+        assert_eq!(result.sprint_name, "S001.planning");
+
+        let moved = sprint_dir.join("01.todo/US-F2-001-ingest-passage-events.md");
+        assert!(moved.exists());
+        assert!(!backlog_story.exists());
+
+        let story = read_story_file(&moved, temp_root.path()).unwrap();
+        assert_eq!(story.frontmatter.get("status").map(String::as_str), Some("todo"));
+        assert_eq!(
+            story.frontmatter.get("sprint").map(String::as_str),
+            Some("S001.planning")
+        );
+        assert!(
+            story
+                .frontmatter
+                .get("activated")
+                .map(|value| !value.is_empty())
+                .unwrap_or(false)
+        );
+    }
+
+    #[test]
+    fn plan_story_into_sprint_rejects_unknown_sprint() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let backlog_dir = temp_root.path().join("doc/backlog/phase-2-core-logic/01.x");
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            backlog_dir.join("US-F2-009-x.md"),
+            "---\nid: US-F2-009\ntype: user-story\nstatus: todo\nepic: EP-F2-01\nsprint:\nstory_points: 3\n---\n\n# x\n",
+        )
+        .unwrap();
+
+        let err = plan_story_into_sprint(temp_root.path(), "US-F2-009", "S404.nope").unwrap_err();
+        assert!(err.to_string().contains("S404.nope"));
     }
 
     #[test]
