@@ -14,7 +14,7 @@ Implemented commands:
 - `kanban sprint current [repo_root]`
 - `kanban sprint list [repo_root]`
 - `kanban sprint show <name> [repo_root]`
-- `kanban sprint create [repo_root]`
+- `kanban sprint create [--number <n>] [--headline <slug>] [--start <yyyy-mm-dd>] [--end <yyyy-mm-dd>] [--non-interactive] [repo_root]`
 - `kanban sprint rollover <name> [repo_root]`
 - `kanban phase show <phase> [repo_root]`
 - `kanban story show <id> [repo_root]`

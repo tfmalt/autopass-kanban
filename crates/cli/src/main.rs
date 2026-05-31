@@ -279,7 +279,8 @@ enum SprintCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Create a sprint folder. Effect: writes a sprint README and status folders under the configured sprint path from `.kanban/paths.json`. Side effects: prompts for metadata unless --non-interactive or all of --number/--headline/--start/--end are supplied."
+        about = "Create a sprint folder. Effect: writes a sprint README and status folders under the configured sprint path from `.kanban/paths.json`. Side effects: prompts for metadata unless --non-interactive or at least one of --number/--headline/--start/--end is supplied.",
+        long_about = "Create a sprint folder. Effect: writes a sprint README and status folders under the configured sprint path from `.kanban/paths.json`. Side effects: prompts for metadata unless --non-interactive or at least one of --number/--headline/--start/--end is supplied.\n\nNon-interactive behavior:\n  `--headline` is required whenever flags are used to build the sprint without prompts.\n  `--number` defaults to the next suggested sprint number.\n  `--start` defaults to the suggested next start date, or today if no sprint history exists.\n  `--end` defaults to the suggested next end date, or a derived end date from the chosen start date.\n\nExample:\n  kanban sprint create --non-interactive --headline foundation --start 2026-06-01 --end 2026-06-12"
     )]
     Create {
         #[arg(
@@ -485,6 +486,7 @@ enum TaskCommand {
 
 const COMPLETION_HELP: &str = "Generate a shell completion script from the current kanban command tree.\n\nInstall zsh completion — add to ~/.zshrc:\n  eval \"$(kanban completion zsh)\"\n\nInstall bash completion — add to ~/.bashrc or ~/.bash_profile:\n  eval \"$(kanban completion bash)\"\n\nNote on direnv: .envrc is evaluated as bash, so eval \"$(kanban completion zsh)\" cannot\nbe placed there. Add the eval line to ~/.zshrc instead; it runs once per shell.\n\nSupported shells: bash, zsh. The command only prints completion scripts and never edits shell config files.";
 const DOCTOR_HELP: &str = "Diagnose and optionally fix repository workflow issues.\n\nUsage shortcuts:\n  kanban doctor [REPO_ROOT]        Same as `kanban doctor show [REPO_ROOT]`\n  kanban doctor help               Print this help text\n\nEffects depend on subcommand; `show` is read-only while `fix` rewrites only the affected markdown files.";
+const BASH_DATE_PLACEHOLDER: &str = "YYYY-MM-DD";
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum CompletionTarget {
@@ -1729,6 +1731,22 @@ fn enhance_zsh_completion(script: &str) -> String {
         .replace(
             "':value -- Configuration value. Use comma-separated values for story_points.allowed_values.:_default'",
             "':value -- Configuration value. Use comma-separated values for story_points.allowed_values.:_kanban_config_values'",
+        )
+        .replace(
+            "'--number=[Sprint number. Defaults to the next suggested number.]:N:_default'",
+            "'--number=[Sprint number. Defaults to the next suggested number.]:N:'",
+        )
+        .replace(
+            "'--headline=[Sprint headline slug. Required in non-interactive mode.]:SLUG:_default'",
+            "'--headline=[Sprint headline slug. Required in non-interactive mode.]:SLUG:'",
+        )
+        .replace(
+            "'--start=[Start date. Defaults to the suggested next start date.]:YYYY-MM-DD:_default'",
+            "'--start=[Start date. Defaults to the suggested next start date.]:YYYY-MM-DD:'",
+        )
+        .replace(
+            "'--end=[End date. Defaults to the suggested next end date.]:YYYY-MM-DD:_default'",
+            "'--end=[End date. Defaults to the suggested next end date.]:YYYY-MM-DD:'",
         );
     format!("{enhanced}{ZSH_DYNAMIC_HELPERS}")
 }
@@ -1917,10 +1935,80 @@ fn inject_bash_config_set(script: &str) -> String {
     }
 }
 
+fn inject_bash_sprint_create(script: &str) -> String {
+    let old = r#"        kanban__subcmd__sprint__subcmd__create)
+            opts="-h --number --headline --start --end --non-interactive --help [REPO_ROOT]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --number)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --headline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --start)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --end)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0"#;
+    let new = format!(
+        r#"        kanban__subcmd__sprint__subcmd__create)
+            opts="-h --number --headline --start --end --non-interactive --help [REPO_ROOT]"
+            if [[ ${{cur}} == -* || ${{COMP_CWORD}} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${{opts}}" -- "${{cur}}") )
+                return 0
+            fi
+            case "${{prev}}" in
+                --number)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --headline)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --start)
+                    COMPREPLY=( $(compgen -W "{date_placeholder}" -- "${{cur}}") )
+                    return 0
+                    ;;
+                --end)
+                    COMPREPLY=( $(compgen -W "{date_placeholder}" -- "${{cur}}") )
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${{opts}}" -- "${{cur}}") )
+            return 0"#,
+        date_placeholder = BASH_DATE_PLACEHOLDER,
+    );
+    if script.contains(old) {
+        script.replacen(old, &new, 1)
+    } else {
+        script.to_string()
+    }
+}
+
 /// Enhance the bash completion script with dynamic sprint name, story ID,
 /// and doctor fix target completions.
 fn enhance_bash_completion(script: &str) -> String {
     let script = inject_bash_doctor_command_or_repo_root(script);
+    let script = inject_bash_sprint_create(&script);
     let script = inject_bash_dynamic(
         &script,
         "kanban__subcmd__sprint__subcmd__show",

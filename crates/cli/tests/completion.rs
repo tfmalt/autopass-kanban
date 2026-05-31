@@ -157,6 +157,40 @@ fn zsh_completion_replaces_default_for_sprint_name_args() {
 }
 
 #[test]
+fn zsh_completion_does_not_treat_sprint_create_option_values_as_files() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("'--number=[Sprint number. Defaults to the next suggested number.]:N:'")
+    );
+    assert!(
+        stdout.contains(
+            "'--headline=[Sprint headline slug. Required in non-interactive mode.]:SLUG:'"
+        )
+    );
+    assert!(stdout.contains(
+        "'--start=[Start date. Defaults to the suggested next start date.]:YYYY-MM-DD:'"
+    ));
+    assert!(
+        stdout.contains("'--end=[End date. Defaults to the suggested next end date.]:YYYY-MM-DD:'")
+    );
+    assert!(
+        !stdout.contains(
+            "'--number=[Sprint number. Defaults to the next suggested number.]:N:_default'"
+        ),
+        "sprint create --number should not fall back to file completion"
+    );
+    assert!(
+        !stdout.contains(
+            "'--headline=[Sprint headline slug. Required in non-interactive mode.]:SLUG:_default'"
+        ),
+        "sprint create --headline should not fall back to file completion"
+    );
+}
+
+#[test]
 fn zsh_completion_replaces_default_for_story_id_args() {
     let output = kanban(&["completion", "zsh"]);
 
@@ -213,6 +247,23 @@ fn bash_completion_includes_dynamic_sprint_completion() {
     assert!(
         stdout.contains("list-ids sprints"),
         "bash completion should include `kanban list-ids sprints` for sprint show/rollover"
+    );
+}
+
+#[test]
+fn bash_completion_does_not_treat_sprint_create_option_values_as_files() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("kanban__subcmd__sprint__subcmd__create"));
+    assert!(stdout.contains(
+        "opts=\"-h --number --headline --start --end --non-interactive --help [REPO_ROOT]\""
+    ));
+    assert!(stdout.contains("COMPREPLY=( $(compgen -W \"YYYY-MM-DD\" -- \"${cur}\") )"));
+    assert!(
+        !stdout.contains("kanban__subcmd__sprint__subcmd__create)\n            opts=\"-h --number --headline --start --end --non-interactive --help [REPO_ROOT]\"\n            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then\n                COMPREPLY=( $(compgen -W \"${opts}\" -- \"${cur}\") )\n                return 0\n            fi\n            case \"${prev}\" in\n                --number)\n                    COMPREPLY=($(compgen -f \"${cur}\"))"),
+        "sprint create options should not use file completion"
     );
 }
 
@@ -279,6 +330,18 @@ fn completion_help_explains_bash_and_zsh_setup() {
         assert!(stdout.contains("kanban completion zsh"));
         assert!(stdout.contains("Supported shells: bash, zsh"));
     }
+}
+
+#[test]
+fn sprint_create_help_explains_non_interactive_flags() {
+    let output = kanban(&["sprint", "create", "--help"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("at least one of --number/--headline/--start/--end is supplied"));
+    assert!(stdout.contains("Non-interactive behavior:"));
+    assert!(stdout.contains("`--headline` is required whenever flags are used"));
+    assert!(stdout.contains("kanban sprint create --non-interactive --headline foundation"));
 }
 
 #[test]
