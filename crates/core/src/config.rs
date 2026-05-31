@@ -10,8 +10,13 @@ const CONFIG_DIR_NAME: &str = ".kanban";
 const PATHS_FILE_NAME: &str = "paths.json";
 const THEME_FILE_NAME: &str = "theme.json";
 const STORY_POINTS_FILE_NAME: &str = "story-points.json";
+const WEB_FILE_NAME: &str = "web.json";
 const DEFAULT_BACKLOG_PATH: &str = "doc/backlog";
 const DEFAULT_SPRINTS_PATH: &str = "doc/backlog/sprints";
+const DEFAULT_WEB_PORT: u16 = 3000;
+const DEFAULT_WEB_HOST: &str = "127.0.0.1";
+const DEFAULT_WEB_STYLE: &str = "calm-light";
+const WEB_STYLES: [&str; 3] = ["calm-light", "modern-dark", "vibrant"];
 const DEFAULT_ALLOWED_STORY_POINTS: [&str; 5] = ["2", "3", "5", "8", "13"];
 const DEFAULT_STORY_POINT_ALIASES: [(&str, &str); 5] = [
     ("XS", "2"),
@@ -129,6 +134,23 @@ impl StoryPointsConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebConfig {
+    pub port: u16,
+    pub host: String,
+    pub style: String,
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            port: DEFAULT_WEB_PORT,
+            host: DEFAULT_WEB_HOST.to_string(),
+            style: DEFAULT_WEB_STYLE.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct KanbanConfig {
     #[serde(skip_serializing)]
@@ -136,6 +158,7 @@ pub struct KanbanConfig {
     pub paths: PathsConfig,
     pub theme: ThemeConfig,
     pub story_points: StoryPointsConfig,
+    pub web: WebConfig,
 }
 
 impl KanbanConfig {
@@ -201,6 +224,11 @@ pub fn init_config(repo_root: impl AsRef<Path>) -> Result<ConfigInitResult> {
         &repo_root,
         &config_dir.join(STORY_POINTS_FILE_NAME),
         &StoryPointsConfig::default(),
+    )?);
+    created_files.extend(write_default_json_if_missing(
+        &repo_root,
+        &config_dir.join(WEB_FILE_NAME),
+        &WebConfig::default(),
     )?);
 
     Ok(ConfigInitResult {
@@ -336,12 +364,14 @@ fn load_kanban_config_from_root(repo_root: &Path) -> Result<KanbanConfig> {
         read_json_or_default::<StoryPointsConfig>(&config_dir.join(STORY_POINTS_FILE_NAME))?
             .normalize_and_validate()?;
     let theme = read_json_or_default::<ThemeConfig>(&config_dir.join(THEME_FILE_NAME))?;
+    let web = read_json_or_default::<WebConfig>(&config_dir.join(WEB_FILE_NAME))?;
 
     Ok(KanbanConfig {
         repo_root: repo_root.to_path_buf(),
         paths,
         theme,
         story_points,
+        web,
     })
 }
 
@@ -352,6 +382,7 @@ fn missing_config_error(repo_root: &Path) -> Result<KanbanConfig> {
         paths: PathsConfig::default(),
         theme: ThemeConfig::default(),
         story_points: StoryPointsConfig::default(),
+        web: WebConfig::default(),
     })
 }
 
@@ -506,5 +537,22 @@ mod tests {
             config.story_points.aliases.get("XS").map(String::as_str),
             Some("3")
         );
+    }
+
+    #[test]
+    fn init_config_creates_web_json_with_defaults() {
+        let temp_root = tempdir().unwrap();
+
+        let result = init_config(temp_root.path()).unwrap();
+
+        assert!(
+            result
+                .created_files
+                .contains(&PathBuf::from(".kanban/web.json"))
+        );
+        let config = load_kanban_config(temp_root.path()).unwrap();
+        assert_eq!(config.web.port, 3000);
+        assert_eq!(config.web.host, "127.0.0.1");
+        assert_eq!(config.web.style, "calm-light");
     }
 }
