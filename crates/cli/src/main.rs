@@ -14,7 +14,7 @@ use kanban_core::{
     doctor_repository, find_story, get_config_json, get_config_value, init_config,
     list_all_stories, list_current_sprint_stories, list_epic_ids, list_next_sprint_stories,
     list_sprint_names, list_stories_in_sprint, list_story_completion_items, list_story_ids,
-    move_story_to_status_with_assignee, rollover_sprint, set_config_value,
+    move_story_to_status_with_assignee, plan_story_into_sprint, rollover_sprint, set_config_value,
     suggested_next_sprint_dates, suggested_next_sprint_number, suggested_sprint_dates,
     summarize_current_sprint, summarize_phase, summarize_sprint, summarize_sprints,
     update_task_in_story, validate_repository,
@@ -384,6 +384,22 @@ enum StoryCommand {
         #[arg(default_value = ".")]
         repo_root: PathBuf,
     },
+    #[command(
+        about = "Plan a backlog story into a sprint. Effect: moves the backlog story (and its .tasks.md, if present) into the sprint's 01.todo folder and updates frontmatter (status=todo, sprint, activated, updated). Side effects: none beyond the file move."
+    )]
+    Plan {
+        #[arg(help = "Backlog story id to plan, for example US-F2-001.")]
+        id: String,
+        #[arg(
+            long,
+            value_name = "SPRINT",
+            help = "Target sprint folder name or Snnn prefix, for example S001.planning or S001."
+        )]
+        sprint: String,
+        #[arg(help = "Repository root to update. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -644,7 +660,8 @@ fn command_repo_root(command: &Command) -> Option<&PathBuf> {
         Command::Story { command } => match command {
             StoryCommand::Show { repo_root, .. }
             | StoryCommand::List { repo_root, .. }
-            | StoryCommand::Move { repo_root, .. } => Some(repo_root),
+            | StoryCommand::Move { repo_root, .. }
+            | StoryCommand::Plan { repo_root, .. } => Some(repo_root),
         },
         Command::Task { command } => match command {
             TaskCommand::Add { repo_root, .. } | TaskCommand::Update { repo_root, .. } => {
@@ -2331,6 +2348,27 @@ fn main() -> Result<()> {
                         theme.label("Task file:"),
                         theme.path(task_path.display())
                     );
+                }
+            }
+            StoryCommand::Plan {
+                id,
+                sprint,
+                repo_root,
+            } => {
+                let result = plan_story_into_sprint(repo_root, &id, &sprint)?;
+                println!(
+                    "{} {} -> {}",
+                    theme.success("Planned"),
+                    theme.id(&result.story_id),
+                    result.sprint_name
+                );
+                println!(
+                    "{} {}",
+                    theme.label("Story:"),
+                    theme.path(result.story_path.display())
+                );
+                if let Some(task_path) = result.task_path {
+                    println!("{} {}", theme.label("Tasks:"), theme.path(task_path.display()));
                 }
             }
         },
