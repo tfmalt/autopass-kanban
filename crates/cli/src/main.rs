@@ -1639,11 +1639,10 @@ fn sprint_status_label(end_date: &str, readme_status: Option<&str>) -> &'static 
 
 fn render_progress_bar(theme: &Theme, done: usize, total: usize, width: usize) -> String {
     let bar_width = (width / 8).clamp(8, 20);
-    let filled = if total == 0 {
-        0
-    } else {
-        done * bar_width / total
-    };
+    let filled = done
+        .checked_mul(bar_width)
+        .and_then(|value| value.checked_div(total))
+        .unwrap_or(0);
     let empty = bar_width.saturating_sub(filled);
     format!(
         "{}{}",
@@ -1740,11 +1739,10 @@ fn push_sprint_header_band(
 
     // Progress line
     let bar = render_progress_bar(theme, done_points, total_points, layout.width);
-    let pct = if total_points == 0 {
-        0
-    } else {
-        done_points * 100 / total_points
-    };
+    let pct = done_points
+        .checked_mul(100)
+        .and_then(|value| value.checked_div(total_points))
+        .unwrap_or(0);
     push_line(
         output,
         &format!(
