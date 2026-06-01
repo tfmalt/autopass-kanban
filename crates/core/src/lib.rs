@@ -854,7 +854,7 @@ pub fn move_story_to_status_with_assignee(
     let normalized_story_id = story_id.trim().to_ascii_uppercase();
     let normalized_status = normalize_story_status_input(target_status)?;
     let assignee_override = match assignee_override {
-        Some(assignee) if normalized_status != "in-progress" => {
+        Some(_) if normalized_status != "in-progress" => {
             bail!("Assignee override can only be used when moving a story to in-progress.");
         }
         Some(assignee) => Some(validate_assignee_override(assignee)?),
@@ -3544,21 +3544,24 @@ mod tests {
     #[test]
     fn read_story_file_parses_sprint_story_and_sibling_task_file() {
         let repo_root = repo_root();
-        let sprint_story_path = repo_root.join("doc/backlog/sprints/S000.getting-started/02.in-progress/US-F1-010-ci-pipeline-build-and-unit-tests.md");
+        let sprint_story_path = repo_root.join("doc/backlog/sprints/S001.scaffolding-part-1/01.todo/US-F1-010-ci-pipeline-build-and-unit-tests.md");
 
         let story = read_story_file(sprint_story_path, &repo_root).unwrap();
 
         assert_eq!(story.kind, StoryKind::Sprint);
-        assert_eq!(story.sprint_name.as_deref(), Some("S000.getting-started"));
-        assert_eq!(story.status_folder.as_deref(), Some("02.in-progress"));
-        assert_eq!(story.folder_status.as_deref(), Some("in-progress"));
+        assert_eq!(
+            story.sprint_name.as_deref(),
+            Some("S001.scaffolding-part-1")
+        );
+        assert_eq!(story.status_folder.as_deref(), Some("01.todo"));
+        assert_eq!(story.folder_status.as_deref(), Some("todo"));
         assert_eq!(
             story.frontmatter.get("id").map(String::as_str),
             Some("US-F1-010")
         );
         assert_eq!(
             story.frontmatter.get("status").map(String::as_str),
-            Some("in-progress")
+            Some("todo")
         );
 
         let task_file = story.task_file.as_ref().unwrap();
@@ -3576,9 +3579,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_story_accepts_representative_in_progress_story_fixture() {
+    fn validate_story_accepts_representative_sprint_story_fixture() {
         let repo_root = repo_root();
-        let sprint_story_path = repo_root.join("doc/backlog/sprints/S000.getting-started/02.in-progress/US-F1-010-ci-pipeline-build-and-unit-tests.md");
+        let sprint_story_path = repo_root.join("doc/backlog/sprints/S001.scaffolding-part-1/01.todo/US-F1-010-ci-pipeline-build-and-unit-tests.md");
         let story = read_story_file(sprint_story_path, &repo_root).unwrap();
 
         assert!(validate_story(&story).is_empty());
@@ -3586,9 +3589,20 @@ mod tests {
 
     #[test]
     fn validate_story_reports_invalid_timestamps_on_draft_backlog_fixture() {
-        let repo_root = repo_root();
-        let draft_story_path = repo_root.join("doc/backlog/phase-1-scaffolding/07.verification-of-technology-stack-feasability/US-F1-060-kogito-poc-for-dmn-based-rule-evaluation.md");
-        let story = read_story_file(draft_story_path, &repo_root).unwrap();
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-050-test-draft-story.md");
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-050\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28\nupdated: 2026-05-28\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(story_path, temp_root.path()).unwrap();
         let issues = validate_story(&story);
         let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
@@ -3776,6 +3790,11 @@ mod tests {
     fn list_next_sprint_stories_uses_next_numbered_sprint_after_current() {
         let temp_root = tempdir().unwrap();
         init_temp_repo(temp_root.path());
+        let today = Local::now().date_naive();
+        let current_start = today.checked_sub_days(Days::new(1)).unwrap();
+        let current_end = today.checked_add_days(Days::new(5)).unwrap();
+        let next_start = today.checked_add_days(Days::new(6)).unwrap();
+        let next_end = today.checked_add_days(Days::new(17)).unwrap();
         let sprints_root = temp_root.path().join("doc/backlog/sprints");
         let current_todo = sprints_root.join("S001.foundation/01.todo");
         let next_todo = sprints_root.join("S002.delivery/01.todo");
@@ -3788,12 +3807,24 @@ mod tests {
         fs::create_dir_all(&backlog_dir).unwrap();
         fs::write(
             sprints_root.join("S001.foundation/README.md"),
-            sprint_readme("S001", "foundation", "2026-05-18", "2026-05-29", "active"),
+            sprint_readme(
+                "S001",
+                "foundation",
+                &current_start.format("%Y-%m-%d").to_string(),
+                &current_end.format("%Y-%m-%d").to_string(),
+                "active",
+            ),
         )
         .unwrap();
         fs::write(
             sprints_root.join("S002.delivery/README.md"),
-            sprint_readme("S002", "delivery", "2026-06-01", "2026-06-12", "planned"),
+            sprint_readme(
+                "S002",
+                "delivery",
+                &next_start.format("%Y-%m-%d").to_string(),
+                &next_end.format("%Y-%m-%d").to_string(),
+                "planned",
+            ),
         )
         .unwrap();
         fs::write(
