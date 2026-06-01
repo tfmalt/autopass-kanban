@@ -8,7 +8,7 @@ These instructions apply to all files under `tools/kanban/`.
 - `crates/core` contains shared parsing, domain logic, validation, and write helpers.
 - `crates/cli` contains the `kanban` CLI and the documented `kb` alias in help/docs.
 - `crates/tui` is reserved for a terminal UI.
-- `crates/web` is reserved for a local web interface.
+- The local web interface lives in `../kanban-web` and is launched by the CLI.
 - `target/` is build output and must not be edited manually or committed.
 
 ## Development Rules

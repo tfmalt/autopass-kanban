@@ -3791,13 +3791,13 @@ mod tests {
         let temp_root = tempdir().unwrap();
         init_temp_repo(temp_root.path());
         let today = Local::now().date_naive();
-        let current_start = today.checked_sub_days(Days::new(1)).unwrap();
-        let current_end = today.checked_add_days(Days::new(5)).unwrap();
-        let next_start = today.checked_add_days(Days::new(6)).unwrap();
-        let next_end = today.checked_add_days(Days::new(17)).unwrap();
         let sprints_root = temp_root.path().join("doc/backlog/sprints");
         let current_todo = sprints_root.join("S001.foundation/01.todo");
         let next_todo = sprints_root.join("S002.delivery/01.todo");
+        let current_start = today.checked_sub_days(Days::new(1)).unwrap().to_string();
+        let current_end = today.checked_add_days(Days::new(1)).unwrap().to_string();
+        let next_start = today.checked_add_days(Days::new(2)).unwrap().to_string();
+        let next_end = today.checked_add_days(Days::new(13)).unwrap().to_string();
         let backlog_dir = temp_root
             .path()
             .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
@@ -3807,24 +3807,12 @@ mod tests {
         fs::create_dir_all(&backlog_dir).unwrap();
         fs::write(
             sprints_root.join("S001.foundation/README.md"),
-            sprint_readme(
-                "S001",
-                "foundation",
-                &current_start.format("%Y-%m-%d").to_string(),
-                &current_end.format("%Y-%m-%d").to_string(),
-                "active",
-            ),
+            sprint_readme("S001", "foundation", &current_start, &current_end, "active"),
         )
         .unwrap();
         fs::write(
             sprints_root.join("S002.delivery/README.md"),
-            sprint_readme(
-                "S002",
-                "delivery",
-                &next_start.format("%Y-%m-%d").to_string(),
-                &next_end.format("%Y-%m-%d").to_string(),
-                "planned",
-            ),
+            sprint_readme("S002", "delivery", &next_start, &next_end, "planned"),
         )
         .unwrap();
         fs::write(
