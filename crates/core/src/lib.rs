@@ -3779,6 +3779,11 @@ mod tests {
         let sprints_root = temp_root.path().join("doc/backlog/sprints");
         let current_todo = sprints_root.join("S001.foundation/01.todo");
         let next_todo = sprints_root.join("S002.delivery/01.todo");
+        let today = Local::now().date_naive();
+        let current_start = today.checked_sub_days(Days::new(1)).unwrap().to_string();
+        let current_end = today.checked_add_days(Days::new(1)).unwrap().to_string();
+        let next_start = today.checked_add_days(Days::new(2)).unwrap().to_string();
+        let next_end = today.checked_add_days(Days::new(13)).unwrap().to_string();
         let backlog_dir = temp_root
             .path()
             .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
@@ -3788,12 +3793,12 @@ mod tests {
         fs::create_dir_all(&backlog_dir).unwrap();
         fs::write(
             sprints_root.join("S001.foundation/README.md"),
-            sprint_readme("S001", "foundation", "2026-05-18", "2026-05-29", "active"),
+            sprint_readme("S001", "foundation", &current_start, &current_end, "active"),
         )
         .unwrap();
         fs::write(
             sprints_root.join("S002.delivery/README.md"),
-            sprint_readme("S002", "delivery", "2026-06-01", "2026-06-12", "planned"),
+            sprint_readme("S002", "delivery", &next_start, &next_end, "planned"),
         )
         .unwrap();
         fs::write(

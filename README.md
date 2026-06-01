@@ -65,7 +65,7 @@ placed there — the zsh-specific completion syntax will fail. The `eval` approa
 - `crates/core`: shared parsing and validation core
 - `crates/cli`: CLI interface for inspection and lightweight write flows
 - `crates/tui`: reserved for the terminal UI
-- `crates/web`: reserved for the local web interface
+- `../kanban-web`: local web interface launched by the CLI
 
 Run tests with `cargo test` from this directory.
 

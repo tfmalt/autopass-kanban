@@ -3,14 +3,13 @@ members = [
   "crates/core",
   "crates/cli",
   "crates/tui",
-  "crates/web",
 ]
 resolver = "2"
 
 [workspace.package]
 edition = "2024"
 license = "UNLICENSED"
-version = "26.5.3120"
+version = "26.6.101"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
