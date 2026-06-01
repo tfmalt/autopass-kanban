@@ -28,7 +28,7 @@ These instructions apply to all files under `tools/kanban/`.
 - Use this SemVer scheme:
   - `MAJOR` is the last two digits of the current year, for example `26` for 2026.
   - `MINOR` is the current month without a leading zero, for example `1`, `5`, or `12`.
-  - `PATCH` is the current day of month without a leading zero followed by the update count for that day. For example, the 3rd update on 5 May is `53`, and the 12th update on 29 May is `2912`.
+  - `PATCH` is the current day of month without a leading zero followed by the update count for that day, padded to two digits for counts 1 through 9. For example, the 4th update on 31 May is `3104`, the 4th update on 1 June is `104`, and the 12th update on 1 June is `112`.
 
 ## Verification
 
