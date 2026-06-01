@@ -159,6 +159,14 @@ impl Theme {
         self.paint(Style::Yellow, value)
     }
 
+    fn error(&self, value: impl std::fmt::Display) -> String {
+        self.paint(Style::Red, value)
+    }
+
+    fn command(&self, value: impl std::fmt::Display) -> String {
+        self.paint(Style::Blue, value)
+    }
+
     fn status(&self, status: &str) -> String {
         match status {
             "todo" => self.paint(Style::Muted, status),
@@ -1000,9 +1008,17 @@ fn start_web(
         .with_context(|| format!("create web runtime directory {}", paths.run_dir.display()))?;
 
     match read_web_process_state(&paths)? {
-        WebProcessState::Running(pid) => bail!(
-            "kanban web is already running with PID {pid}. Use `kanban web status` or `kanban web restart`."
-        ),
+        WebProcessState::Running(pid) => {
+            eprint!(
+                "{}",
+                render_web_already_running_error(
+                    theme,
+                    pid,
+                    detected_terminal_width().unwrap_or(DEFAULT_OUTPUT_WIDTH)
+                )
+            );
+            std::process::exit(1);
+        }
         WebProcessState::Stale(_) => remove_pid_file(&paths)?,
         WebProcessState::Stopped => {}
     }
@@ -1140,6 +1156,112 @@ fn print_web_status(theme: &Theme, repo_root: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn render_web_already_running_error(theme: &Theme, pid: u32, width: usize) -> String {
+    let icon = "✖";
+    let prefix_width = display_width(icon) + 1;
+    let content_width = width.saturating_sub(prefix_width).max(1);
+    let mut output = String::new();
+    let primary = format!("Error: kanban web is already running with PID {pid}.");
+    let guidance = [
+        InlineToken::plain("Use", false),
+        InlineToken::command("`kanban web status`", true),
+        InlineToken::plain("or", true),
+        InlineToken::command("`kanban web restart`", true),
+        InlineToken::plain(".", false),
+    ];
+
+    for (index, line) in wrap_text(&primary, content_width).iter().enumerate() {
+        if index == 0 {
+            if let Some(rest) = line.strip_prefix("Error:") {
+                push_line(
+                    &mut output,
+                    &format!("{} {}{}", theme.error(icon), theme.error("Error:"), rest),
+                );
+            } else {
+                push_line(&mut output, &format!("{} {line}", theme.error(icon)));
+            }
+        } else {
+            push_line(&mut output, &format!("{}{line}", " ".repeat(prefix_width)));
+        }
+    }
+    push_wrapped_inline_message(&mut output, theme, prefix_width, content_width, &guidance);
+
+    output
+}
+
+#[derive(Copy, Clone)]
+enum InlineStyle {
+    Plain,
+    Command,
+}
+
+struct InlineToken {
+    text: &'static str,
+    style: InlineStyle,
+    leading_space: bool,
+}
+
+impl InlineToken {
+    const fn plain(text: &'static str, leading_space: bool) -> Self {
+        Self {
+            text,
+            style: InlineStyle::Plain,
+            leading_space,
+        }
+    }
+
+    const fn command(text: &'static str, leading_space: bool) -> Self {
+        Self {
+            text,
+            style: InlineStyle::Command,
+            leading_space,
+        }
+    }
+}
+
+fn push_wrapped_inline_message(
+    output: &mut String,
+    theme: &Theme,
+    indent: usize,
+    width: usize,
+    tokens: &[InlineToken],
+) {
+    let mut lines: Vec<Vec<(InlineStyle, String)>> = Vec::new();
+    let mut current: Vec<(InlineStyle, String)> = Vec::new();
+    let mut current_width = 0;
+
+    for token in tokens {
+        let token_width = display_width(token.text);
+        let space_width = usize::from(token.leading_space && !current.is_empty());
+        if !current.is_empty() && current_width + space_width + token_width > width {
+            lines.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+
+        if token.leading_space && !current.is_empty() {
+            current.push((InlineStyle::Plain, " ".to_string()));
+            current_width += 1;
+        }
+        current.push((token.style, token.text.to_string()));
+        current_width += token_width;
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    for line in lines {
+        let mut rendered = " ".repeat(indent);
+        for (style, text) in line {
+            match style {
+                InlineStyle::Plain => rendered.push_str(&text),
+                InlineStyle::Command => rendered.push_str(&theme.command(text)),
+            }
+        }
+        push_line(output, &rendered);
+    }
 }
 
 fn print_log_tail(content: &str, lines: Option<usize>) {
@@ -3823,6 +3945,37 @@ mod tests {
             paths.log_file,
             PathBuf::from("/tmp/repo/.kanban/run/web.log")
         );
+    }
+
+    #[test]
+    fn web_already_running_error_uses_icon_and_aligned_guidance() {
+        let output = render_web_already_running_error(&Theme::plain(), 77322, 100);
+
+        assert_eq!(
+            output,
+            "✖ Error: kanban web is already running with PID 77322.\n  Use `kanban web status` or `kanban web restart`.\n"
+        );
+    }
+
+    #[test]
+    fn web_already_running_error_wraps_with_hanging_indent() {
+        let output = render_web_already_running_error(&Theme::plain(), 77322, 48);
+
+        for line in output.lines().skip(1) {
+            assert!(line.starts_with("  "), "line was not indented: {line}");
+        }
+        assert!(output.contains("\n  77322.\n"));
+        assert!(output.contains("\n  `kanban web restart`.\n"));
+    }
+
+    #[test]
+    fn web_already_running_error_uses_theme_colors_for_error_and_commands() {
+        let output = render_web_already_running_error(&Theme::color(), 77322, 100);
+
+        assert!(output.contains("\x1b[1;31m✖\x1b[0m"));
+        assert!(output.contains("\x1b[1;31mError:\x1b[0m"));
+        assert!(output.contains("\x1b[1;34m`kanban web status`\x1b[0m"));
+        assert!(output.contains("\x1b[1;34m`kanban web restart`\x1b[0m"));
     }
 
     #[test]
