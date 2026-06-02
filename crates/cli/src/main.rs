@@ -1,5 +1,6 @@
 use std::fs::{self, OpenOptions};
-use std::io::{IsTerminal, Read, Seek, SeekFrom, Write};
+use std::io::{ErrorKind, IsTerminal, Read, Seek, SeekFrom, Write};
+use std::net::TcpListener;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -827,6 +828,18 @@ struct WebStartCommandSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct WebPortResolution {
+    requested: u16,
+    actual: u16,
+}
+
+impl WebPortResolution {
+    fn changed(&self) -> bool {
+        self.requested != self.actual
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum WebProcessState {
     Stopped,
     Running(u32),
@@ -893,6 +906,27 @@ fn process_from_spec(spec: &WebStartCommandSpec) -> ProcessCommand {
     let mut command = ProcessCommand::new(&spec.program);
     command.args(&spec.args).current_dir(&spec.cwd);
     command
+}
+
+fn resolve_web_port(host: &str, requested: u16) -> Result<WebPortResolution> {
+    for port in requested..=u16::MAX {
+        match TcpListener::bind((host, port)) {
+            Ok(listener) => {
+                drop(listener);
+                return Ok(WebPortResolution {
+                    requested,
+                    actual: port,
+                });
+            }
+            Err(error) if error.kind() == ErrorKind::AddrInUse => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("check whether {host}:{port} is available"));
+            }
+        }
+    }
+
+    bail!("No available port found at or above {requested} on {host}.")
 }
 
 fn read_web_process_state(paths: &WebRuntimePaths) -> Result<WebProcessState> {
@@ -1034,7 +1068,15 @@ fn start_web(
         );
     }
 
-    let url = format!("http://{}:{}", config.web.host, config.web.port);
+    let port = resolve_web_port(&config.web.host, config.web.port)?;
+    if port.changed() {
+        println!(
+            "{}",
+            render_web_port_fallback_warning(theme, &config.web.host, port.requested, port.actual)
+        );
+    }
+
+    let url = format!("http://{}:{}", config.web.host, port.actual);
     let spec = build_web_start_command_spec(&repo_root, dev);
     if foreground {
         println!("{} {url}", theme.success("Starting kanban web UI:"));
@@ -1042,6 +1084,7 @@ fn start_web(
             eprintln!("{} {error}", theme.warning("Could not open browser:"));
         }
         let status = process_from_spec(&spec)
+            .env("KANBAN_WEB_PORT", port.actual.to_string())
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -1063,6 +1106,7 @@ fn start_web(
         .with_context(|| format!("clone web log handle {}", paths.log_file.display()))?;
     let mut command = process_from_spec(&spec);
     command
+        .env("KANBAN_WEB_PORT", port.actual.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr));
@@ -1189,6 +1233,22 @@ fn render_web_already_running_error(theme: &Theme, pid: u32, width: usize) -> St
     push_wrapped_inline_message(&mut output, theme, prefix_width, content_width, &guidance);
 
     output
+}
+
+fn render_web_port_fallback_warning(
+    theme: &Theme,
+    host: &str,
+    requested_port: u16,
+    actual_port: u16,
+) -> String {
+    format!(
+        "{} another service is already using http://{}:{}; starting kanban web UI on http://{}:{} instead.",
+        theme.warning("Warning:"),
+        host,
+        requested_port,
+        host,
+        actual_port
+    )
 }
 
 #[derive(Copy, Clone)]
@@ -3974,6 +4034,16 @@ mod tests {
         assert!(output.contains("\x1b[1;31mError:\x1b[0m"));
         assert!(output.contains("\x1b[1;34m`kanban web status`\x1b[0m"));
         assert!(output.contains("\x1b[1;34m`kanban web restart`\x1b[0m"));
+    }
+
+    #[test]
+    fn web_port_fallback_warning_reports_actual_url() {
+        let output = render_web_port_fallback_warning(&Theme::plain(), "127.0.0.1", 3000, 3001);
+
+        assert_eq!(
+            output,
+            "Warning: another service is already using http://127.0.0.1:3000; starting kanban web UI on http://127.0.0.1:3001 instead."
+        );
     }
 
     #[test]
