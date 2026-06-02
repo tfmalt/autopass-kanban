@@ -168,6 +168,10 @@ impl Theme {
         self.paint(Style::Blue, value)
     }
 
+    fn highlight(&self, value: impl std::fmt::Display) -> String {
+        self.paint(Style::Purple, value)
+    }
+
     fn status(&self, status: &str) -> String {
         match status {
             "todo" => self.paint(Style::Muted, status),
@@ -2117,9 +2121,61 @@ fn print_doctor_findings(theme: &Theme, findings: &[DoctorFinding]) {
             "{} [{}] {}",
             finding.scope,
             theme.severity(&finding.severity),
-            finding.message
+            highlight_frontmatter_tokens(theme, &finding.message)
         );
     }
+}
+
+fn highlight_frontmatter_tokens(theme: &Theme, text: &str) -> String {
+    let mut output = String::new();
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch != '`' && ch != '"' {
+            output.push(ch);
+            continue;
+        }
+
+        let delimiter = ch;
+        let mut token = String::new();
+        for next in chars.by_ref() {
+            if next == delimiter {
+                break;
+            }
+            token.push(next);
+        }
+        output.push(delimiter);
+        output.push_str(&theme.highlight(token));
+        output.push(delimiter);
+    }
+
+    output
+}
+
+fn format_doctor_rule(theme: &Theme, rule: &str) -> String {
+    if let Some((prefix, field_name)) = rule.rsplit_once(':') {
+        format!("{prefix}:{}", theme.highlight(field_name))
+    } else {
+        rule.to_string()
+    }
+}
+
+fn format_doctor_fix_preview(theme: &Theme, issue: &DoctorIssue) -> String {
+    let Some(preview) = &issue.fix_preview else {
+        return highlight_frontmatter_tokens(theme, &issue.suggestion);
+    };
+
+    let old_value = if preview.old_value.is_empty() {
+        "<empty>"
+    } else {
+        &preview.old_value
+    };
+    format!(
+        "{}: {} -> {}",
+        theme.highlight(&preview.field_name),
+        theme.highlight(old_value),
+        theme.highlight(&preview.new_value)
+    )
 }
 
 fn print_doctor_issue(theme: &Theme, index: usize, total: usize, issue: &DoctorIssue) {
@@ -2134,7 +2190,11 @@ fn print_doctor_issue(theme: &Theme, index: usize, total: usize, issue: &DoctorI
         theme.label("Severity:"),
         theme.severity(&issue.severity)
     );
-    println!("{} {}", theme.label("Rule:"), issue.rule);
+    println!(
+        "{} {}",
+        theme.label("Rule:"),
+        format_doctor_rule(theme, &issue.rule)
+    );
     println!("{} {}", theme.label("Scope:"), issue.scope);
     if let Some(story_id) = &issue.story_id {
         println!("{} {}", theme.label("Story:"), theme.id(story_id));
@@ -2142,8 +2202,16 @@ fn print_doctor_issue(theme: &Theme, index: usize, total: usize, issue: &DoctorI
     if let Some(path) = &issue.file_path {
         println!("{} {}", theme.label("File:"), theme.path(path.display()));
     }
-    println!("{} {}", theme.label("Problem:"), issue.message);
-    println!("{} {}", theme.label("Suggested fix:"), issue.suggestion);
+    println!(
+        "{} {}",
+        theme.label("Problem:"),
+        highlight_frontmatter_tokens(theme, &issue.message)
+    );
+    println!(
+        "{} {}",
+        theme.label("Suggested fix:"),
+        format_doctor_fix_preview(theme, issue)
+    );
 }
 
 fn resolve_doctor_fix_issues(
@@ -2157,19 +2225,36 @@ fn resolve_doctor_fix_issues(
     }
 }
 
+fn doctor_issue_allows_edit(issue: &DoctorIssue) -> bool {
+    !matches!(issue.fix_kind, DoctorFixKind::ManualOnly)
+        && (issue.fix_preview.is_some() || !matches!(issue.prompt, DoctorPrompt::None))
+}
+
 fn prompt_doctor_fix_action(issue: &DoctorIssue) -> Result<String> {
     loop {
-        let input = prompt("Apply fix? [y]es / [s]kip / [q]uit: ")?;
+        let input = if matches!(issue.fix_kind, DoctorFixKind::ManualOnly) {
+            prompt("Apply fix? [s]kip / [q]uit: ")?
+        } else if doctor_issue_allows_edit(issue) {
+            prompt("Apply fix? [y]es / [e]dit / [s]kip / [q]uit: ")?
+        } else {
+            prompt("Apply fix? [y]es / [s]kip / [q]uit: ")?
+        };
         let normalized = if input.trim().is_empty() {
             "y".to_string()
         } else {
             input.trim().to_ascii_lowercase()
         };
         match normalized.as_str() {
-            "y" | "yes" | "s" | "skip" | "q" | "quit" => return Ok(normalized),
+            "y" | "yes" if !matches!(issue.fix_kind, DoctorFixKind::ManualOnly) => {
+                return Ok(normalized);
+            }
+            "e" | "edit" if doctor_issue_allows_edit(issue) => return Ok(normalized),
+            "s" | "skip" | "q" | "quit" => return Ok(normalized),
             _ => {
                 if matches!(issue.fix_kind, DoctorFixKind::ManualOnly) {
                     println!("Enter skip or quit.");
+                } else if doctor_issue_allows_edit(issue) {
+                    println!("Enter yes, edit, skip, or quit.");
                 } else {
                     println!("Enter yes, skip, or quit.");
                 }
@@ -2208,6 +2293,16 @@ fn collect_doctor_fix_input(issue: &DoctorIssue) -> Result<DoctorFixInput> {
     Ok(DoctorFixInput { value })
 }
 
+fn collect_doctor_edit_input(issue: &DoctorIssue) -> Result<DoctorFixInput> {
+    if let Some(preview) = &issue.fix_preview {
+        let value =
+            prompt_with_default(&format!("{} value", preview.field_name), &preview.new_value)?;
+        return Ok(DoctorFixInput { value: Some(value) });
+    }
+
+    collect_doctor_fix_input(issue)
+}
+
 fn run_doctor_fix_wizard(theme: &Theme, repo_root: &PathBuf, target: Option<&str>) -> Result<()> {
     let mut issues = resolve_doctor_fix_issues(repo_root, target)?;
     if issues.is_empty() {
@@ -2234,6 +2329,22 @@ fn run_doctor_fix_wizard(theme: &Theme, repo_root: &PathBuf, target: Option<&str
             }
             "s" | "skip" => {
                 index += 1;
+            }
+            "e" | "edit" => {
+                let input = collect_doctor_edit_input(&issue)?;
+                let result = apply_doctor_fix(repo_root, &issue, &input)?;
+                println!("{} {}", theme.success("Applied:"), result.message);
+                for path in result.touched_paths {
+                    println!("{} {}", theme.label("Updated:"), theme.path(path.display()));
+                }
+                issues = resolve_doctor_fix_issues(repo_root, target)?;
+                if issues.is_empty() {
+                    println!(
+                        "{}",
+                        theme.success("All scoped doctor findings are resolved.")
+                    );
+                    return Ok(());
+                }
             }
             _ => {
                 if matches!(issue.fix_kind, DoctorFixKind::ManualOnly) {
@@ -3372,6 +3483,46 @@ mod tests {
 
         assert!(styled.contains("\x1b["));
         assert!(styled.contains("in-progress"));
+    }
+
+    #[test]
+    fn doctor_fix_preview_renders_key_old_and_new_values() {
+        let theme = Theme::plain();
+        let issue = DoctorIssue {
+            severity: "info".to_string(),
+            scope: "story.md".to_string(),
+            file_path: None,
+            story_id: None,
+            sprint_name: None,
+            rule: "invalid-timestamp:updated".to_string(),
+            message: String::new(),
+            suggestion: String::new(),
+            fix_preview: Some(kanban_core::DoctorFixPreview {
+                field_name: "updated".to_string(),
+                old_value: "2026-05-31".to_string(),
+                new_value: "2026-05-31T00:00:00+0200".to_string(),
+            }),
+            fix_kind: DoctorFixKind::Automatic,
+            prompt: DoctorPrompt::None,
+        };
+
+        assert_eq!(
+            format_doctor_fix_preview(&theme, &issue),
+            "updated: 2026-05-31 -> 2026-05-31T00:00:00+0200"
+        );
+    }
+
+    #[test]
+    fn doctor_frontmatter_tokens_are_highlighted_with_color_theme() {
+        let theme = Theme::color();
+        let highlighted = highlight_frontmatter_tokens(
+            &theme,
+            "Frontmatter field \"updated\" must replace `2026-05-31`.",
+        );
+
+        assert!(highlighted.contains("\x1b["));
+        assert!(highlighted.contains("updated"));
+        assert!(highlighted.contains("2026-05-31"));
     }
 
     #[test]

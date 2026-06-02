@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{Datelike, Days, Local, NaiveDate, Weekday};
+use chrono::{Datelike, Days, Local, NaiveDate, TimeZone, Weekday};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
@@ -280,6 +280,13 @@ pub enum DoctorPrompt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoctorFixPreview {
+    pub field_name: String,
+    pub old_value: String,
+    pub new_value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoctorIssue {
     pub severity: String,
     pub scope: String,
@@ -289,6 +296,7 @@ pub struct DoctorIssue {
     pub rule: String,
     pub message: String,
     pub suggestion: String,
+    pub fix_preview: Option<DoctorFixPreview>,
     pub fix_kind: DoctorFixKind,
     pub prompt: DoctorPrompt,
 }
@@ -1517,7 +1525,7 @@ pub fn apply_doctor_fix(
             })
         }
         "missing-work-started" => {
-            let timestamp = doctor_timestamp_input(input)?;
+            let timestamp = doctor_timestamp_input_with_preview(issue, input)?;
             upsert_story_frontmatter_file(
                 &absolute_path,
                 &[("work_started", Some(timestamp.clone()))],
@@ -1528,7 +1536,7 @@ pub fn apply_doctor_fix(
             })
         }
         "missing-work-done" => {
-            let timestamp = doctor_timestamp_input(input)?;
+            let timestamp = doctor_timestamp_input_with_preview(issue, input)?;
             upsert_story_frontmatter_file(
                 &absolute_path,
                 &[("work_done", Some(timestamp.clone()))],
@@ -1540,38 +1548,66 @@ pub fn apply_doctor_fix(
         }
         rule if rule.starts_with("invalid-timestamp:") => {
             let field_name = rule.trim_start_matches("invalid-timestamp:");
-            let timestamp = doctor_timestamp_input(input)?;
+            let date_only_timestamp =
+                date_only_timestamp_from_issue_or_file(issue, input, &absolute_path, field_name)?;
+            let corrected_date_only = date_only_timestamp.is_some();
+            let timestamp = date_only_timestamp.unwrap_or(doctor_timestamp_input(input)?);
             upsert_story_frontmatter_file(
                 &absolute_path,
                 &[(field_name, Some(timestamp.clone()))],
             )?;
             Ok(DoctorFixResult {
-                message: format!("Set {field_name} to {timestamp}."),
+                message: if corrected_date_only {
+                    format!(
+                        "INFO: Corrected {field_name} to date-only midnight timestamp {timestamp}."
+                    )
+                } else {
+                    format!("Set {field_name} to {timestamp}.")
+                },
                 touched_paths: vec![file_path.clone()],
             })
         }
         "status-folder-mismatch" => {
             let story = read_story_file(&absolute_path, &repo_root)?;
-            let folder_status = story.folder_status.ok_or_else(|| {
-                anyhow!(
-                    "Cannot infer sprint folder status for {}",
-                    file_path.display()
-                )
-            })?;
-            upsert_story_frontmatter_file(
-                &absolute_path,
-                &[("status", Some(folder_status.clone()))],
-            )?;
+            let status = if let Some(value) = input.value.as_deref() {
+                normalize_story_status_input(value)?
+            } else {
+                issue
+                    .fix_preview
+                    .as_ref()
+                    .map(|preview| preview.new_value.clone())
+                    .or(story.folder_status)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Cannot infer sprint folder status for {}",
+                            file_path.display()
+                        )
+                    })?
+            };
+            upsert_story_frontmatter_file(&absolute_path, &[("status", Some(status.clone()))])?;
             Ok(DoctorFixResult {
-                message: format!("Aligned status to sprint folder status {folder_status}."),
+                message: format!("Aligned status to {status}."),
                 touched_paths: vec![file_path.clone()],
             })
         }
         "sprint-name-mismatch" => {
             let story = read_story_file(&absolute_path, &repo_root)?;
-            let sprint_name = story
-                .sprint_name
-                .ok_or_else(|| anyhow!("Cannot infer sprint name for {}", file_path.display()))?;
+            let sprint_name = if let Some(value) = input.value.as_ref() {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    bail!("Sprint name cannot be empty.");
+                }
+                trimmed.to_string()
+            } else {
+                issue
+                    .fix_preview
+                    .as_ref()
+                    .map(|preview| preview.new_value.clone())
+                    .or(story.sprint_name)
+                    .ok_or_else(|| {
+                        anyhow!("Cannot infer sprint name for {}", file_path.display())
+                    })?
+            };
             upsert_story_frontmatter_file(
                 &absolute_path,
                 &[("sprint", Some(sprint_name.clone()))],
@@ -1626,9 +1662,22 @@ pub fn apply_doctor_fix(
                 .ok_or_else(|| {
                     anyhow!("Cannot determine sprint folder for {}", file_path.display())
                 })?;
-            let sprint_id = parse_sprint_folder_name(&folder_name)
-                .map(|(sprint_id, _)| sprint_id)
-                .ok_or_else(|| anyhow!("Invalid sprint folder name: {folder_name}"))?;
+            let sprint_id = if let Some(value) = input.value.as_ref() {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    bail!("Sprint README sprint field cannot be empty.");
+                }
+                trimmed.to_string()
+            } else {
+                issue
+                    .fix_preview
+                    .as_ref()
+                    .map(|preview| preview.new_value.clone())
+                    .or_else(|| {
+                        parse_sprint_folder_name(&folder_name).map(|(sprint_id, _)| sprint_id)
+                    })
+                    .ok_or_else(|| anyhow!("Invalid sprint folder name: {folder_name}"))?
+            };
             upsert_story_frontmatter_file(&absolute_path, &[("sprint", Some(sprint_id.clone()))])?;
             Ok(DoctorFixResult {
                 message: format!("Aligned sprint README sprint field to {sprint_id}."),
@@ -1643,9 +1692,22 @@ pub fn apply_doctor_fix(
                 .ok_or_else(|| {
                     anyhow!("Cannot determine sprint folder for {}", file_path.display())
                 })?;
-            let headline = parse_sprint_folder_name(&folder_name)
-                .map(|(_, headline)| headline)
-                .ok_or_else(|| anyhow!("Invalid sprint folder name: {folder_name}"))?;
+            let headline = if let Some(value) = input.value.as_ref() {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    bail!("Sprint README headline field cannot be empty.");
+                }
+                trimmed.to_string()
+            } else {
+                issue
+                    .fix_preview
+                    .as_ref()
+                    .map(|preview| preview.new_value.clone())
+                    .or_else(|| {
+                        parse_sprint_folder_name(&folder_name).map(|(_, headline)| headline)
+                    })
+                    .ok_or_else(|| anyhow!("Invalid sprint folder name: {folder_name}"))?
+            };
             upsert_story_frontmatter_file(&absolute_path, &[("headline", Some(headline.clone()))])?;
             Ok(DoctorFixResult {
                 message: format!("Aligned sprint README headline to {headline}."),
@@ -1737,6 +1799,7 @@ fn collect_doctor_issues_at_date(
                 today.format("%Y-%m-%d")
             ),
             suggestion: "Select the sprint that should be current and update its README dates or status.".to_string(),
+            fix_preview: None,
             fix_kind: DoctorFixKind::ManualOnly,
             prompt: DoctorPrompt::None,
         });
@@ -1760,6 +1823,7 @@ fn collect_doctor_issues_at_date(
                     .join(", ")
             ),
             suggestion: "Choose which sprint should stay current, then update the other sprint README dates so only one range includes today.".to_string(),
+            fix_preview: None,
             fix_kind: DoctorFixKind::ManualOnly,
             prompt: DoctorPrompt::None,
         });
@@ -1782,8 +1846,14 @@ fn doctor_issue_from_validation(
     issue: &ValidationIssue,
 ) -> DoctorIssue {
     let (suggestion, fix_kind, prompt) = doctor_suggestion_for_validation(repo_root, story, issue);
+    let fix_preview = doctor_fix_preview_for_validation(repo_root, story, issue);
+    let severity = if date_only_timestamp_issue(story, issue) {
+        "info"
+    } else {
+        "error"
+    };
     DoctorIssue {
-        severity: "error".to_string(),
+        severity: severity.to_string(),
         scope: issue.file_path.display().to_string(),
         file_path: Some(issue.file_path.clone()),
         story_id: story.and_then(|story| story.frontmatter.get("id").cloned()),
@@ -1791,9 +1861,68 @@ fn doctor_issue_from_validation(
         rule: issue.rule.clone(),
         message: format!("[{}] {}", issue.rule, issue.message),
         suggestion,
+        fix_preview,
         fix_kind,
         prompt,
     }
+}
+
+fn doctor_fix_preview_for_validation(
+    repo_root: &Path,
+    story: Option<&Story>,
+    issue: &ValidationIssue,
+) -> Option<DoctorFixPreview> {
+    let story = story?;
+    match issue.rule.as_str() {
+        "missing-field:assignee" => {
+            frontmatter_fix_preview(story, "assignee", current_git_assignee(repo_root).ok()?)
+        }
+        "missing-work-started" => {
+            frontmatter_fix_preview(story, "work_started", current_timestamp_string())
+        }
+        "missing-work-done" => {
+            frontmatter_fix_preview(story, "work_done", current_timestamp_string())
+        }
+        rule if rule.starts_with("invalid-timestamp:") => {
+            let field_name = rule.trim_start_matches("invalid-timestamp:");
+            let old_value = story.frontmatter.get(field_name)?;
+            let new_value = date_only_timestamp(old_value).unwrap_or_else(current_timestamp_string);
+            frontmatter_fix_preview(story, field_name, new_value)
+        }
+        "status-folder-mismatch" => {
+            frontmatter_fix_preview(story, "status", story.folder_status.clone()?)
+        }
+        "sprint-name-mismatch" => {
+            frontmatter_fix_preview(story, "sprint", story.sprint_name.clone()?)
+        }
+        _ => None,
+    }
+}
+
+fn frontmatter_fix_preview(
+    story: &Story,
+    field_name: &str,
+    new_value: String,
+) -> Option<DoctorFixPreview> {
+    Some(DoctorFixPreview {
+        field_name: field_name.to_string(),
+        old_value: story
+            .frontmatter
+            .get(field_name)
+            .cloned()
+            .unwrap_or_default(),
+        new_value,
+    })
+}
+
+fn date_only_timestamp_issue(story: Option<&Story>, issue: &ValidationIssue) -> bool {
+    let Some(field_name) = issue.rule.strip_prefix("invalid-timestamp:") else {
+        return false;
+    };
+    story
+        .and_then(|story| story.frontmatter.get(field_name))
+        .and_then(|value| date_only_timestamp(value))
+        .is_some()
 }
 
 fn doctor_suggestion_for_validation(
@@ -1822,14 +1951,28 @@ fn doctor_suggestion_for_validation(
         ),
         rule if rule.starts_with("invalid-timestamp:") => {
             let field_name = rule.trim_start_matches("invalid-timestamp:");
-            (
-                format!("Replace `{field_name}` with a valid local ISO 8601 timestamp."),
-                DoctorFixKind::Guided,
-                DoctorPrompt::Text {
-                    label: format!("{field_name} timestamp"),
-                    default: Some(current_timestamp_string()),
-                },
-            )
+            if story
+                .and_then(|story| story.frontmatter.get(field_name))
+                .and_then(|value| date_only_timestamp(value))
+                .is_some()
+            {
+                (
+                    format!(
+                        "Normalize `{field_name}` from `YYYY-MM-DD` to local midnight timestamp."
+                    ),
+                    DoctorFixKind::Automatic,
+                    DoctorPrompt::None,
+                )
+            } else {
+                (
+                    format!("Replace `{field_name}` with a valid local ISO 8601 timestamp."),
+                    DoctorFixKind::Guided,
+                    DoctorPrompt::Text {
+                        label: format!("{field_name} timestamp"),
+                        default: Some(current_timestamp_string()),
+                    },
+                )
+            }
         }
         "status-folder-mismatch" => (
             "Align the story `status` field to the current sprint folder.".to_string(),
@@ -2399,6 +2542,11 @@ fn doctor_findings_for_sprint(
                 other.unwrap_or("missing")
             ),
             suggestion: "Set the sprint README status to active.".to_string(),
+            fix_preview: Some(DoctorFixPreview {
+                field_name: "status".to_string(),
+                old_value: other.unwrap_or_default().to_string(),
+                new_value: "active".to_string(),
+            }),
             fix_kind: DoctorFixKind::Automatic,
             prompt: DoctorPrompt::None,
         }),
@@ -2416,6 +2564,11 @@ fn doctor_findings_for_sprint(
                 spec.end_date.format("%Y-%m-%d")
             ),
             suggestion: "Set the sprint README status to planned or closed, or update the date range.".to_string(),
+            fix_preview: Some(DoctorFixPreview {
+                field_name: "status".to_string(),
+                old_value: "active".to_string(),
+                new_value: "planned".to_string(),
+            }),
             fix_kind: DoctorFixKind::Guided,
             prompt: DoctorPrompt::Choice {
                 label: "Sprint README status".to_string(),
@@ -2906,12 +3059,55 @@ fn upsert_story_frontmatter_file(
 
 fn doctor_timestamp_input(input: &DoctorFixInput) -> Result<String> {
     let timestamp = input.value.clone().unwrap_or_else(current_timestamp_string);
+    validate_doctor_timestamp(&timestamp)?;
+    Ok(timestamp)
+}
+
+fn doctor_timestamp_input_with_preview(
+    issue: &DoctorIssue,
+    input: &DoctorFixInput,
+) -> Result<String> {
+    let timestamp = input
+        .value
+        .clone()
+        .or_else(|| {
+            issue
+                .fix_preview
+                .as_ref()
+                .map(|preview| preview.new_value.clone())
+        })
+        .unwrap_or_else(current_timestamp_string);
+    validate_doctor_timestamp(&timestamp)?;
+    Ok(timestamp)
+}
+
+fn validate_doctor_timestamp(timestamp: &str) -> Result<()> {
     let timestamp_pattern = Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}$")
         .expect("valid timestamp regex");
-    if !timestamp_pattern.is_match(&timestamp) {
+    if !timestamp_pattern.is_match(timestamp) {
         bail!("Enter a timestamp as local ISO 8601 with numeric timezone offset.");
     }
-    Ok(timestamp)
+    Ok(())
+}
+
+fn date_only_timestamp_from_issue_or_file(
+    issue: &DoctorIssue,
+    input: &DoctorFixInput,
+    file_path: &Path,
+    field_name: &str,
+) -> Result<Option<String>> {
+    if input.value.is_some() {
+        return Ok(None);
+    }
+
+    if let Some(preview) = &issue.fix_preview
+        && preview.field_name == field_name
+        && date_only_timestamp(&preview.old_value).is_some()
+    {
+        return Ok(Some(preview.new_value.clone()));
+    }
+
+    date_only_timestamp_from_file(file_path, field_name)
 }
 
 fn doctor_prompt_for_readme_field(story: Option<&Story>, field_name: &str) -> DoctorPrompt {
@@ -3210,6 +3406,23 @@ fn replace_markdown_section(markdown: &str, heading: &str, new_content: &str) ->
 
 fn parse_markdown_date(value: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(value.trim_matches('`').trim(), "%Y-%m-%d").ok()
+}
+
+fn date_only_timestamp(value: &str) -> Option<String> {
+    let date = parse_markdown_date(value)?;
+    let midnight = date.and_hms_opt(0, 0, 0)?;
+    let local_midnight = Local.from_local_datetime(&midnight).earliest()?;
+    Some(local_midnight.format("%Y-%m-%dT%H:%M:%S%z").to_string())
+}
+
+fn date_only_timestamp_from_file(file_path: &Path, field_name: &str) -> Result<Option<String>> {
+    let markdown = fs::read_to_string(file_path)
+        .with_context(|| format!("read story file {}", file_path.display()))?;
+    let parsed = parse_frontmatter(&markdown);
+    Ok(parsed
+        .frontmatter
+        .get(field_name)
+        .and_then(|value| date_only_timestamp(value)))
 }
 
 fn date_in_range(today: NaiveDate, start_date: NaiveDate, end_date: NaiveDate) -> bool {
@@ -3609,6 +3822,55 @@ mod tests {
         assert!(!rules.contains(&"missing-field:assignee"));
         assert!(rules.contains(&"invalid-timestamp:created"));
         assert!(rules.contains(&"invalid-timestamp:updated"));
+    }
+
+    #[test]
+    fn doctor_fix_normalizes_date_only_timestamp_as_info() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        fs::create_dir_all(temp_root.path().join("doc/backlog/sprints")).unwrap();
+        let story_path = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-050-test-draft-story.md");
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-050\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-31\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let issue = collect_doctor_issues_for_story(temp_root.path(), "US-F1-050")
+            .unwrap()
+            .into_iter()
+            .find(|issue| issue.rule == "invalid-timestamp:updated")
+            .unwrap();
+
+        assert_eq!(issue.severity, "info");
+        assert_eq!(issue.fix_kind, DoctorFixKind::Automatic);
+        assert_eq!(issue.prompt, DoctorPrompt::None);
+        assert_eq!(
+            issue.fix_preview,
+            Some(DoctorFixPreview {
+                field_name: "updated".to_string(),
+                old_value: "2026-05-31".to_string(),
+                new_value: date_only_timestamp("2026-05-31").unwrap(),
+            })
+        );
+
+        let result =
+            apply_doctor_fix(temp_root.path(), &issue, &DoctorFixInput::default()).unwrap();
+        let expected_timestamp = date_only_timestamp("2026-05-31").unwrap();
+        let updated = fs::read_to_string(&story_path).unwrap();
+
+        assert!(result.message.contains("INFO"));
+        assert!(updated.contains(&format!("updated: {expected_timestamp}")));
+        assert!(
+            collect_doctor_issues_for_story(temp_root.path(), "US-F1-050")
+                .unwrap()
+                .into_iter()
+                .all(|issue| issue.rule != "invalid-timestamp:updated")
+        );
     }
 
     #[test]
