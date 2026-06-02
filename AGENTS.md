@@ -19,7 +19,7 @@ These instructions apply to all files under `tools/kanban/`.
 - Keep command behavior deterministic and safe for human-edited markdown files.
 - Do not silently rewrite unrelated frontmatter, prose, ordering, or formatting in backlog documents.
 - Use full local ISO 8601 timestamps with numeric timezone offset when writing backlog lifecycle fields.
-- Avoid adding new CLI command names, status names, or file layout conventions without checking `doc/backlog/README.md` and the relevant backlog-board workflow.
+- Avoid adding new CLI command names, status names, or file layout conventions without checking `delivery/backlog/README.md` and the relevant backlog-board workflow.
 
 ## Versioning
 
