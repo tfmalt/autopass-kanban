@@ -408,7 +408,8 @@ fn sprint_create_help_explains_non_interactive_flags() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
-    assert!(stdout.contains("at least one of --number/--headline/--start/--end is supplied"));
+    assert!(stdout.contains("at least one of"));
+    assert!(stdout.contains("--number/--headline/--start/--end is supplied"));
     assert!(stdout.contains("Non-interactive behavior:"));
     assert!(stdout.contains("`--headline` is required whenever flags are used"));
     assert!(stdout.contains("kanban sprint create --non-interactive --headline foundation"));
@@ -452,7 +453,9 @@ fn unsupported_completion_shell_fails_clearly() {
 #[test]
 fn hidden_story_completion_listing_includes_ids_and_titles() {
     let temp_root = tempdir().expect("temp repo should be created");
-    let backlog_dir = temp_root.path().join("doc/backlog/phase-1-test/01.demo");
+    let backlog_dir = temp_root
+        .path()
+        .join("delivery/backlog/phase-1-test/01.demo");
     std::fs::create_dir_all(&backlog_dir).expect("backlog dir should exist");
     std::fs::write(
         backlog_dir.join("US-F1-010-ci-pipeline-build-and-unit-tests.md"),
@@ -540,13 +543,15 @@ fn sprint_commands_use_theme_config_from_target_repo_root() {
     let set_output = kanban(&["config", "set", "theme.color_mode", "always", &repo_root]);
     assert!(set_output.status.success());
 
-    let sprint_root = temp_root.path().join("doc/backlog/sprints/S001.foundation");
+    let backlog_root = temp_root.path().join("delivery/backlog");
+    std::fs::create_dir_all(&backlog_root).expect("backlog root should exist");
+    let sprint_root = temp_root.path().join("delivery/sprints");
     std::fs::create_dir_all(&sprint_root).expect("sprint dir should exist");
     std::fs::write(
-        sprint_root.join("README.md"),
+        sprint_root.join("S001.foundation.md"),
         "---\nsprint: S001\nheadline: foundation\nstart_date: 2099-06-01\nend_date: 2099-06-12\nstatus: planned\nwip_limit: null\n---\n\n# S001: foundation\n",
     )
-    .expect("sprint readme should be written");
+    .expect("sprint file should be written");
 
     let outside_root = tempdir().expect("outside dir should be created");
     let output = Command::new(env!("CARGO_BIN_EXE_kanban"))

@@ -14,8 +14,8 @@ use clap::builder::styling::{AnsiColor, Effects, Style as ClapStyle, Styles};
 use clap::{ArgGroup, CommandFactory, Parser, Subcommand, ValueEnum};
 use kanban_core::{
     ColorMode, CreateSprintInput, DoctorFinding, DoctorFixInput, DoctorFixKind, DoctorIssue,
-    DoctorPrompt, PhaseOverview, RolloverResult, SprintOverview, StoryDetails, StoryKind,
-    StoryOverview, TaskSummary, add_task_to_story, apply_doctor_fix, collect_doctor_issues,
+    DoctorPrompt, PhaseOverview, RolloverResult, SprintOverview, StoryDetails, StoryOverview,
+    TaskSummary, add_task_to_story, apply_doctor_fix, collect_doctor_issues,
     collect_doctor_issues_for_current_sprint, collect_doctor_issues_for_story, create_sprint,
     doctor_repository, find_story, get_config_json, get_config_value, init_config,
     list_all_stories, list_current_sprint_stories, list_epic_ids, list_next_sprint_stories,
@@ -23,7 +23,7 @@ use kanban_core::{
     load_kanban_config, move_story_to_status_with_assignee, plan_story_into_sprint,
     rollover_sprint, set_config_value, suggested_next_sprint_dates, suggested_next_sprint_number,
     suggested_sprint_dates, summarize_current_sprint, summarize_phase, summarize_sprint,
-    summarize_sprints, update_task_in_story, validate_repository,
+    summarize_sprints, sync_sprint_rosters, update_task_in_story, validate_repository,
 };
 
 const MIN_TERMINAL_WIDTH: usize = 80;
@@ -272,7 +272,7 @@ struct Args {
 #[derive(Subcommand)]
 enum SprintCommand {
     #[command(
-        about = "Show the current sprint. Effect: read-only inspection of sprint folders and README metadata. Side effects: none."
+        about = "Show the current sprint. Effect: read-only inspection of sprint files and metadata. Side effects: none."
     )]
     Current {
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
@@ -280,7 +280,7 @@ enum SprintCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "List sprint folders. Effect: read-only inspection of the configured sprint path from `.kanban/paths.json`. Side effects: none."
+        about = "List sprint files. Effect: read-only inspection of the configured sprint path from `.kanban/paths.json`. Side effects: none."
     )]
     List {
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
@@ -288,18 +288,18 @@ enum SprintCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Show one sprint summary. Effect: read-only inspection of the selected sprint folder, stories, tasks, and README. Side effects: none."
+        about = "Show one sprint summary. Effect: read-only inspection of the selected sprint file and frontmatter-derived stories/tasks. Side effects: none."
     )]
     Show {
-        #[arg(help = "Sprint folder name to inspect, for example S001.foundation.")]
+        #[arg(help = "Sprint name to inspect, for example S001.foundation.")]
         name: String,
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
         #[arg(default_value = ".")]
         repo_root: PathBuf,
     },
     #[command(
-        about = "Create a sprint folder. Effect: writes a sprint README and status folders under the configured sprint path from `.kanban/paths.json`. Side effects: prompts for metadata unless --non-interactive or at least one of --number/--headline/--start/--end is supplied.",
-        long_about = "Create a sprint folder. Effect: writes a sprint README and status folders under the configured sprint path from `.kanban/paths.json`. Side effects: prompts for metadata unless --non-interactive or at least one of --number/--headline/--start/--end is supplied.\n\nNon-interactive behavior:\n  `--headline` is required whenever flags are used to build the sprint without prompts.\n  `--number` defaults to the next suggested sprint number.\n  `--start` defaults to the suggested next start date, or today if no sprint history exists.\n  `--end` defaults to the suggested next end date, or a derived end date from the chosen start date.\n\nExample:\n  kanban sprint create --non-interactive --headline foundation --start 2026-06-01 --end 2026-06-12"
+        about = "Create a sprint file. Effect: writes one S###.slug.md file under the configured sprint path from `.kanban/paths.json`. Side effects: prompts for metadata unless --non-interactive or at least one of --number/--headline/--start/--end is supplied.",
+        long_about = "Create a sprint file. Effect: writes one S###.slug.md file under the configured sprint path from `.kanban/paths.json`. Side effects: prompts for metadata unless --non-interactive or at least one of --number/--headline/--start/--end is supplied.\n\nNon-interactive behavior:\n  `--headline` is required whenever flags are used to build the sprint without prompts.\n  `--number` defaults to the next suggested sprint number.\n  `--start` defaults to the suggested next start date, or today if no sprint history exists.\n  `--end` defaults to the suggested next end date, or a derived end date from the chosen start date.\n\nExample:\n  kanban sprint create --non-interactive --headline foundation --start 2026-06-01 --end 2026-06-12"
     )]
     Create {
         #[arg(
@@ -336,11 +336,19 @@ enum SprintCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Roll unfinished work into the next sprint. Effect: moves unfinished sprint story/task files and updates the closed sprint README. Side effects: may create the next sprint folder."
+        about = "Roll unfinished work into the next sprint. Effect: updates story sprint frontmatter and the closed sprint file. Side effects: may create the next sprint file."
     )]
     Rollover {
-        #[arg(help = "Sprint folder name to close and roll over.")]
+        #[arg(help = "Sprint name to close and roll over.")]
         name: String,
+        #[arg(help = "Repository root to update. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        about = "Regenerate generated story rosters in all sprint files. Effect: rewrites only generated ## Stories blocks."
+    )]
+    Sync {
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
         #[arg(default_value = ".")]
         repo_root: PathBuf,
@@ -364,7 +372,7 @@ enum PhaseCommand {
 #[derive(Subcommand)]
 enum StoryCommand {
     #[command(
-        about = "Show one story. Effect: read-only inspection of the preferred sprint copy or backlog story plus acceptance criteria and tasks. Side effects: none."
+        about = "Show one story. Effect: read-only inspection of the canonical story file plus acceptance criteria and tasks. Side effects: none."
     )]
     Show {
         #[arg(help = "Story id to inspect, for example US-F1-053.")]
@@ -374,7 +382,7 @@ enum StoryCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "List stories. Effect: read-only inspection of sprint folders and/or backlog stories. Side effects: none."
+        about = "List stories. Effect: read-only inspection of canonical story files across backlog phases and sprint assignments. Side effects: none."
     )]
     #[command(group(
         ArgGroup::new("scope")
@@ -384,7 +392,7 @@ enum StoryCommand {
     List {
         #[arg(long, help = "List stories in the current or active sprint.")]
         current: bool,
-        #[arg(long, help = "List all stories across backlog and sprint copies.")]
+        #[arg(long, help = "List all stories across the configured backlog root.")]
         all: bool,
         #[arg(
             long,
@@ -394,7 +402,7 @@ enum StoryCommand {
         #[arg(
             long,
             value_name = "ID",
-            help = "List stories in the specified sprint folder, for example S001.foundation."
+            help = "List stories assigned to the specified sprint, for example S001.foundation."
         )]
         sprint: Option<String>,
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
@@ -402,10 +410,10 @@ enum StoryCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Move a sprint story to another status. Effect: moves the story and task file between sprint status folders and updates frontmatter. Side effects: in-progress sets assignee/work_started; done refreshes work_done."
+        about = "Move a story to another status. Effect: updates the canonical story frontmatter and regenerates the sprint roster. Side effects: in-progress sets assignee/work_started; done refreshes work_done."
     )]
     Move {
-        #[arg(help = "Sprint story id to move, for example US-F1-053.")]
+        #[arg(help = "Story id to move, for example US-F1-053.")]
         id: String,
         #[arg(
             help = "Target status, for example todo, in-progress, ready-for-qa, done, or blocked."
@@ -423,7 +431,7 @@ enum StoryCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Plan a backlog story into a sprint. Effect: moves the backlog story (and its .tasks.md, if present) into the sprint's 01.todo folder and updates frontmatter (status=todo, sprint, activated, updated). Side effects: none beyond the file move."
+        about = "Plan a backlog story into a sprint. Effect: updates the canonical story frontmatter (status=todo, sprint, activated, updated) and regenerates the sprint roster. Side effects: none beyond those markdown updates."
     )]
     Plan {
         #[arg(help = "Backlog story id to plan, for example US-F2-001.")]
@@ -431,7 +439,7 @@ enum StoryCommand {
         #[arg(
             long,
             value_name = "SPRINT",
-            help = "Target sprint folder name or Snnn prefix, for example S001.planning or S001."
+            help = "Target sprint name or Snnn prefix, for example S001.planning or S001."
         )]
         sprint: String,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
@@ -685,7 +693,7 @@ enum Command {
         command: ConfigCommand,
     },
     #[command(
-        about = "Inspect and maintain sprint folders. Effects depend on subcommand; write subcommands state their markdown side effects."
+        about = "Inspect and maintain sprint files. Effects depend on subcommand; write subcommands state their markdown side effects."
     )]
     Sprint {
         #[command(subcommand)]
@@ -699,7 +707,7 @@ enum Command {
         command: PhaseCommand,
     },
     #[command(
-        about = "Inspect or move user stories. Effects depend on subcommand; move mutates sprint/backlog markdown frontmatter and file placement."
+        about = "Inspect or move user stories. Effects depend on subcommand; write operations mutate canonical story frontmatter and sprint roster markdown."
     )]
     Story {
         #[command(subcommand)]
@@ -774,7 +782,8 @@ fn command_repo_root(command: &Command) -> Option<&PathBuf> {
             | SprintCommand::List { repo_root }
             | SprintCommand::Show { repo_root, .. }
             | SprintCommand::Create { repo_root, .. }
-            | SprintCommand::Rollover { repo_root, .. } => Some(repo_root),
+            | SprintCommand::Rollover { repo_root, .. }
+            | SprintCommand::Sync { repo_root } => Some(repo_root),
         },
         Command::Phase { command } => match command {
             PhaseCommand::Show { repo_root, .. } => Some(repo_root),
@@ -2021,14 +2030,8 @@ fn render_story_list(theme: &Theme, scope: &str, stories: &[StoryOverview]) -> S
 }
 
 fn print_story_details(theme: &Theme, details: &StoryDetails) {
-    let kind = match details.story.kind {
-        StoryKind::Backlog => "backlog",
-        StoryKind::Sprint => "sprint",
-    };
-
     println!("{} {}", theme.label("Story:"), theme.id(&details.story.id));
     println!("{} {}", theme.label("Title:"), details.story.title);
-    println!("{} {kind}", theme.label("Kind:"));
     println!(
         "{} {}",
         theme.label("Status:"),
@@ -2048,13 +2051,6 @@ fn print_story_details(theme: &Theme, details: &StoryDetails) {
 
     if let Some(sprint) = &details.story.sprint {
         println!("{} {sprint}", theme.label("Sprint:"));
-    }
-    if let Some(source_path) = &details.source_story_path {
-        println!(
-            "{} {}",
-            theme.label("Source story:"),
-            theme.path(source_path.display())
-        );
     }
     if let Some(task_file_path) = &details.task_file_path {
         println!(
@@ -2473,12 +2469,12 @@ fn enhance_zsh_completion(script: &str) -> String {
     let enhanced = script
         // Sprint name arguments
         .replace(
-            "':name -- Sprint folder name to inspect, for example S001.foundation.:_default'",
-            "':name -- Sprint folder name to inspect, for example S001.foundation.:_kanban_sprint_names'",
+            "':name -- Sprint name to inspect, for example S001.foundation.:_default'",
+            "':name -- Sprint name to inspect, for example S001.foundation.:_kanban_sprint_names'",
         )
         .replace(
-            "':name -- Sprint folder name to close and roll over.:_default'",
-            "':name -- Sprint folder name to close and roll over.:_kanban_sprint_names'",
+            "':name -- Sprint name to close and roll over.:_default'",
+            "':name -- Sprint name to close and roll over.:_kanban_sprint_names'",
         )
         // Story ID arguments (story show, story move, task add, task update)
         .replace(
@@ -3213,6 +3209,17 @@ fn main() -> Result<()> {
                 let result = rollover_sprint(&repo_root, &name, next_input.as_ref())?;
                 print_rollover_result(&theme, &result);
             }
+            SprintCommand::Sync { repo_root } => {
+                let changed = sync_sprint_rosters(repo_root)?;
+                if changed.is_empty() {
+                    println!("{}", theme.success("Sprint rosters already up to date."));
+                } else {
+                    println!("{}", theme.success("Regenerated sprint rosters:"));
+                    for sprint in changed {
+                        println!("- {}", theme.id(sprint));
+                    }
+                }
+            }
         },
         Command::Phase { command } => match command {
             PhaseCommand::Show { phase, repo_root } => {
@@ -3538,8 +3545,7 @@ mod tests {
                 assignee: "Ada Lovelace <ada@example.test>".to_string(),
                 story_points: "3".to_string(),
                 sprint: Some("S999.test".to_string()),
-                kind: StoryKind::Sprint,
-                relative_path: PathBuf::from("doc/backlog/sprints/S999.test/02.in-progress/US-F1-999.md"),
+                relative_path: PathBuf::from("delivery/backlog/phase-9-test/US-F1-999.md"),
                 task_summary: Some(TaskSummary {
                     todo: 1,
                     in_progress: 2,
@@ -3557,7 +3563,7 @@ mod tests {
             ),
             start_date: "2026-05-29".to_string(),
             end_date: "2026-06-12".to_string(),
-            readme_path: PathBuf::from("doc/backlog/sprints/S999.test/README.md"),
+            readme_path: PathBuf::from("delivery/sprints/S999.test.md"),
             readme_status: Some("active".to_string()),
             stories_by_status,
             blocked_work: vec![kanban_core::BlockedWorkItem {
@@ -3601,7 +3607,7 @@ mod tests {
             sprint_goal: None,
             start_date: "2026-06-01".to_string(),
             end_date: "2026-06-30".to_string(),
-            readme_path: PathBuf::from("doc/backlog/sprints/S001.foundation/README.md"),
+            readme_path: PathBuf::from("delivery/sprints/S001.foundation.md"),
             readme_status: Some("active".to_string()),
             stories_by_status: BTreeMap::new(),
             blocked_work: vec![],
@@ -3648,8 +3654,7 @@ mod tests {
                 assignee: "TBD".to_string(),
                 story_points: "8".to_string(),
                 sprint: Some("S001.test".to_string()),
-                kind: StoryKind::Sprint,
-                relative_path: PathBuf::from("04.done/US-F1-001.md"),
+                relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-001.md"),
                 task_summary: None,
                 task_count: 0,
             }],
@@ -3663,8 +3668,7 @@ mod tests {
                 assignee: "TBD".to_string(),
                 story_points: "2".to_string(),
                 sprint: Some("S001.test".to_string()),
-                kind: StoryKind::Sprint,
-                relative_path: PathBuf::from("01.todo/US-F1-002.md"),
+                relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-002.md"),
                 task_summary: None,
                 task_count: 0,
             }],
@@ -3741,8 +3745,7 @@ mod tests {
                 assignee: "Someone <s@example.com>".to_string(),
                 story_points: "3".to_string(),
                 sprint: Some("S001.test".to_string()),
-                kind: StoryKind::Sprint,
-                relative_path: PathBuf::from("02.in-progress/US-F1-002.md"),
+                relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-002.md"),
                 task_summary: None,
                 task_count: 0,
             }],
@@ -3781,8 +3784,7 @@ mod tests {
                 assignee: "Someone <s@example.com>".to_string(),
                 story_points: "2".to_string(),
                 sprint: Some("S001.test".to_string()),
-                kind: StoryKind::Sprint,
-                relative_path: PathBuf::from("04.done/US-F1-001.md"),
+                relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-001.md"),
                 task_summary: None,
                 task_count: 0,
             }],
@@ -3849,8 +3851,7 @@ mod tests {
                 assignee: "Someone <s@example.com>".to_string(),
                 story_points: "3".to_string(),
                 sprint: Some("S001.test".to_string()),
-                kind: StoryKind::Sprint,
-                relative_path: PathBuf::from("02.in-progress/US-F1-002.md"),
+                relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-002.md"),
                 task_summary: None,
                 task_count: 0,
             }],
@@ -3951,9 +3952,8 @@ mod tests {
             assignee: "Ada Lovelace <ada@example.test>".to_string(),
             story_points: "3".to_string(),
             sprint: Some("S000.getting-started".to_string()),
-            kind: StoryKind::Sprint,
             relative_path: PathBuf::from(
-                "doc/backlog/sprints/S000.getting-started/02.in-progress/US-F1-010.md",
+                "delivery/backlog/phase-1-scaffolding/01.some-epic/US-F1-010.md",
             ),
             task_summary: None,
             task_count: 0,

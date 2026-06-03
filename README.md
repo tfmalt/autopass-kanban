@@ -16,9 +16,12 @@ Implemented commands:
 - `kanban sprint show <name> [repo_root]`
 - `kanban sprint create [--number <n>] [--headline <slug>] [--start <yyyy-mm-dd>] [--end <yyyy-mm-dd>] [--non-interactive] [repo_root]`
 - `kanban sprint rollover <name> [repo_root]`
+- `kanban sprint sync [repo_root]`
 - `kanban phase show <phase> [repo_root]`
 - `kanban story show <id> [repo_root]`
+- `kanban story list [--current|--all|--next|--sprint <id>] [repo_root]`
 - `kanban story move <id> <status> [-a|--assignee "Name <email>"] [repo_root]`
+- `kanban story plan <id> --sprint <sprint> [repo_root]`
 - `kanban task add <story_id> --title <title> --description <text> [--status <status>] [--tags <a,b>] [repo_root]`
 - `kanban task update <story_id> <task_id> [--title <title>] [--description <text>] [--status <status>] [--tags <a,b>] [repo_root]`
 - `kanban completion bash`
@@ -32,7 +35,7 @@ Implemented commands:
 
 Run `kanban init` once per repository. This creates `.kanban/` in the git root with:
 
-- `paths.json` for backlog and sprint folder locations
+- `paths.json` for backlog and sprint file locations, defaulting to `delivery/backlog` and `delivery/sprints`
 - `theme.json` for terminal color behavior
 - `story-points.json` for allowed values and alias conversion
 
