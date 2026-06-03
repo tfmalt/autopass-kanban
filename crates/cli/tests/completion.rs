@@ -298,7 +298,7 @@ fn bash_completion_does_not_treat_sprint_create_option_values_as_files() {
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     assert!(stdout.contains("kanban__subcmd__sprint__subcmd__create"));
     assert!(stdout.contains(
-        "opts=\"-h --number --headline --start --end --non-interactive --help [REPO_ROOT]\""
+        "opts=\"-h --number --headline --start --end --non-interactive --format --help [REPO_ROOT]\""
     ));
     assert!(stdout.contains("COMPREPLY=( $(compgen -W \"YYYY-MM-DD\" -- \"${cur}\") )"));
     assert!(
@@ -364,13 +364,16 @@ fn bash_completion_includes_web_subcommands_and_flags() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     assert!(stdout.contains("kanban__subcmd__web)"));
-    assert!(stdout.contains("opts=\"-h --help start stop restart status log help\""));
+    assert!(stdout.contains("opts=\"-h --format --help start stop restart status log help\""));
     assert!(stdout.contains("kanban__subcmd__web__subcmd__start)"));
-    assert!(stdout.contains("opts=\"-h --foreground --open --dev --build --help [REPO_ROOT]\""));
+    assert!(
+        stdout
+            .contains("opts=\"-h --foreground --open --dev --build --format --help [REPO_ROOT]\"")
+    );
     assert!(stdout.contains("kanban__subcmd__web__subcmd__restart)"));
-    assert!(stdout.contains("opts=\"-h --open --dev --build --help [REPO_ROOT]\""));
+    assert!(stdout.contains("opts=\"-h --open --dev --build --format --help [REPO_ROOT]\""));
     assert!(stdout.contains("kanban__subcmd__web__subcmd__log)"));
-    assert!(stdout.contains("opts=\"-f -h --lines --follow --help [REPO_ROOT]\""));
+    assert!(stdout.contains("opts=\"-f -h --lines --follow --format --help [REPO_ROOT]\""));
 }
 
 #[test]
@@ -529,7 +532,7 @@ fn bare_kanban_with_config_prints_version_before_help() {
     );
     assert!(stdout.contains("Markdown-first kanban tooling"));
     assert!(stdout.contains("Usage:"));
-    assert!(stdout.contains("kanban <COMMAND>"));
+    assert!(stdout.contains("kanban [OPTIONS] <COMMAND>") || stdout.contains("kanban <COMMAND>"));
 }
 
 #[test]

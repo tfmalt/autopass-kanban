@@ -77,3 +77,35 @@ Run tests with `cargo test` from this directory.
 Human-readable commands use semantic ANSI color when stdout is an interactive
 terminal. Color is disabled automatically for pipes, `NO_COLOR`, and `TERM=dumb`
 so command output remains safe for scripts and review notes.
+
+## JSON output
+
+Pass `--format json` (before the subcommand) to switch any command to
+machine-readable mode. The flag is supported on all read commands (`story show`,
+`story list`, `sprint current`, `sprint list`, `sprint show`, `phase show`,
+`config show`, `config get`), on the write commands (`story move`, `story plan`,
+`task add`, `task update`, `sprint create`, `sprint rollover`, `sprint sync`),
+and on `validate` and `doctor`.
+
+Every invocation in JSON mode emits a single envelope on stdout:
+
+```json
+{ "status": "ok", "kind": "story.show", "schema_version": 1, "data": { }, "error": null }
+```
+
+Fields:
+
+| Field | Values | Meaning |
+|---|---|---|
+| `status` | `ok` \| `warning` \| `error` | Outcome of the command |
+| `kind` | string, e.g. `story.list` | Identifies the response shape |
+| `schema_version` | `1` | Envelope version — increment on breaking changes |
+| `data` | object or array | Command-specific payload (null on error) |
+| `error` | string or null | Error message when `status` is `error` |
+
+Exit codes match status: `ok` → 0, `warning` → 2, `error` → 1. `warning` is
+used when `validate` or `doctor` finish successfully but find issues. Human
+output remains the default when `--format` is omitted.
+
+Full per-command schema documentation:
+`docs/superpowers/specs/2026-06-03-kanban-json-output-design.md` (repo-root-relative).

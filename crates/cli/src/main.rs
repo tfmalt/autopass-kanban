@@ -14,19 +14,24 @@ use chrono::NaiveDate;
 use clap::builder::styling::{AnsiColor, Effects, Style as ClapStyle, Styles};
 use clap::{ArgGroup, CommandFactory, Parser, Subcommand, ValueEnum};
 use kanban_core::{
-    ColorMode, CreateSprintInput, DoctorFinding, DoctorFixInput, DoctorFixKind, DoctorIssue,
-    DoctorPrompt, PhaseOverview, RolloverResult, SprintOverview, StoryDetails, StoryOverview,
-    TaskSummary, add_task_to_story, apply_doctor_fix, collect_doctor_issues,
-    collect_doctor_issues_for_current_sprint, collect_doctor_issues_for_story, create_sprint,
-    doctor_repository, find_story, get_config_json, get_config_value, init_config,
-    list_all_stories, list_current_sprint_stories, list_epic_ids, list_next_sprint_stories,
-    list_sprint_names, list_stories_in_sprint, list_story_completion_items, list_story_ids,
-    load_kanban_config, move_story_to_status_with_assignee, plan_story_into_sprint,
-    rollover_sprint, set_config_value, suggested_next_sprint_dates, suggested_next_sprint_number,
-    suggested_sprint_dates, summarize_current_sprint, summarize_phase, summarize_sprint,
-    summarize_sprints, sync_sprint_rosters, update_task_in_story, validate_repository,
+    ColorMode, ConfigGetDto, CreateSprintInput, DoctorDto, DoctorFinding, DoctorFixInput,
+    DoctorFixKind, DoctorIssue, DoctorPrompt, JsonEnvelope, KanbanErrorBody, KanbanErrorCode,
+    MoveStoryDto, NoData, PhaseOverview, PhaseShowDto, PlanStoryDto, RolloverResult,
+    SprintCreateDto, SprintListDto, SprintOverview, SprintOverviewDto, SprintRolloverDto,
+    SprintSyncDto, StoryDetails, StoryListDto, StoryOverview, StoryShowDto, TaskMutationDto,
+    TaskSummary, ValidateDto, add_task_to_story, apply_doctor_fix, collect_doctor_issues,
+    collect_doctor_issues_for_current_sprint, collect_doctor_issues_for_story, config_show_value,
+    create_sprint, doctor_repository, find_story, find_story_with_source, get_config_json,
+    get_config_value, init_config, list_all_stories, list_current_sprint_stories, list_epic_ids,
+    list_next_sprint_stories, list_sprint_names, list_stories_in_sprint,
+    list_story_completion_items, list_story_ids, load_kanban_config,
+    move_story_to_status_with_assignee, plan_story_into_sprint, read_story_file, rollover_sprint,
+    set_config_value, story_markdown_file, suggested_next_sprint_dates,
+    suggested_next_sprint_number, suggested_sprint_dates, summarize_current_sprint,
+    summarize_phase, summarize_sprint, summarize_sprints, sync_sprint_rosters,
+    update_story_frontmatter, update_task_in_story, validate_repository,
 };
-use kanban_core::{read_story_file, story_markdown_file, update_story_frontmatter};
+use serde::Serialize;
 
 const MIN_TERMINAL_WIDTH: usize = 80;
 const DEFAULT_OUTPUT_WIDTH: usize = 100;
@@ -271,6 +276,14 @@ fn terminal_width_from_stdout() -> Option<usize> {
     long_about = "Markdown-first kanban tooling for the AutoPASS IP 2.0 backlog. Commands state whether they are read-only or which markdown files they mutate."
 )]
 struct Args {
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value = "human",
+        help = "Output format. `json` emits a single machine-readable envelope; human output is the default."
+    )]
+    format: OutputFormat,
     #[command(subcommand)]
     command: Command,
 }
@@ -586,6 +599,13 @@ enum ListIdsKind {
     Epics,
 }
 
+/// Output format for the `--format` global flag.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum OutputFormat {
+    Human,
+    Json,
+}
+
 #[derive(Subcommand)]
 enum ConfigCommand {
     #[command(
@@ -870,6 +890,455 @@ fn theme_for_command(command: &Command) -> Theme {
         })
         .unwrap_or(ColorMode::Auto);
     Theme::for_stdout(color_mode)
+}
+
+/// Serialize a `JsonEnvelope` to stdout and return its exit code.
+fn print_envelope<T: Serialize>(env: &JsonEnvelope<T>) -> i32 {
+    match serde_json::to_string_pretty(env) {
+        Ok(json) => {
+            println!("{json}");
+            env.exit_code()
+        }
+        Err(_) => {
+            let fallback = r#"{"status":"error","kind":"unknown","schema_version":1,"data":null,"error":{"code":"internal","message":"JSON serialization failed","details":null}}"#;
+            println!("{fallback}");
+            1
+        }
+    }
+}
+
+/// Dispatch the JSON output path for a supported command.
+fn emit_json(command: &Command) -> i32 {
+    match command {
+        Command::Config {
+            command: ConfigCommand::Get { key, repo_root },
+        } => match get_config_value(repo_root, key) {
+            Ok(value) => {
+                let env = JsonEnvelope::ok(
+                    "config.get",
+                    ConfigGetDto {
+                        key: key.clone(),
+                        value,
+                    },
+                );
+                print_envelope(&env)
+            }
+            Err(error) => {
+                let env: JsonEnvelope<ConfigGetDto> = JsonEnvelope::error(
+                    "config.get",
+                    KanbanErrorBody::new(KanbanErrorCode::ConfigKeyNotFound, error.to_string()),
+                );
+                print_envelope(&env)
+            }
+        },
+        Command::Story {
+            command: StoryCommand::Show { id, repo_root },
+        } => match find_story_with_source(repo_root, id) {
+            Ok(Some((details, source))) => {
+                let dto = StoryShowDto::from_details_and_source(&details, &source);
+                print_envelope(&JsonEnvelope::ok("story.show", dto))
+            }
+            Ok(None) => {
+                let body = KanbanErrorBody::new(
+                    KanbanErrorCode::StoryNotFound,
+                    format!("No story matches id '{id}'"),
+                );
+                print_envelope(&JsonEnvelope::<StoryShowDto>::error("story.show", body))
+            }
+            Err(error) => print_envelope(&JsonEnvelope::<StoryShowDto>::error(
+                "story.show",
+                KanbanErrorBody::from_anyhow(&error),
+            )),
+        },
+        Command::Story {
+            command:
+                StoryCommand::List {
+                    all,
+                    next,
+                    sprint,
+                    repo_root,
+                    ..
+                },
+        } => {
+            // Resolve scope label and story list; current/next return (name, stories) tuples.
+            let list_result: Result<(String, Vec<StoryOverview>), _> = if *all {
+                list_all_stories(repo_root).map(|stories| ("all".to_string(), stories))
+            } else if *next {
+                list_next_sprint_stories(repo_root)
+                    .map(|(_name, stories)| ("next".to_string(), stories))
+            } else if let Some(sprint_id) = sprint {
+                list_stories_in_sprint(repo_root, sprint_id)
+                    .map(|stories| (format!("sprint:{sprint_id}"), stories))
+            } else {
+                list_current_sprint_stories(repo_root)
+                    .map(|(_name, stories)| ("current".to_string(), stories))
+            };
+            match list_result {
+                Ok((scope, stories)) => {
+                    let env = JsonEnvelope::ok("story.list", StoryListDto::new(scope, &stories));
+                    print_envelope(&env)
+                }
+                Err(e) => {
+                    let env: JsonEnvelope<StoryListDto> =
+                        JsonEnvelope::error("story.list", KanbanErrorBody::from_anyhow(&e));
+                    print_envelope(&env)
+                }
+            }
+        }
+        Command::Sprint {
+            command: SprintCommand::Current { repo_root },
+        } => match summarize_current_sprint(repo_root) {
+            Ok(overview) => print_envelope(&JsonEnvelope::ok(
+                "sprint.current",
+                SprintOverviewDto::from_overview(&overview),
+            )),
+            Err(error) => print_envelope(&JsonEnvelope::<SprintOverviewDto>::error(
+                "sprint.current",
+                KanbanErrorBody::new(KanbanErrorCode::SprintNotFound, error.to_string()),
+            )),
+        },
+        Command::Sprint {
+            command: SprintCommand::Show { name, repo_root },
+        } => match summarize_sprint(repo_root, name) {
+            Ok(overview) => print_envelope(&JsonEnvelope::ok(
+                "sprint.show",
+                SprintOverviewDto::from_overview(&overview),
+            )),
+            Err(error) => print_envelope(&JsonEnvelope::<SprintOverviewDto>::error(
+                "sprint.show",
+                KanbanErrorBody::new(KanbanErrorCode::SprintNotFound, error.to_string()),
+            )),
+        },
+        Command::Sprint {
+            command: SprintCommand::List { repo_root },
+        } => match summarize_sprints(repo_root) {
+            Ok(sprints) => {
+                let current = summarize_current_sprint(repo_root)
+                    .ok()
+                    .map(|c| c.sprint_name);
+                let dto = SprintListDto::new(&sprints, current.as_deref());
+                print_envelope(&JsonEnvelope::ok("sprint.list", dto))
+            }
+            Err(e) => print_envelope(&JsonEnvelope::<SprintListDto>::error(
+                "sprint.list",
+                KanbanErrorBody::from_anyhow(&e),
+            )),
+        },
+        Command::Phase {
+            command: PhaseCommand::Show { phase, repo_root },
+        } => match summarize_phase(repo_root, phase) {
+            Ok(overview) => print_envelope(&JsonEnvelope::ok(
+                "phase.show",
+                PhaseShowDto::from_overview(&overview),
+            )),
+            Err(error) => print_envelope(&JsonEnvelope::<PhaseShowDto>::error(
+                "phase.show",
+                KanbanErrorBody::new(KanbanErrorCode::PhaseNotFound, error.to_string()),
+            )),
+        },
+        Command::Config {
+            command: ConfigCommand::Show { repo_root },
+        } => match get_config_json(repo_root)
+            .and_then(|s| config_show_value(&s).map_err(|e| anyhow::anyhow!(e)))
+        {
+            Ok(value) => print_envelope(&JsonEnvelope::ok("config.show", value)),
+            Err(error) => print_envelope(&JsonEnvelope::<serde_json::Value>::error(
+                "config.show",
+                KanbanErrorBody::from_anyhow(&error),
+            )),
+        },
+        Command::Validate { repo_root } => match validate_repository(repo_root) {
+            Ok(report) => {
+                let dto = ValidateDto::from_report(&report, &report.repo_root);
+                let env = if dto.valid {
+                    JsonEnvelope::ok("validate", dto)
+                } else {
+                    JsonEnvelope::warning("validate", dto)
+                };
+                print_envelope(&env)
+            }
+            Err(error) => print_envelope(&JsonEnvelope::<ValidateDto>::error(
+                "validate",
+                KanbanErrorBody::from_anyhow(&error),
+            )),
+        },
+        Command::Doctor {
+            command: DoctorCommand::Show { repo_root },
+        } => match doctor_repository(repo_root) {
+            Ok(findings) => {
+                let dto = DoctorDto::from_findings(&findings);
+                let env = if dto.healthy {
+                    JsonEnvelope::ok("doctor", dto)
+                } else {
+                    JsonEnvelope::warning("doctor", dto)
+                };
+                print_envelope(&env)
+            }
+            Err(error) => print_envelope(&JsonEnvelope::<DoctorDto>::error(
+                "doctor",
+                KanbanErrorBody::from_anyhow(&error),
+            )),
+        },
+        Command::Story {
+            command:
+                StoryCommand::Move {
+                    id,
+                    status,
+                    assignee,
+                    repo_root,
+                },
+        } => {
+            let root = match load_kanban_config(repo_root) {
+                Ok(c) => c.repo_root,
+                Err(e) => {
+                    return print_envelope(&JsonEnvelope::<MoveStoryDto>::error(
+                        "story.move",
+                        KanbanErrorBody::new(KanbanErrorCode::NotInitialized, e.to_string()),
+                    ));
+                }
+            };
+            match move_story_to_status_with_assignee(&root, id, status, assignee.as_deref()) {
+                Ok(result) => print_envelope(&JsonEnvelope::ok(
+                    "story.move",
+                    MoveStoryDto::from_result(&result, &root),
+                )),
+                Err(e) => {
+                    let body = if e.to_string().to_lowercase().contains("status") {
+                        KanbanErrorBody::new(KanbanErrorCode::InvalidStatus, e.to_string())
+                    } else {
+                        KanbanErrorBody::from_anyhow(&e)
+                    };
+                    print_envelope(&JsonEnvelope::<MoveStoryDto>::error("story.move", body))
+                }
+            }
+        }
+        Command::Story {
+            command:
+                StoryCommand::Plan {
+                    id,
+                    sprint,
+                    repo_root,
+                },
+        } => {
+            let root = match load_kanban_config(repo_root) {
+                Ok(c) => c.repo_root,
+                Err(e) => {
+                    return print_envelope(&JsonEnvelope::<PlanStoryDto>::error(
+                        "story.plan",
+                        KanbanErrorBody::new(KanbanErrorCode::NotInitialized, e.to_string()),
+                    ));
+                }
+            };
+            match plan_story_into_sprint(&root, id, sprint) {
+                Ok(result) => print_envelope(&JsonEnvelope::ok(
+                    "story.plan",
+                    PlanStoryDto::from_result(&result, &root),
+                )),
+                Err(e) => print_envelope(&JsonEnvelope::<PlanStoryDto>::error(
+                    "story.plan",
+                    KanbanErrorBody::from_anyhow(&e),
+                )),
+            }
+        }
+        Command::Task {
+            command:
+                TaskCommand::Add {
+                    story_id,
+                    title,
+                    status,
+                    tags,
+                    description,
+                    repo_root,
+                },
+        } => {
+            let root = match load_kanban_config(repo_root) {
+                Ok(c) => c.repo_root,
+                Err(e) => {
+                    return print_envelope(&JsonEnvelope::<TaskMutationDto>::error(
+                        "task.add",
+                        KanbanErrorBody::new(KanbanErrorCode::NotInitialized, e.to_string()),
+                    ));
+                }
+            };
+            match add_task_to_story(&root, story_id, title, status, tags, description) {
+                Ok(result) => print_envelope(&JsonEnvelope::ok(
+                    "task.add",
+                    TaskMutationDto::from_result(&result, &root),
+                )),
+                Err(e) => print_envelope(&JsonEnvelope::<TaskMutationDto>::error(
+                    "task.add",
+                    KanbanErrorBody::from_anyhow(&e),
+                )),
+            }
+        }
+        Command::Task {
+            command:
+                TaskCommand::Update {
+                    story_id,
+                    task_id,
+                    title,
+                    status,
+                    tags,
+                    description,
+                    repo_root,
+                },
+        } => {
+            let root = match load_kanban_config(repo_root) {
+                Ok(c) => c.repo_root,
+                Err(e) => {
+                    return print_envelope(&JsonEnvelope::<TaskMutationDto>::error(
+                        "task.update",
+                        KanbanErrorBody::new(KanbanErrorCode::NotInitialized, e.to_string()),
+                    ));
+                }
+            };
+            match update_task_in_story(
+                &root,
+                story_id,
+                task_id,
+                status.as_deref(),
+                title.as_deref(),
+                tags.as_deref(),
+                description.as_deref(),
+            ) {
+                Ok(result) => print_envelope(&JsonEnvelope::ok(
+                    "task.update",
+                    TaskMutationDto::from_result(&result, &root),
+                )),
+                Err(e) => print_envelope(&JsonEnvelope::<TaskMutationDto>::error(
+                    "task.update",
+                    KanbanErrorBody::from_anyhow(&e),
+                )),
+            }
+        }
+        Command::Sprint {
+            command:
+                SprintCommand::Create {
+                    number,
+                    headline,
+                    start,
+                    end,
+                    non_interactive,
+                    repo_root,
+                },
+        } => {
+            let any_flag =
+                number.is_some() || headline.is_some() || start.is_some() || end.is_some();
+            if !non_interactive && !any_flag {
+                return print_envelope(&JsonEnvelope::<SprintCreateDto>::error(
+                    "sprint.create",
+                    KanbanErrorBody::new(
+                        KanbanErrorCode::InvalidArgument,
+                        "sprint create in --format json requires --headline (and other fields); interactive prompts are unavailable",
+                    ),
+                ));
+            }
+            let root = match load_kanban_config(repo_root) {
+                Ok(c) => c.repo_root,
+                Err(e) => {
+                    return print_envelope(&JsonEnvelope::<SprintCreateDto>::error(
+                        "sprint.create",
+                        KanbanErrorBody::new(KanbanErrorCode::NotInitialized, e.to_string()),
+                    ));
+                }
+            };
+            let headline_val = match headline {
+                Some(h) => h,
+                None => {
+                    return print_envelope(&JsonEnvelope::<SprintCreateDto>::error(
+                        "sprint.create",
+                        KanbanErrorBody::new(
+                            KanbanErrorCode::InvalidArgument,
+                            "--headline is required when creating a sprint non-interactively.",
+                        ),
+                    ));
+                }
+            };
+            let build_input = || -> anyhow::Result<CreateSprintInput> {
+                let number_val = match number {
+                    Some(v) => *v,
+                    None => suggested_next_sprint_number(&root)?,
+                };
+                let repo_suggestion = suggested_next_sprint_dates(&root)?;
+                let today = chrono::Local::now().date_naive();
+                let start_date = match start {
+                    Some(v) => NaiveDate::parse_from_str(v.trim(), "%Y-%m-%d")
+                        .map_err(|_| anyhow::anyhow!("--start must be a date as YYYY-MM-DD."))?,
+                    None => repo_suggestion.map(|(s, _)| s).unwrap_or(today),
+                };
+                let end_date = match end {
+                    Some(v) => NaiveDate::parse_from_str(v.trim(), "%Y-%m-%d")
+                        .map_err(|_| anyhow::anyhow!("--end must be a date as YYYY-MM-DD."))?,
+                    None => repo_suggestion
+                        .map(|(_, e)| e)
+                        .unwrap_or_else(|| suggested_sprint_dates(start_date).1),
+                };
+                Ok(CreateSprintInput {
+                    number: number_val,
+                    start_date,
+                    end_date,
+                    headline: headline_val.clone(),
+                })
+            };
+            match build_input().and_then(|input| create_sprint(&root, &input)) {
+                Ok(result) => print_envelope(&JsonEnvelope::ok(
+                    "sprint.create",
+                    SprintCreateDto::from_result(&result, &root),
+                )),
+                Err(e) => print_envelope(&JsonEnvelope::<SprintCreateDto>::error(
+                    "sprint.create",
+                    KanbanErrorBody::from_anyhow(&e),
+                )),
+            }
+        }
+        Command::Sprint {
+            command: SprintCommand::Rollover { name, repo_root },
+        } => {
+            // In JSON mode, rollover only succeeds when next sprint already exists;
+            // we do not prompt for next sprint details.
+            match rollover_sprint(repo_root, name, None) {
+                Ok(result) => print_envelope(&JsonEnvelope::ok(
+                    "sprint.rollover",
+                    SprintRolloverDto::from_result(&result),
+                )),
+                Err(e) => print_envelope(&JsonEnvelope::<SprintRolloverDto>::error(
+                    "sprint.rollover",
+                    KanbanErrorBody::from_anyhow(&e),
+                )),
+            }
+        }
+        Command::Sprint {
+            command: SprintCommand::Sync { repo_root },
+        } => match sync_sprint_rosters(repo_root) {
+            Ok(changed) => print_envelope(&JsonEnvelope::ok(
+                "sprint.sync",
+                SprintSyncDto::from_changed(changed),
+            )),
+            Err(e) => print_envelope(&JsonEnvelope::<SprintSyncDto>::error(
+                "sprint.sync",
+                KanbanErrorBody::from_anyhow(&e),
+            )),
+        },
+        Command::Doctor {
+            command: DoctorCommand::Fix { .. },
+        } => print_envelope(&JsonEnvelope::<NoData>::error(
+            "doctor.fix",
+            KanbanErrorBody::new(
+                KanbanErrorCode::InvalidArgument,
+                "doctor fix is not available in --format json mode; use `doctor show` instead.",
+            ),
+        )),
+        _other => {
+            let env: JsonEnvelope<NoData> = JsonEnvelope::error(
+                "unknown",
+                KanbanErrorBody::new(
+                    KanbanErrorCode::InvalidArgument,
+                    "This command does not support --format json yet.",
+                ),
+            );
+            print_envelope(&env)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3620,12 +4089,16 @@ fn inject_bash_dynamic(script: &str, label: &str, opts: &str, kind: &str, pos: u
 
 fn inject_bash_doctor_fix_target(script: &str) -> String {
     let old = r#"        kanban__subcmd__doctor__subcmd__fix)
-            opts="-h --help [TARGET] [REPO_ROOT]"
+            opts="-h --format --help [TARGET] [REPO_ROOT]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --format)
+                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -3633,7 +4106,7 @@ fn inject_bash_doctor_fix_target(script: &str) -> String {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0"#;
     let new = r#"        kanban__subcmd__doctor__subcmd__fix)
-            opts="-h --help [TARGET] [REPO_ROOT]"
+            opts="-h --format --help [TARGET] [REPO_ROOT]"
             if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
                 COMPREPLY=( $(compgen -W "current $(kanban list-ids stories 2>/dev/null)" -- "${cur}") )
                 return 0
@@ -3643,6 +4116,10 @@ fn inject_bash_doctor_fix_target(script: &str) -> String {
                 return 0
             fi
             case "${prev}" in
+                --format)
+                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -3658,12 +4135,16 @@ fn inject_bash_doctor_fix_target(script: &str) -> String {
 
 fn inject_bash_doctor_command_or_repo_root(script: &str) -> String {
     let old = r#"        kanban__subcmd__doctor)
-            opts="-h --help show fix help"
+            opts="-h --format --help show fix help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --format)
+                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -3671,7 +4152,7 @@ fn inject_bash_doctor_command_or_repo_root(script: &str) -> String {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0"#;
     let new = r#"        kanban__subcmd__doctor)
-            opts="-h --help show fix help"
+            opts="-h --format --help show fix help"
             doctor_commands="show fix help"
             if [[ ${COMP_CWORD} -eq 2 && ${cur} != -* ]] ; then
                 COMPREPLY=( $(compgen -W "${doctor_commands}" -- "${cur}") $(compgen -d -- "${cur}") )
@@ -3697,12 +4178,16 @@ fn inject_bash_doctor_command_or_repo_root(script: &str) -> String {
 
 fn inject_bash_config_get(script: &str) -> String {
     let old = r#"        kanban__subcmd__config__subcmd__get)
-            opts="-h --help <KEY> [REPO_ROOT]"
+            opts="-h --format --help <KEY> [REPO_ROOT]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --format)
+                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -3710,7 +4195,7 @@ fn inject_bash_config_get(script: &str) -> String {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0"#;
     let new = r#"        kanban__subcmd__config__subcmd__get)
-            opts="-h --help <KEY> [REPO_ROOT]"
+            opts="-h --format --help <KEY> [REPO_ROOT]"
             config_keys="paths.backlog paths.sprints theme.color_mode story_points.allowed_values story_points.aliases.XS story_points.aliases.S story_points.aliases.M story_points.aliases.L story_points.aliases.XL"
             if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
                 COMPREPLY=( $(compgen -W "${config_keys}" -- "${cur}") )
@@ -3736,12 +4221,16 @@ fn inject_bash_config_get(script: &str) -> String {
 
 fn inject_bash_config_set(script: &str) -> String {
     let old = r#"        kanban__subcmd__config__subcmd__set)
-            opts="-h --help <KEY> <VALUE> [REPO_ROOT]"
+            opts="-h --format --help <KEY> <VALUE> [REPO_ROOT]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --format)
+                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -3749,7 +4238,7 @@ fn inject_bash_config_set(script: &str) -> String {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0"#;
     let new = r#"        kanban__subcmd__config__subcmd__set)
-            opts="-h --help <KEY> <VALUE> [REPO_ROOT]"
+            opts="-h --format --help <KEY> <VALUE> [REPO_ROOT]"
             config_keys="paths.backlog paths.sprints theme.color_mode story_points.allowed_values story_points.aliases.XS story_points.aliases.S story_points.aliases.M story_points.aliases.L story_points.aliases.XL"
             color_modes="auto always never"
             if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
@@ -3788,7 +4277,7 @@ fn inject_bash_config_set(script: &str) -> String {
 
 fn inject_bash_sprint_create(script: &str) -> String {
     let old = r#"        kanban__subcmd__sprint__subcmd__create)
-            opts="-h --number --headline --start --end --non-interactive --help [REPO_ROOT]"
+            opts="-h --number --headline --start --end --non-interactive --format --help [REPO_ROOT]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3810,6 +4299,10 @@ fn inject_bash_sprint_create(script: &str) -> String {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --format)
+                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -3818,7 +4311,7 @@ fn inject_bash_sprint_create(script: &str) -> String {
             return 0"#;
     let new = format!(
         r#"        kanban__subcmd__sprint__subcmd__create)
-            opts="-h --number --headline --start --end --non-interactive --help [REPO_ROOT]"
+            opts="-h --number --headline --start --end --non-interactive --format --help [REPO_ROOT]"
             if [[ ${{cur}} == -* || ${{COMP_CWORD}} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${{opts}}" -- "${{cur}}") )
                 return 0
@@ -3857,7 +4350,7 @@ fn inject_bash_sprint_create(script: &str) -> String {
 
 fn inject_bash_web_log(script: &str) -> String {
     let old = r#"        kanban__subcmd__web__subcmd__log)
-            opts="-f -h --lines --follow --help [REPO_ROOT]"
+            opts="-f -h --lines --follow --format --help [REPO_ROOT]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3867,6 +4360,10 @@ fn inject_bash_web_log(script: &str) -> String {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --format)
+                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -3874,7 +4371,7 @@ fn inject_bash_web_log(script: &str) -> String {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0"#;
     let new = r#"        kanban__subcmd__web__subcmd__log)
-            opts="-f -h --lines --follow --help [REPO_ROOT]"
+            opts="-f -h --lines --follow --format --help [REPO_ROOT]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3882,6 +4379,10 @@ fn inject_bash_web_log(script: &str) -> String {
             case "${prev}" in
                 --lines)
                     COMPREPLY=()
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
                     return 0
                     ;;
                 *)
@@ -3905,42 +4406,42 @@ fn enhance_bash_completion(script: &str) -> String {
     let script = inject_bash_dynamic(
         &script,
         "kanban__subcmd__sprint__subcmd__show",
-        "-h --help [NAME] [REPO_ROOT]",
+        "-h --format --help <NAME> [REPO_ROOT]",
         "sprints",
         3,
     );
     let script = inject_bash_dynamic(
         &script,
         "kanban__subcmd__sprint__subcmd__rollover",
-        "-h --help <NAME> [REPO_ROOT]",
+        "-h --format --help <NAME> [REPO_ROOT]",
         "sprints",
         3,
     );
     let script = inject_bash_dynamic(
         &script,
         "kanban__subcmd__story__subcmd__show",
-        "-h --help <ID> [REPO_ROOT]",
+        "-h --format --help <ID> [REPO_ROOT]",
         "stories",
         3,
     );
     let script = inject_bash_dynamic(
         &script,
         "kanban__subcmd__story__subcmd__move",
-        "-a -h --assignee --help <ID> <STATUS> [REPO_ROOT]",
+        "-a -h --assignee --format --help <ID> <STATUS> [REPO_ROOT]",
         "stories",
         3,
     );
     let script = inject_bash_dynamic(
         &script,
         "kanban__subcmd__task__subcmd__add",
-        "-h --title --status --tags --description --help <STORY_ID> [REPO_ROOT]",
+        "-h --title --status --tags --description --format --help <STORY_ID> [REPO_ROOT]",
         "stories",
         3,
     );
     let script = inject_bash_dynamic(
         &script,
         "kanban__subcmd__task__subcmd__update",
-        "-h --title --status --tags --description --help <STORY_ID> <TASK_ID> [REPO_ROOT]",
+        "-h --title --status --tags --description --format --help <STORY_ID> <TASK_ID> [REPO_ROOT]",
         "stories",
         3,
     );
@@ -4177,6 +4678,11 @@ fn main() -> Result<()> {
     }
 
     let args = Args::parse_from(raw_args);
+
+    if args.format == OutputFormat::Json {
+        std::process::exit(emit_json(&args.command));
+    }
+
     let theme = theme_for_command(&args.command);
 
     match args.command {
@@ -5190,7 +5696,7 @@ mod tests {
             first_line,
             Args::command().render_version().to_string().trim_end()
         );
-        assert!(output.contains("Usage: kanban <COMMAND>"));
+        assert!(output.contains("Usage: kanban"));
     }
 
     #[test]

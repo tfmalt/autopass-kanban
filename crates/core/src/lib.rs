@@ -10,11 +10,13 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 mod config;
+mod json;
 
 pub use config::{
     ColorMode, ConfigInitResult, ConfigSetResult, KanbanConfig, get_config_json, get_config_value,
     init_config, load_kanban_config, resolve_repo_root, set_config_value,
 };
+pub use json::*;
 
 const REQUIRED_STORY_FIELDS: [&str; 10] = [
     "id",
@@ -103,6 +105,7 @@ pub struct Task {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct TaskSummary {
     pub todo: usize,
+    #[serde(rename = "in-progress")]
     pub in_progress: usize,
     pub blocked: usize,
     pub done: usize,
@@ -225,6 +228,7 @@ pub struct TaskMutationResult {
     pub story_id: String,
     pub task_id: String,
     pub task_file_path: PathBuf,
+    pub task: Task,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1074,10 +1078,20 @@ pub fn add_task_to_story(
     fs::write(&task_file_path, updated)
         .with_context(|| format!("write task file {}", task_file_path.display()))?;
 
+    let task = Task {
+        id: task_id.clone(),
+        title: title.to_string(),
+        status: display_task_status(&normalized_status).to_string(),
+        normalized_status,
+        tags: tags.to_vec(),
+        description: description.to_string(),
+    };
+
     Ok(TaskMutationResult {
         story_id: story.frontmatter.get("id").cloned().unwrap_or_default(),
         task_id,
         task_file_path: relative_path(&repository.repo_root, &task_file_path),
+        task,
     })
 }
 
@@ -1112,13 +1126,20 @@ pub fn update_task_in_story(
         description,
     )?;
     let task_file_path = task_file.file_path.clone();
-    fs::write(&task_file_path, updated)
+    fs::write(&task_file_path, updated.clone())
         .with_context(|| format!("write task file {}", task_file_path.display()))?;
+
+    let normalized_task_id = task_id.trim().to_ascii_uppercase();
+    let task = parse_task_markdown(&updated)
+        .into_iter()
+        .find(|t| t.id.eq_ignore_ascii_case(&normalized_task_id))
+        .ok_or_else(|| anyhow!("Task {} not found after writing.", normalized_task_id))?;
 
     Ok(TaskMutationResult {
         story_id: story.frontmatter.get("id").cloned().unwrap_or_default(),
-        task_id: task_id.trim().to_ascii_uppercase(),
+        task_id: normalized_task_id,
         task_file_path: relative_path(&repository.repo_root, &task_file_path),
+        task,
     })
 }
 
@@ -1271,6 +1292,40 @@ pub fn find_story(repo_root: impl AsRef<Path>, story_id: &str) -> Result<Option<
     let repo_root = repo_root.as_ref();
     let repository = read_repository(repo_root)?;
     Ok(find_story_in_repository(repo_root, &repository, story_id))
+}
+
+/// Find a story by id, returning both its [`StoryDetails`] and the raw parsed
+/// [`Story`] (frontmatter + body) from a single repository scan.
+pub fn find_story_with_source(
+    repo_root: impl AsRef<Path>,
+    story_id: &str,
+) -> Result<Option<(StoryDetails, Story)>> {
+    let repository = read_repository(repo_root)?;
+    let normalized = story_id.trim().to_ascii_uppercase();
+    // Use the same id-matching predicate as find_story_in_repository.
+    let raw_story = {
+        let mut matches: Vec<&Story> = repository
+            .stories
+            .iter()
+            .filter(|s| {
+                s.frontmatter
+                    .get("id")
+                    .map(|id| id.eq_ignore_ascii_case(&normalized))
+                    .unwrap_or(false)
+            })
+            .collect();
+        matches.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+        matches.into_iter().next().cloned()
+    };
+    match raw_story {
+        None => Ok(None),
+        Some(raw_story) => {
+            // Build details from the same repository (second pass over the same Vec).
+            let details = find_story_in_repository(&repository, story_id)
+                .expect("story was found in the same repository scan");
+            Ok(Some((details, raw_story)))
+        }
+    }
 }
 
 pub fn collect_doctor_issues(repo_root: impl AsRef<Path>) -> Result<Vec<DoctorIssue>> {
