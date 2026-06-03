@@ -149,6 +149,10 @@ impl Theme {
         self.paint(Style::Bold, value)
     }
 
+    fn story_points(&self, value: impl std::fmt::Display) -> String {
+        self.paint(Style::Yellow, value)
+    }
+
     fn path(&self, value: impl std::fmt::Display) -> String {
         self.paint(Style::Muted, value)
     }
@@ -1463,17 +1467,28 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
             .unwrap_or(&[]);
         push_line(&mut output, "");
         let icon_label = theme.status_text(status, format!("{} {status}", status_icon(status)));
+        let status_points = sum_story_points(stories.iter());
+        let points_label = theme.story_points(format_story_points(status_points));
+        let story_count = format_story_count(stories.len());
         if stories.is_empty() {
             push_line(
                 &mut output,
-                &format!("{icon_label}  {}  ·  none", theme.count(0)),
+                &format!(
+                    "{icon_label}   {}   {points_label}   · none",
+                    theme.count(story_count)
+                ),
             );
         } else {
             push_line(
                 &mut output,
-                &format!("{icon_label}  {}", theme.count(stories.len())),
+                &format!(
+                    "{icon_label}   {}   {points_label}",
+                    theme.count(story_count)
+                ),
             );
-            push_story_table(&mut output, theme, layout.width, stories);
+            let points_width =
+                story_points_column_width(sprint.stories_by_status.values().flat_map(|v| v.iter()));
+            push_story_table(&mut output, theme, layout.width, stories, points_width);
         }
     }
 
@@ -1482,6 +1497,11 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
         .stories_by_status
         .get("blocked")
         .map(|v| v.len())
+        .unwrap_or(0);
+    let blocked_points = sprint
+        .stories_by_status
+        .get("blocked")
+        .map(|stories| sum_story_points(stories.iter()))
         .unwrap_or(0);
     push_line(&mut output, "");
     let blocked_style = if blocked_count > 0 {
@@ -1492,7 +1512,12 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
     let blocked_part = theme.paint(blocked_style, format!("{} blocked", status_icon("blocked")));
     push_line(
         &mut output,
-        &format!("  {}  {}", blocked_part, theme.count(blocked_count),),
+        &format!(
+            "  {}   {}   {}",
+            blocked_part,
+            theme.count(format_story_count(blocked_count)),
+            theme.story_points(format_story_points(blocked_points)),
+        ),
     );
 
     // Blocked work detail callout
@@ -1520,6 +1545,14 @@ fn title_case_headline(headline: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn format_story_count(count: usize) -> String {
+    if count == 1 {
+        "1 story".to_string()
+    } else {
+        format!("{count} stories")
+    }
 }
 
 fn push_line(output: &mut String, line: &str) {
@@ -1577,6 +1610,7 @@ enum CellStyle {
 struct TableCell {
     text: String,
     style: Option<CellStyle>,
+    preformatted: bool,
 }
 
 impl TableCell {
@@ -1584,6 +1618,7 @@ impl TableCell {
         Self {
             text: text.into(),
             style: None,
+            preformatted: false,
         }
     }
 
@@ -1591,17 +1626,35 @@ impl TableCell {
         Self {
             text: text.into(),
             style: Some(style),
+            preformatted: false,
+        }
+    }
+
+    fn preformatted(text: impl Into<String>, style: CellStyle) -> Self {
+        Self {
+            text: text.into(),
+            style: Some(style),
+            preformatted: true,
         }
     }
 }
 
-fn push_story_table(output: &mut String, theme: &Theme, width: usize, stories: &[StoryOverview]) {
-    let columns = story_table_columns(width, stories);
+fn push_story_table(
+    output: &mut String,
+    theme: &Theme,
+    width: usize,
+    stories: &[StoryOverview],
+    points_width: usize,
+) {
+    let columns = story_table_columns(width, stories, points_width);
     let rows = stories
         .iter()
         .map(|story| {
             vec![
-                TableCell::styled(format_story_status_label(story), CellStyle::Id),
+                TableCell::preformatted(
+                    format_colored_story_status_label(theme, story, points_width),
+                    CellStyle::Precolored,
+                ),
                 TableCell::new(&story.title),
                 TableCell::new(extract_assignee_name(&story.assignee)),
                 TableCell::styled(
@@ -1638,11 +1691,15 @@ fn push_blocked_work_table(
     push_wrapped_rows(output, theme, &columns, &rows);
 }
 
-fn story_table_columns(width: usize, stories: &[StoryOverview]) -> Vec<(&'static str, usize)> {
+fn story_table_columns(
+    width: usize,
+    stories: &[StoryOverview],
+    points_width: usize,
+) -> Vec<(&'static str, usize)> {
     let available = row_content_width(width, 4);
     let id_width = stories
         .iter()
-        .map(|story| display_width(&format_story_status_label(story)))
+        .map(|story| display_width(&format_story_status_label(story, points_width)))
         .max()
         .unwrap_or(5)
         .clamp(5, 18);
@@ -1729,7 +1786,13 @@ fn push_wrapped_table_row(
     let wrapped_cells = row
         .iter()
         .zip(columns)
-        .map(|(cell, (_, width))| wrap_text(&cell.text, *width))
+        .map(|(cell, (_, width))| {
+            if cell.preformatted {
+                vec![cell.text.clone()]
+            } else {
+                wrap_text(&cell.text, *width)
+            }
+        })
         .collect::<Vec<_>>();
     let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1);
 
@@ -1835,6 +1898,18 @@ fn parse_story_points(story_points: &str) -> usize {
     story_points.trim().parse().unwrap_or(0)
 }
 
+fn format_story_points(value: impl std::fmt::Display) -> String {
+    format!("◈{value}")
+}
+
+fn story_points_column_width<'a>(stories: impl IntoIterator<Item = &'a StoryOverview>) -> usize {
+    stories
+        .into_iter()
+        .map(|story| display_width(&format_story_points(&story.story_points)))
+        .max()
+        .unwrap_or(0)
+}
+
 fn sum_story_points<'a>(stories: impl IntoIterator<Item = &'a StoryOverview>) -> usize {
     stories
         .into_iter()
@@ -1842,8 +1917,25 @@ fn sum_story_points<'a>(stories: impl IntoIterator<Item = &'a StoryOverview>) ->
         .sum()
 }
 
-fn format_story_status_label(story: &StoryOverview) -> String {
-    format!("{} ({}pt)", story.id, story.story_points)
+fn format_story_status_label(story: &StoryOverview, points_width: usize) -> String {
+    let points = format_story_points(&story.story_points);
+    let padding = " ".repeat(points_width.saturating_sub(display_width(&points)));
+    format!("{} {}{}", story.id, padding, points)
+}
+
+fn format_colored_story_status_label(
+    theme: &Theme,
+    story: &StoryOverview,
+    points_width: usize,
+) -> String {
+    let points = format_story_points(&story.story_points);
+    let padding = " ".repeat(points_width.saturating_sub(display_width(&points)));
+    format!(
+        "{} {}{}",
+        theme.id(&story.id),
+        padding,
+        theme.story_points(points)
+    )
 }
 
 fn sprint_status_label(end_date: &str, readme_status: Option<&str>) -> &'static str {
@@ -1970,12 +2062,15 @@ fn push_sprint_header_band(
     push_line(
         output,
         &format!(
-            "  {} → {}   {}  {} / {}  {}",
+            "  {} → {}   {}  {}  {}",
             sprint.start_date,
             sprint.end_date,
             bar,
-            theme.count(done_points),
-            theme.count(total_points),
+            theme.story_points(format!(
+                "{} / {}",
+                format_story_points(done_points),
+                total_points
+            )),
             theme.paint(Style::Muted, format!("{pct}%")),
         ),
     );
@@ -2020,12 +2115,12 @@ fn print_phase_overview(theme: &Theme, phase: &PhaseOverview) {
     for story in &phase.stories {
         let sprint = story.sprint.as_deref().unwrap_or("~");
         println!(
-            "- {} [{}] sprint={} assignee={} points={} {}",
+            "- {} [{}] sprint={} assignee={} {} {}",
             theme.id(&story.id),
             theme.status(&story.status),
             sprint,
             story.assignee,
-            theme.count(&story.story_points),
+            theme.story_points(format_story_points(&story.story_points)),
             story.title
         );
     }
@@ -2046,12 +2141,12 @@ fn render_story_list(theme: &Theme, scope: &str, stories: &[StoryOverview]) -> S
     for story in stories {
         let sprint = story.sprint.as_deref().unwrap_or("~");
         output.push_str(&format!(
-            "- {} [{}] sprint={} assignee={} points={} {}\n",
+            "- {} [{}] sprint={} assignee={} {} {}\n",
             theme.id(&story.id),
             theme.status(&story.status),
             sprint,
             story.assignee,
-            theme.count(&story.story_points),
+            theme.story_points(format_story_points(&story.story_points)),
             story.title
         ));
     }
@@ -2070,7 +2165,7 @@ fn print_story_details(theme: &Theme, details: &StoryDetails) {
     println!(
         "{} {}",
         theme.label("Story points:"),
-        theme.count(&details.story.story_points)
+        theme.story_points(format_story_points(&details.story.story_points))
     );
     println!(
         "{} {}",
@@ -3834,7 +3929,7 @@ mod tests {
         let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
 
         assert!(
-            output.contains("8 / 10"),
+            output.contains("◈8 / 10"),
             "progress line should use story points: {output}"
         );
         assert!(
@@ -3882,15 +3977,29 @@ mod tests {
         let theme = Theme::plain();
         let mut stories_by_status = BTreeMap::new();
         stories_by_status.insert(
+            "todo".to_string(),
+            vec![StoryOverview {
+                id: "US-F1-062".to_string(),
+                title: "A larger story".to_string(),
+                status: "todo".to_string(),
+                assignee: "Someone <s@example.com>".to_string(),
+                story_points: "13".to_string(),
+                sprint: Some("S001.test".to_string()),
+                relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-062.md"),
+                task_summary: None,
+                task_count: 0,
+            }],
+        );
+        stories_by_status.insert(
             "in-progress".to_string(),
             vec![StoryOverview {
-                id: "US-F1-002".to_string(),
-                title: "A story in progress".to_string(),
+                id: "US-F3-001".to_string(),
+                title: "A smaller story".to_string(),
                 status: "in-progress".to_string(),
                 assignee: "Someone <s@example.com>".to_string(),
-                story_points: "3".to_string(),
+                story_points: "5".to_string(),
                 sprint: Some("S001.test".to_string()),
-                relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-002.md"),
+                relative_path: PathBuf::from("delivery/backlog/phase-3/US-F3-001.md"),
                 task_summary: None,
                 task_count: 0,
             }],
@@ -3911,9 +4020,42 @@ mod tests {
         let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
 
         assert!(
-            output.contains("US-F1-002 (3pt)"),
+            output.contains("US-F1-062 ◈13"),
             "story row should include story points: {output}"
         );
+        assert!(
+            output.contains("○ todo   1 story   ◈13"),
+            "todo header should include story point total: {output}"
+        );
+        assert!(
+            output.contains("→ in-progress   1 story   ◈5"),
+            "in-progress header should include story point total: {output}"
+        );
+        assert!(
+            output.contains("US-F3-001  ◈5"),
+            "single-digit story points should be right-aligned: {output}"
+        );
+    }
+
+    #[test]
+    fn story_status_rows_highlight_story_points() {
+        let theme = Theme::color();
+        let story = StoryOverview {
+            id: "US-F1-002".to_string(),
+            title: "A story in progress".to_string(),
+            status: "in-progress".to_string(),
+            assignee: "Someone <s@example.com>".to_string(),
+            story_points: "3".to_string(),
+            sprint: Some("S001.test".to_string()),
+            relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-002.md"),
+            task_summary: None,
+            task_count: 0,
+        };
+
+        let label = format_colored_story_status_label(&theme, &story, 3);
+
+        assert!(label.contains("\x1b[1;36mUS-F1-002\x1b[0m"));
+        assert!(label.contains(" \x1b[1;33m◈3\x1b[0m"));
     }
 
     #[test]
@@ -3947,7 +4089,10 @@ mod tests {
             warnings: vec![],
         };
         let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
-        assert!(output.contains("✓ done  1"), "done section header missing");
+        assert!(
+            output.contains("✓ done   1 story   ◈2"),
+            "done section header missing story points"
+        );
         assert!(
             output.contains("A completed story"),
             "done story should be listed individually"
@@ -3972,7 +4117,9 @@ mod tests {
         let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
         assert!(output.contains("○ todo"), "todo section header missing");
         assert!(
-            output.lines().any(|line| line == "○ todo  0  ·  none"),
+            output
+                .lines()
+                .any(|line| line == "○ todo   0 stories   ◈0   · none"),
             "todo section should be flush-left"
         );
         assert!(
@@ -4019,7 +4166,9 @@ mod tests {
             "warning should be flush-left"
         );
         assert!(
-            output.lines().any(|line| line == "→ in-progress  1"),
+            output
+                .lines()
+                .any(|line| line == "→ in-progress   1 story   ◈3"),
             "status header should be flush-left"
         );
     }
@@ -4137,6 +4286,7 @@ mod tests {
         assert!(output.contains("Stories: 1"));
         assert!(output.contains("Scope: active sprint (S000.getting-started)"));
         assert!(output.contains("US-F1-010 [in-progress] sprint=S000.getting-started"));
+        assert!(output.contains("◈3"));
     }
 
     #[test]
