@@ -10,9 +10,10 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::{
-    BlockedWorkItem, CreateSprintResult, DoctorFinding, MoveStoryResult, PhaseOverview,
-    PlanStoryResult, RolloverResult, SprintOverview, Story, StoryDetails, StoryOverview, Task,
-    TaskMutationResult, TaskSummary, ValidationReport,
+    BlockedWorkItem, CompletionItem, ConfigInitResult, ConfigSetResult, CreateSprintResult,
+    DoctorFinding, MoveStoryResult, PhaseOverview, PlanStoryResult, RolloverResult, SprintOverview,
+    Story, StoryDetails, StoryOverview, StoryUpdateResult, Task, TaskMutationResult, TaskSummary,
+    ValidationReport,
 };
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -153,6 +154,96 @@ pub struct NoData;
 pub struct ConfigGetDto {
     pub key: String,
     pub value: String,
+}
+
+/// DTO for `init` responses.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigInitDto {
+    pub repo_root: String,
+    pub config_dir: String,
+    pub created_files: Vec<String>,
+    pub created_count: usize,
+}
+
+impl ConfigInitDto {
+    pub fn from_result(r: &ConfigInitResult) -> Self {
+        let created_files: Vec<String> = r.created_files.iter().map(|p| path_string(p)).collect();
+        let created_count = created_files.len();
+        Self {
+            repo_root: path_string(&r.repo_root),
+            config_dir: path_string(&r.config_dir),
+            created_files,
+            created_count,
+        }
+    }
+}
+
+/// DTO for `config set` responses.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigSetDto {
+    pub key: String,
+    pub value: String,
+    pub file_path: String,
+}
+
+impl ConfigSetDto {
+    pub fn from_result(r: &ConfigSetResult) -> Self {
+        Self {
+            key: r.key.clone(),
+            value: r.value.clone(),
+            file_path: path_string(&r.file_path),
+        }
+    }
+}
+
+/// DTO for `completion` responses in JSON mode.
+#[derive(Debug, Clone, Serialize)]
+pub struct CompletionDto {
+    pub target: String,
+    pub content_type: String,
+    pub content: String,
+}
+
+/// DTO item for `list-ids` responses.
+#[derive(Debug, Clone, Serialize)]
+pub struct ListIdItemDto {
+    pub value: String,
+    pub description: Option<String>,
+}
+
+impl ListIdItemDto {
+    pub fn value(value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            description: None,
+        }
+    }
+
+    pub fn from_completion_item(item: &CompletionItem) -> Self {
+        Self {
+            value: item.value.clone(),
+            description: non_empty(&item.description),
+        }
+    }
+}
+
+/// DTO for hidden `list-ids` responses.
+#[derive(Debug, Clone, Serialize)]
+pub struct ListIdsDto {
+    pub kind: String,
+    pub count: usize,
+    pub items: Vec<ListIdItemDto>,
+}
+
+impl ListIdsDto {
+    pub fn new(kind: impl Into<String>, items: Vec<ListIdItemDto>) -> Self {
+        let count = items.len();
+        Self {
+            kind: kind.into(),
+            count,
+            items,
+        }
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -610,6 +701,24 @@ impl PlanStoryDto {
     }
 }
 
+/// DTO for `story update` responses.
+#[derive(Debug, Clone, Serialize)]
+pub struct StoryUpdateDto {
+    pub story_id: String,
+    pub story_path: String,
+    pub updated_fields: Vec<String>,
+}
+
+impl StoryUpdateDto {
+    pub fn from_result(r: &StoryUpdateResult, repo_root: &Path) -> Self {
+        Self {
+            story_id: r.story_id.clone(),
+            story_path: rel_to_root(repo_root, &r.story_path),
+            updated_fields: r.updated_fields.clone(),
+        }
+    }
+}
+
 /// DTO for `task add` / `task update` responses.
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskMutationDto {
@@ -734,6 +843,8 @@ mod tests {
             id: "US-F1-001".to_string(),
             title: "Cluster".to_string(),
             status: "In Progress".to_string(),
+            epic_id: None,
+            epic_title: None,
             assignee: String::new(),
             story_points: "3".to_string(),
             sprint: Some("S001".to_string()),
@@ -762,6 +873,8 @@ mod tests {
             id: "US-F1-002".to_string(),
             title: "Test".to_string(),
             status: "todo".to_string(),
+            epic_id: None,
+            epic_title: None,
             assignee: "A <a@b.no>".to_string(),
             story_points: String::new(),
             sprint: None,
@@ -851,6 +964,8 @@ mod tests {
             id: "US-F1-001".to_string(),
             title: "Cluster".to_string(),
             status: "In Progress".to_string(),
+            epic_id: None,
+            epic_title: None,
             assignee: String::new(),
             story_points: "3".to_string(),
             sprint: Some("S001".to_string()),
@@ -860,7 +975,12 @@ mod tests {
         };
         let details = crate::StoryDetails {
             story: overview,
+            story_file_path: PathBuf::from("delivery/backlog/x/US-F1-001.md"),
             task_file_path: Some(PathBuf::from("delivery/backlog/x/US-F1-001.tasks.md")),
+            epic_id: None,
+            epic_title: None,
+            work_started: None,
+            work_done: None,
             story_statement: Some("As a user, I want something.".to_string()),
             acceptance_criteria: Some("Given ... then ...".to_string()),
             definition_of_done: None,
@@ -896,6 +1016,8 @@ mod tests {
             id: "US-F1-001".to_string(),
             title: "Cluster".to_string(),
             status: "In Progress".to_string(),
+            epic_id: None,
+            epic_title: None,
             assignee: String::new(),
             story_points: "3".to_string(),
             sprint: Some("S001".to_string()),
@@ -905,7 +1027,12 @@ mod tests {
         };
         let details = crate::StoryDetails {
             story: overview,
+            story_file_path: PathBuf::from("delivery/backlog/x/US-F1-001.md"),
             task_file_path: None,
+            epic_id: None,
+            epic_title: None,
+            work_started: None,
+            work_done: None,
             story_statement: None,
             acceptance_criteria: None,
             definition_of_done: None,
@@ -957,6 +1084,8 @@ mod tests {
             id: id.to_string(),
             title: format!("Story {id}"),
             status: status.to_string(),
+            epic_id: None,
+            epic_title: None,
             assignee: String::new(),
             story_points: "2".to_string(),
             sprint: Some("S001.foundation".to_string()),
@@ -1032,6 +1161,8 @@ mod tests {
             id: id.to_string(),
             title: format!("Story {id}"),
             status: status.to_string(),
+            epic_id: None,
+            epic_title: None,
             assignee: String::new(),
             story_points: "1".to_string(),
             sprint: Some("S001".to_string()),

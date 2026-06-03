@@ -97,23 +97,23 @@ fn config_get_emits_ok_envelope() {
 }
 
 #[test]
-fn unsupported_command_emits_invalid_argument_error() {
+fn init_emits_ok_envelope() {
     let dir = tempdir().expect("temp dir should be created");
     let repo_root = dir.path().to_string_lossy().into_owned();
 
     let out = kanban_in(dir.path(), &["--format", "json", "init", &repo_root]);
 
     let json = parse_stdout(&out);
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "exit code should be 1 for unsupported JSON command; stderr: {}",
+    assert!(
+        out.status.success(),
+        "exit code should be 0 for init JSON; stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(json["status"], "error", "envelope status should be error");
+    assert_eq!(json["status"], "ok", "envelope status should be ok");
+    assert_eq!(json["kind"], "init", "envelope kind should be init");
     assert_eq!(
-        json["error"]["code"], "invalid_argument",
-        "error code should be invalid_argument"
+        json["data"]["created_count"], 4,
+        "init should create the four default config files"
     );
 }
 
@@ -359,6 +359,45 @@ fn config_show_nests_paths() {
         json["data"]["paths"]["backlog"].is_string(),
         "data.paths.backlog should be a string; got: {}",
         json["data"]["paths"]["backlog"]
+    );
+}
+
+#[test]
+fn config_set_emits_updated_value() {
+    let dir = tempdir().expect("temp dir should be created");
+    let repo_root = dir.path().to_string_lossy().into_owned();
+
+    init_repo(dir.path());
+
+    let out = kanban_in(
+        dir.path(),
+        &[
+            "--format",
+            "json",
+            "config",
+            "set",
+            "web.host",
+            "127.0.0.1",
+            &repo_root,
+        ],
+    );
+
+    let json = parse_stdout(&out);
+    assert!(
+        out.status.success(),
+        "config set should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(json["status"], "ok", "envelope status should be ok");
+    assert_eq!(json["kind"], "config.set", "kind should be config.set");
+    assert_eq!(json["data"]["key"], "web.host");
+    assert_eq!(json["data"]["value"], "127.0.0.1");
+    assert!(
+        json["data"]["file_path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with(".kanban/web.json")),
+        "file_path should point at web.json; got: {}",
+        json["data"]["file_path"]
     );
 }
 
@@ -864,4 +903,241 @@ fn doctor_fix_json_emits_invalid_argument() {
         "error code should be invalid_argument; got: {}",
         json["error"]["code"]
     );
+}
+
+#[test]
+fn story_update_without_fields_json_emits_specific_error() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_backlog_and_sprints(root);
+    let story_rel = "delivery/backlog/phase-1/01.infra/US-F1-001-cluster.md";
+    write_story_in_sprint(root, story_rel, "US-F1-001", "S001.foundation", "todo");
+
+    let out = kanban_in(
+        root,
+        &[
+            "--format",
+            "json",
+            "story",
+            "update",
+            "US-F1-001",
+            &repo_root,
+        ],
+    );
+
+    let json = parse_stdout(&out);
+    assert_eq!(out.status.code(), Some(1), "exit code should be 1");
+    assert_eq!(json["status"], "error", "envelope status should be error");
+    assert_eq!(json["kind"], "story.update", "kind should be story.update");
+    assert_eq!(json["error"]["code"], "invalid_argument");
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("editor mode is unavailable")),
+        "message should explain editor mode is unavailable; got: {}",
+        json["error"]["message"]
+    );
+}
+
+#[test]
+fn story_update_with_field_emits_updated_fields() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_backlog_and_sprints(root);
+    let story_rel = "delivery/backlog/phase-1/01.infra/US-F1-001-cluster.md";
+    write_story_in_sprint(root, story_rel, "US-F1-001", "S001.foundation", "todo");
+
+    let out = kanban_in(
+        root,
+        &[
+            "--format",
+            "json",
+            "story",
+            "update",
+            "US-F1-001",
+            "--assignee",
+            "Tester <tester@example.no>",
+            &repo_root,
+        ],
+    );
+
+    let json = parse_stdout(&out);
+    assert!(
+        out.status.success(),
+        "story update should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(json["status"], "ok", "envelope status should be ok");
+    assert_eq!(json["kind"], "story.update", "kind should be story.update");
+    assert_eq!(json["data"]["story_id"], "US-F1-001");
+    assert!(
+        json["data"]["updated_fields"]
+            .as_array()
+            .is_some_and(|fields| fields.iter().any(|field| field == "assignee")),
+        "updated_fields should contain assignee; got: {}",
+        json["data"]["updated_fields"]
+    );
+}
+
+#[test]
+fn completion_help_json_emits_help_content() {
+    let dir = tempdir().expect("temp dir should be created");
+
+    let out = kanban_in(dir.path(), &["--format", "json", "completion", "help"]);
+
+    let json = parse_stdout(&out);
+    assert!(
+        out.status.success(),
+        "completion help should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(json["status"], "ok", "envelope status should be ok");
+    assert_eq!(json["kind"], "completion", "kind should be completion");
+    assert_eq!(json["data"]["target"], "help");
+    assert_eq!(json["data"]["content_type"], "help");
+    assert!(
+        json["data"]["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("Generate a shell completion script")),
+        "content should include completion help; got: {}",
+        json["data"]["content"]
+    );
+}
+
+#[test]
+fn list_ids_json_emits_items() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_backlog_and_sprints(root);
+    let rel = "delivery/backlog/phase-1-scaffolding/01.infra/US-F1-001-cluster.md";
+    let frontmatter = "id: US-F1-001\ntype: user-story\nstatus: todo\nepic: EP-F1-01\nsprint: ~\nassignee: ~\nstory_points: 3\nwork_started: ~\nwork_done: ~\ncreated: 2026-01-01T00:00:00+01:00\nupdated: 2026-01-01T00:00:00+01:00\n";
+    write_story(root, rel, frontmatter, "# User Story: Cluster\n\nBody.\n");
+
+    let out = kanban_in(
+        root,
+        &["--format", "json", "list-ids", "stories", &repo_root],
+    );
+
+    let json = parse_stdout(&out);
+    assert!(
+        out.status.success(),
+        "list-ids should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(json["status"], "ok", "envelope status should be ok");
+    assert_eq!(json["kind"], "list-ids", "kind should be list-ids");
+    assert_eq!(json["data"]["kind"], "stories");
+    assert!(
+        json["data"]["items"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item["value"] == "US-F1-001")),
+        "items should include US-F1-001; got: {}",
+        json["data"]["items"]
+    );
+}
+
+#[test]
+fn web_status_json_emits_state_without_starting_server() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_repo(root);
+
+    let out = kanban_in(root, &["--format", "json", "web", "status", &repo_root]);
+
+    let json = parse_stdout(&out);
+    assert!(
+        out.status.success(),
+        "web status should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(json["status"], "ok", "envelope status should be ok");
+    assert_eq!(json["kind"], "web.status", "kind should be web.status");
+    assert_eq!(json["data"]["state"], "stopped");
+    assert!(json["data"]["url"].is_string(), "url should be present");
+}
+
+#[test]
+fn web_status_reports_recorded_running_port() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_repo(root);
+    let run_dir = root.join(".kanban/run");
+    fs::create_dir_all(&run_dir).expect("create run dir");
+    fs::write(run_dir.join("web.pid"), format!("{}\n", std::process::id()))
+        .expect("write pid file");
+    fs::write(run_dir.join("web.port"), "3001\n").expect("write port file");
+
+    let out = kanban_in(root, &["web", "status", &repo_root]);
+
+    assert!(
+        out.status.success(),
+        "web status should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains(":3001"),
+        "status should report recorded port; got: {stdout}"
+    );
+}
+
+#[test]
+fn web_status_json_reports_recorded_running_port() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_repo(root);
+    let run_dir = root.join(".kanban/run");
+    fs::create_dir_all(&run_dir).expect("create run dir");
+    fs::write(run_dir.join("web.pid"), format!("{}\n", std::process::id()))
+        .expect("write pid file");
+    fs::write(run_dir.join("web.port"), "3001\n").expect("write port file");
+
+    let out = kanban_in(root, &["--format", "json", "web", "status", &repo_root]);
+
+    let json = parse_stdout(&out);
+    assert!(
+        out.status.success(),
+        "web status should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(json["data"]["state"], "running");
+    assert!(
+        json["data"]["url"]
+            .as_str()
+            .is_some_and(|url| url.ends_with(":3001")),
+        "status JSON should report recorded port; got: {}",
+        json["data"]["url"]
+    );
+}
+
+#[test]
+fn web_log_follow_json_emits_specific_error() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_repo(root);
+
+    let out = kanban_in(
+        root,
+        &["--format", "json", "web", "log", "--follow", &repo_root],
+    );
+
+    let json = parse_stdout(&out);
+    assert_eq!(out.status.code(), Some(1), "exit code should be 1");
+    assert_eq!(json["status"], "error", "envelope status should be error");
+    assert_eq!(json["kind"], "web.log", "kind should be web.log");
+    assert_eq!(json["error"]["code"], "invalid_argument");
 }

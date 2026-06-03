@@ -270,6 +270,7 @@ pub struct CompletionItem {
 pub struct StoryDetails {
     pub story: StoryOverview,
     pub story_file_path: PathBuf,
+    pub task_file_path: Option<PathBuf>,
     pub epic_id: Option<String>,
     pub epic_title: Option<String>,
     pub work_started: Option<String>,
@@ -1321,8 +1322,9 @@ pub fn find_story_with_source(
         None => Ok(None),
         Some(raw_story) => {
             // Build details from the same repository (second pass over the same Vec).
-            let details = find_story_in_repository(&repository, story_id)
-                .expect("story was found in the same repository scan");
+            let details =
+                find_story_in_repository(repository.repo_root.as_path(), &repository, story_id)
+                    .expect("story was found in the same repository scan");
             Ok(Some((details, raw_story)))
         }
     }
@@ -2318,6 +2320,10 @@ fn find_story_in_repository(
     Some(StoryDetails {
         story: story_overview(repo_root, story),
         story_file_path: story.relative_path.clone(),
+        task_file_path: story
+            .task_file
+            .as_ref()
+            .map(|task_file| task_file.relative_path.clone()),
         epic_id: story.frontmatter.get("epic").cloned(),
         epic_title: epic_title(repo_root, story),
         work_started: story.frontmatter.get("work_started").cloned(),

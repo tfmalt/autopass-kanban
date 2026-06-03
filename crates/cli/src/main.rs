@@ -14,11 +14,12 @@ use chrono::NaiveDate;
 use clap::builder::styling::{AnsiColor, Effects, Style as ClapStyle, Styles};
 use clap::{ArgGroup, CommandFactory, Parser, Subcommand, ValueEnum};
 use kanban_core::{
-    ColorMode, ConfigGetDto, CreateSprintInput, DoctorDto, DoctorFinding, DoctorFixInput,
-    DoctorFixKind, DoctorIssue, DoctorPrompt, JsonEnvelope, KanbanErrorBody, KanbanErrorCode,
-    MoveStoryDto, NoData, PhaseOverview, PhaseShowDto, PlanStoryDto, RolloverResult,
-    SprintCreateDto, SprintListDto, SprintOverview, SprintOverviewDto, SprintRolloverDto,
-    SprintSyncDto, StoryDetails, StoryListDto, StoryOverview, StoryShowDto, TaskMutationDto,
+    ColorMode, CompletionDto, ConfigGetDto, ConfigInitDto, ConfigSetDto, CreateSprintInput,
+    DoctorDto, DoctorFinding, DoctorFixInput, DoctorFixKind, DoctorIssue, DoctorPrompt,
+    JsonEnvelope, KanbanErrorBody, KanbanErrorCode, ListIdItemDto, ListIdsDto, MoveStoryDto,
+    NoData, PhaseOverview, PhaseShowDto, PlanStoryDto, RolloverResult, SprintCreateDto,
+    SprintListDto, SprintOverview, SprintOverviewDto, SprintRolloverDto, SprintSyncDto,
+    StoryDetails, StoryListDto, StoryOverview, StoryShowDto, StoryUpdateDto, TaskMutationDto,
     TaskSummary, ValidateDto, add_task_to_story, apply_doctor_fix, collect_doctor_issues,
     collect_doctor_issues_for_current_sprint, collect_doctor_issues_for_story, config_show_value,
     create_sprint, doctor_repository, find_story, find_story_with_source, get_config_json,
@@ -907,9 +908,264 @@ fn print_envelope<T: Serialize>(env: &JsonEnvelope<T>) -> i32 {
     }
 }
 
+fn invalid_argument_envelope<T: Serialize>(kind: &'static str, message: impl Into<String>) -> i32 {
+    print_envelope(&JsonEnvelope::<T>::error(
+        kind,
+        KanbanErrorBody::new(KanbanErrorCode::InvalidArgument, message),
+    ))
+}
+
+fn completion_target_label(target: CompletionTarget) -> &'static str {
+    match target {
+        CompletionTarget::Bash => "bash",
+        CompletionTarget::Zsh => "zsh",
+        CompletionTarget::Help => "help",
+    }
+}
+
+fn list_ids_kind_label(kind: ListIdsKind) -> &'static str {
+    match kind {
+        ListIdsKind::Sprints => "sprints",
+        ListIdsKind::Stories => "stories",
+        ListIdsKind::StoriesWithTitles => "stories-with-titles",
+        ListIdsKind::Epics => "epics",
+    }
+}
+
+fn completion_output(target: CompletionTarget) -> CompletionDto {
+    let mut command = Args::command();
+    if let Some(generator) = target.generator() {
+        let mut buf = Vec::new();
+        clap_complete::generate(generator, &mut command, "kanban", &mut buf);
+        let script = String::from_utf8(buf).expect("clap_complete output should be utf8");
+        let content = match generator {
+            clap_complete::Shell::Zsh => enhance_zsh_completion(&script),
+            clap_complete::Shell::Bash => enhance_bash_completion(&script),
+            _ => script,
+        };
+        CompletionDto {
+            target: completion_target_label(target).to_string(),
+            content_type: "shell-script".to_string(),
+            content,
+        }
+    } else {
+        CompletionDto {
+            target: completion_target_label(target).to_string(),
+            content_type: "help".to_string(),
+            content: COMPLETION_HELP.to_string(),
+        }
+    }
+}
+
+fn json_story_frontmatter_updates(
+    fields: &[(&str, &Option<Option<String>>)],
+) -> Result<Vec<(String, String)>> {
+    let mut updates = Vec::new();
+    for (field_name, option) in fields {
+        match option {
+            None => {}
+            Some(Some(value)) => updates.push(((*field_name).to_string(), value.clone())),
+            Some(None) => bail!("--{field_name} requires a value in --format json mode."),
+        }
+    }
+    Ok(updates)
+}
+
+fn forward_slashed_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WebStatusDto {
+    state: String,
+    pid: Option<u32>,
+    stale_pid: Option<u32>,
+    url: String,
+    pid_file: String,
+    log_file: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WebStartDto {
+    state: String,
+    pid: u32,
+    url: String,
+    requested_port: u16,
+    actual_port: u16,
+    port_changed: bool,
+    log_file: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WebStopDto {
+    stopped: bool,
+    before: WebStatusDto,
+    after: WebStatusDto,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WebRestartDto {
+    stopped_existing: bool,
+    started: WebStartDto,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WebLogDto {
+    exists: bool,
+    path: String,
+    line_count: usize,
+    lines: Vec<String>,
+    content: String,
+}
+
+fn web_status_json(repo_root: &Path) -> Result<WebStatusDto> {
+    let config = load_kanban_config(repo_root)?;
+    let paths = web_runtime_paths(&config.repo_root);
+    let process_state = read_web_process_state(&paths)?;
+    let status_port = match process_state {
+        WebProcessState::Running(_) => read_web_port_file(&paths).unwrap_or(config.web.port),
+        WebProcessState::Stopped | WebProcessState::Stale(_) => config.web.port,
+    };
+    let url = format!("http://{}:{}", config.web.host, status_port);
+    let (state, pid, stale_pid) = match process_state {
+        WebProcessState::Stopped => ("stopped".to_string(), None, None),
+        WebProcessState::Running(pid) => ("running".to_string(), Some(pid), None),
+        WebProcessState::Stale(pid) => ("stale".to_string(), None, pid),
+    };
+    Ok(WebStatusDto {
+        state,
+        pid,
+        stale_pid,
+        url,
+        pid_file: forward_slashed_path(&paths.pid_file),
+        log_file: forward_slashed_path(&paths.log_file),
+    })
+}
+
+fn web_start_json(repo_root: &Path, open: bool, dev: bool) -> Result<WebStartDto> {
+    let config = load_kanban_config(repo_root)?;
+    let repo_root = config.repo_root;
+    let paths = web_runtime_paths(&repo_root);
+    fs::create_dir_all(&paths.run_dir)
+        .with_context(|| format!("create web runtime directory {}", paths.run_dir.display()))?;
+
+    match read_web_process_state(&paths)? {
+        WebProcessState::Running(pid) => bail!("kanban web is already running with PID {pid}."),
+        WebProcessState::Stale(_) => remove_pid_file(&paths)?,
+        WebProcessState::Stopped => {}
+    }
+
+    if !dev && !web_production_entry(&repo_root).is_file() {
+        bail!(
+            "built web server not found at {}. Run `kanban web start --build` or use `kanban web start --dev`.",
+            web_production_entry(&repo_root).display()
+        );
+    }
+
+    let port = resolve_web_port(&config.web.host, config.web.port)?;
+    let url = format!("http://{}:{}", config.web.host, port.actual);
+    let spec = build_web_start_command_spec(&repo_root, dev);
+    write_web_port_file(&paths, port.actual)?;
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&paths.log_file)
+        .with_context(|| format!("open web log {}", paths.log_file.display()))?;
+    let stderr = log
+        .try_clone()
+        .with_context(|| format!("clone web log handle {}", paths.log_file.display()))?;
+    let mut command = process_from_spec(&spec);
+    command
+        .env("KANBAN_WEB_PORT", port.actual.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(stderr));
+    #[cfg(unix)]
+    command.process_group(0);
+    let child = command
+        .spawn()
+        .with_context(|| format!("start web server with {}", spec.program))?;
+    fs::write(&paths.pid_file, format!("{}\n", child.id()))
+        .with_context(|| format!("write PID file {}", paths.pid_file.display()))?;
+
+    if open {
+        open_browser_url(&url)?;
+    }
+
+    Ok(WebStartDto {
+        state: "running".to_string(),
+        pid: child.id(),
+        url,
+        requested_port: port.requested,
+        actual_port: port.actual,
+        port_changed: port.changed(),
+        log_file: forward_slashed_path(&paths.log_file),
+    })
+}
+
+fn web_stop_json(repo_root: &Path) -> Result<WebStopDto> {
+    let before = web_status_json(repo_root)?;
+    let stopped = stop_web(&Theme::for_stdout(ColorMode::Never), repo_root, true)?;
+    let after = web_status_json(repo_root)?;
+    Ok(WebStopDto {
+        stopped,
+        before,
+        after,
+    })
+}
+
+fn web_log_json(repo_root: &Path, lines: Option<usize>) -> Result<WebLogDto> {
+    let config = load_kanban_config(repo_root)?;
+    let paths = web_runtime_paths(&config.repo_root);
+    if !paths.log_file.exists() {
+        return Ok(WebLogDto {
+            exists: false,
+            path: forward_slashed_path(&paths.log_file),
+            line_count: 0,
+            lines: Vec::new(),
+            content: String::new(),
+        });
+    }
+
+    let content = fs::read_to_string(&paths.log_file)
+        .with_context(|| format!("read web log {}", paths.log_file.display()))?;
+    let selected_lines = match lines {
+        Some(0) => Vec::new(),
+        Some(limit) => content
+            .lines()
+            .rev()
+            .take(limit)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(str::to_string)
+            .collect(),
+        None => content.lines().map(str::to_string).collect(),
+    };
+    let selected_content = selected_lines.join("\n");
+    let line_count = selected_lines.len();
+    Ok(WebLogDto {
+        exists: true,
+        path: forward_slashed_path(&paths.log_file),
+        line_count,
+        lines: selected_lines,
+        content: selected_content,
+    })
+}
+
 /// Dispatch the JSON output path for a supported command.
 fn emit_json(command: &Command) -> i32 {
     match command {
+        Command::Init { repo_root } => match init_config(repo_root) {
+            Ok(result) => print_envelope(&JsonEnvelope::ok(
+                "init",
+                ConfigInitDto::from_result(&result),
+            )),
+            Err(error) => print_envelope(&JsonEnvelope::<ConfigInitDto>::error(
+                "init",
+                KanbanErrorBody::from_anyhow(&error),
+            )),
+        },
         Command::Config {
             command: ConfigCommand::Get { key, repo_root },
         } => match get_config_value(repo_root, key) {
@@ -999,16 +1255,22 @@ fn emit_json(command: &Command) -> i32 {
         },
         Command::Sprint {
             command: SprintCommand::Show { name, repo_root },
-        } => match summarize_sprint(repo_root, name) {
-            Ok(overview) => print_envelope(&JsonEnvelope::ok(
-                "sprint.show",
-                SprintOverviewDto::from_overview(&overview),
-            )),
-            Err(error) => print_envelope(&JsonEnvelope::<SprintOverviewDto>::error(
-                "sprint.show",
-                KanbanErrorBody::new(KanbanErrorCode::SprintNotFound, error.to_string()),
-            )),
-        },
+        } => {
+            let sprint_result = match name {
+                Some(name) => summarize_sprint(repo_root, name),
+                None => summarize_current_sprint(repo_root),
+            };
+            match sprint_result {
+                Ok(overview) => print_envelope(&JsonEnvelope::ok(
+                    "sprint.show",
+                    SprintOverviewDto::from_overview(&overview),
+                )),
+                Err(error) => print_envelope(&JsonEnvelope::<SprintOverviewDto>::error(
+                    "sprint.show",
+                    KanbanErrorBody::new(KanbanErrorCode::SprintNotFound, error.to_string()),
+                )),
+            }
+        }
         Command::Sprint {
             command: SprintCommand::List { repo_root },
         } => match summarize_sprints(repo_root) {
@@ -1044,6 +1306,23 @@ fn emit_json(command: &Command) -> i32 {
             Ok(value) => print_envelope(&JsonEnvelope::ok("config.show", value)),
             Err(error) => print_envelope(&JsonEnvelope::<serde_json::Value>::error(
                 "config.show",
+                KanbanErrorBody::from_anyhow(&error),
+            )),
+        },
+        Command::Config {
+            command:
+                ConfigCommand::Set {
+                    key,
+                    value,
+                    repo_root,
+                },
+        } => match set_config_value(repo_root, key, value) {
+            Ok(result) => print_envelope(&JsonEnvelope::ok(
+                "config.set",
+                ConfigSetDto::from_result(&result),
+            )),
+            Err(error) => print_envelope(&JsonEnvelope::<ConfigSetDto>::error(
+                "config.set",
                 KanbanErrorBody::from_anyhow(&error),
             )),
         },
@@ -1136,6 +1415,75 @@ fn emit_json(command: &Command) -> i32 {
                 )),
                 Err(e) => print_envelope(&JsonEnvelope::<PlanStoryDto>::error(
                     "story.plan",
+                    KanbanErrorBody::from_anyhow(&e),
+                )),
+            }
+        }
+        Command::Story {
+            command:
+                StoryCommand::Update {
+                    id,
+                    frontmatter_id,
+                    story_type,
+                    status,
+                    epic,
+                    sprint,
+                    story_points,
+                    assignee,
+                    activated,
+                    work_started,
+                    work_done,
+                    created,
+                    updated,
+                    task_file,
+                    repo_root,
+                },
+        } => {
+            let updates = match json_story_frontmatter_updates(&[
+                ("id", frontmatter_id),
+                ("type", story_type),
+                ("status", status),
+                ("epic", epic),
+                ("sprint", sprint),
+                ("story_points", story_points),
+                ("assignee", assignee),
+                ("activated", activated),
+                ("work_started", work_started),
+                ("work_done", work_done),
+                ("created", created),
+                ("updated", updated),
+                ("task_file", task_file),
+            ]) {
+                Ok(updates) => updates,
+                Err(error) => {
+                    return print_envelope(&JsonEnvelope::<StoryUpdateDto>::error(
+                        "story.update",
+                        KanbanErrorBody::new(KanbanErrorCode::InvalidArgument, error.to_string()),
+                    ));
+                }
+            };
+            if updates.is_empty() {
+                return invalid_argument_envelope::<StoryUpdateDto>(
+                    "story.update",
+                    "story update in --format json requires at least one frontmatter field; editor mode is unavailable.",
+                );
+            }
+            let root = match load_kanban_config(repo_root) {
+                Ok(c) => c.repo_root,
+                Err(e) => {
+                    return print_envelope(&JsonEnvelope::<StoryUpdateDto>::error(
+                        "story.update",
+                        KanbanErrorBody::new(KanbanErrorCode::NotInitialized, e.to_string()),
+                    ));
+                }
+            };
+            match update_story_frontmatter(&root, id, &updates) {
+                Ok(result) => print_envelope(&JsonEnvelope::ok(
+                    "story.update",
+                    StoryUpdateDto::from_result(&result, &root),
+                )),
+                Err(e) => print_envelope(&JsonEnvelope::<StoryUpdateDto>::error(
+                    "story.update",
                     KanbanErrorBody::from_anyhow(&e),
                 )),
             }
@@ -1319,6 +1667,104 @@ fn emit_json(command: &Command) -> i32 {
                 KanbanErrorBody::from_anyhow(&e),
             )),
         },
+        Command::Web { command } => match command {
+            WebCommand::Status { repo_root } => match web_status_json(repo_root) {
+                Ok(status) => print_envelope(&JsonEnvelope::ok("web.status", status)),
+                Err(error) => print_envelope(&JsonEnvelope::<WebStatusDto>::error(
+                    "web.status",
+                    KanbanErrorBody::from_anyhow(&error),
+                )),
+            },
+            WebCommand::Start {
+                foreground,
+                open,
+                dev,
+                build,
+                repo_root,
+            } => {
+                if *foreground {
+                    return invalid_argument_envelope::<WebStartDto>(
+                        "web.start",
+                        "web start --foreground is not available in --format json mode because it streams server output.",
+                    );
+                }
+                if *build {
+                    return invalid_argument_envelope::<WebStartDto>(
+                        "web.start",
+                        "web start --build is not available in --format json mode because build output may not be JSON.",
+                    );
+                }
+                match web_start_json(repo_root, *open, *dev) {
+                    Ok(started) => print_envelope(&JsonEnvelope::ok("web.start", started)),
+                    Err(error) => print_envelope(&JsonEnvelope::<WebStartDto>::error(
+                        "web.start",
+                        KanbanErrorBody::from_anyhow(&error),
+                    )),
+                }
+            }
+            WebCommand::Stop { repo_root } => match web_stop_json(repo_root) {
+                Ok(stopped) => print_envelope(&JsonEnvelope::ok("web.stop", stopped)),
+                Err(error) => print_envelope(&JsonEnvelope::<WebStopDto>::error(
+                    "web.stop",
+                    KanbanErrorBody::from_anyhow(&error),
+                )),
+            },
+            WebCommand::Restart {
+                open,
+                dev,
+                build,
+                repo_root,
+            } => {
+                if *build {
+                    return invalid_argument_envelope::<WebRestartDto>(
+                        "web.restart",
+                        "web restart --build is not available in --format json mode because build output may not be JSON.",
+                    );
+                }
+                let stopped_existing =
+                    match stop_web(&Theme::for_stdout(ColorMode::Never), repo_root, true) {
+                        Ok(stopped) => stopped,
+                        Err(error) => {
+                            return print_envelope(&JsonEnvelope::<WebRestartDto>::error(
+                                "web.restart",
+                                KanbanErrorBody::from_anyhow(&error),
+                            ));
+                        }
+                    };
+                match web_start_json(repo_root, *open, *dev) {
+                    Ok(started) => print_envelope(&JsonEnvelope::ok(
+                        "web.restart",
+                        WebRestartDto {
+                            stopped_existing,
+                            started,
+                        },
+                    )),
+                    Err(error) => print_envelope(&JsonEnvelope::<WebRestartDto>::error(
+                        "web.restart",
+                        KanbanErrorBody::from_anyhow(&error),
+                    )),
+                }
+            }
+            WebCommand::Log {
+                lines,
+                follow,
+                repo_root,
+            } => {
+                if *follow {
+                    return invalid_argument_envelope::<WebLogDto>(
+                        "web.log",
+                        "web log --follow is not available in --format json mode because it streams output.",
+                    );
+                }
+                match web_log_json(repo_root, *lines) {
+                    Ok(log) => print_envelope(&JsonEnvelope::ok("web.log", log)),
+                    Err(error) => print_envelope(&JsonEnvelope::<WebLogDto>::error(
+                        "web.log",
+                        KanbanErrorBody::from_anyhow(&error),
+                    )),
+                }
+            }
+        },
         Command::Doctor {
             command: DoctorCommand::Fix { .. },
         } => print_envelope(&JsonEnvelope::<NoData>::error(
@@ -1328,15 +1774,37 @@ fn emit_json(command: &Command) -> i32 {
                 "doctor fix is not available in --format json mode; use `doctor show` instead.",
             ),
         )),
-        _other => {
-            let env: JsonEnvelope<NoData> = JsonEnvelope::error(
-                "unknown",
-                KanbanErrorBody::new(
-                    KanbanErrorCode::InvalidArgument,
-                    "This command does not support --format json yet.",
-                ),
-            );
-            print_envelope(&env)
+        Command::Completion { target } => {
+            print_envelope(&JsonEnvelope::ok("completion", completion_output(*target)))
+        }
+        Command::ListIds { kind, repo_root } => {
+            let kind_label = list_ids_kind_label(*kind);
+            let items_result = match kind {
+                ListIdsKind::Sprints => list_sprint_names(repo_root)
+                    .map(|items| items.into_iter().map(ListIdItemDto::value).collect()),
+                ListIdsKind::Stories => list_story_ids(repo_root)
+                    .map(|items| items.into_iter().map(ListIdItemDto::value).collect()),
+                ListIdsKind::StoriesWithTitles => {
+                    list_story_completion_items(repo_root).map(|items| {
+                        items
+                            .iter()
+                            .map(ListIdItemDto::from_completion_item)
+                            .collect()
+                    })
+                }
+                ListIdsKind::Epics => list_epic_ids(repo_root)
+                    .map(|items| items.into_iter().map(ListIdItemDto::value).collect()),
+            };
+            match items_result {
+                Ok(items) => print_envelope(&JsonEnvelope::ok(
+                    "list-ids",
+                    ListIdsDto::new(kind_label, items),
+                )),
+                Err(error) => print_envelope(&JsonEnvelope::<ListIdsDto>::error(
+                    "list-ids",
+                    KanbanErrorBody::from_anyhow(&error),
+                )),
+            }
         }
     }
 }
@@ -1345,6 +1813,7 @@ fn emit_json(command: &Command) -> i32 {
 struct WebRuntimePaths {
     run_dir: PathBuf,
     pid_file: PathBuf,
+    port_file: PathBuf,
     log_file: PathBuf,
 }
 
@@ -1378,6 +1847,7 @@ fn web_runtime_paths(repo_root: &Path) -> WebRuntimePaths {
     let run_dir = repo_root.join(".kanban/run");
     WebRuntimePaths {
         pid_file: run_dir.join("web.pid"),
+        port_file: run_dir.join("web.port"),
         log_file: run_dir.join("web.log"),
         run_dir,
     }
@@ -1509,7 +1979,23 @@ fn remove_pid_file(paths: &WebRuntimePaths) -> Result<()> {
         fs::remove_file(&paths.pid_file)
             .with_context(|| format!("remove PID file {}", paths.pid_file.display()))?;
     }
+    if paths.port_file.exists() {
+        fs::remove_file(&paths.port_file)
+            .with_context(|| format!("remove web port file {}", paths.port_file.display()))?;
+    }
     Ok(())
+}
+
+fn read_web_port_file(paths: &WebRuntimePaths) -> Option<u16> {
+    fs::read_to_string(&paths.port_file)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u16>().ok())
+        .filter(|port| *port != 0)
+}
+
+fn write_web_port_file(paths: &WebRuntimePaths, port: u16) -> Result<()> {
+    fs::write(&paths.port_file, format!("{port}\n"))
+        .with_context(|| format!("write web port file {}", paths.port_file.display()))
 }
 
 fn run_web_build(repo_root: &Path) -> Result<()> {
@@ -1624,6 +2110,7 @@ fn start_web(
         return Ok(());
     }
 
+    write_web_port_file(&paths, port.actual)?;
     let log = OpenOptions::new()
         .create(true)
         .append(true)
@@ -1699,8 +2186,13 @@ fn stop_web(theme: &Theme, repo_root: &Path, quiet: bool) -> Result<bool> {
 fn print_web_status(theme: &Theme, repo_root: &Path) -> Result<()> {
     let config = load_kanban_config(repo_root)?;
     let paths = web_runtime_paths(&config.repo_root);
-    let url = format!("http://{}:{}", config.web.host, config.web.port);
-    match read_web_process_state(&paths)? {
+    let process_state = read_web_process_state(&paths)?;
+    let status_port = match process_state {
+        WebProcessState::Running(_) => read_web_port_file(&paths).unwrap_or(config.web.port),
+        WebProcessState::Stopped | WebProcessState::Stale(_) => config.web.port,
+    };
+    let url = format!("http://{}:{}", config.web.host, status_port);
+    match process_state {
         WebProcessState::Running(pid) => {
             println!("{} running", theme.success("kanban web UI:"));
             println!("{} {pid}", theme.label("PID:"));
@@ -5883,6 +6375,7 @@ mod tests {
             story_file_path: PathBuf::from(
                 "delivery/backlog/phase-1-scaffolding/01.plattforminfrastruktur/US-F1-010.md",
             ),
+            task_file_path: None,
             epic_id: Some("EP-F1-01".to_string()),
             epic_title: Some("Plattforminfrastruktur".to_string()),
             work_started: Some("2026-05-21T00:00:00+0200".to_string()),
@@ -6191,6 +6684,10 @@ mod tests {
         assert_eq!(
             paths.pid_file,
             PathBuf::from("/tmp/repo/.kanban/run/web.pid")
+        );
+        assert_eq!(
+            paths.port_file,
+            PathBuf::from("/tmp/repo/.kanban/run/web.port")
         );
         assert_eq!(
             paths.log_file,
