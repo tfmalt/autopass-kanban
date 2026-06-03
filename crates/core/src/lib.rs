@@ -156,6 +156,8 @@ pub struct StoryOverview {
     pub id: String,
     pub title: String,
     pub status: String,
+    pub epic_id: Option<String>,
+    pub epic_title: Option<String>,
     pub assignee: String,
     pub story_points: String,
     pub sprint: Option<String>,
@@ -263,7 +265,11 @@ pub struct CompletionItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoryDetails {
     pub story: StoryOverview,
-    pub task_file_path: Option<PathBuf>,
+    pub story_file_path: PathBuf,
+    pub epic_id: Option<String>,
+    pub epic_title: Option<String>,
+    pub work_started: Option<String>,
+    pub work_done: Option<String>,
     pub story_statement: Option<String>,
     pub acceptance_criteria: Option<String>,
     pub definition_of_done: Option<String>,
@@ -708,7 +714,7 @@ pub fn summarize_phase(repo_root: impl AsRef<Path>, phase: &str) -> Result<Phase
         .stories
         .iter()
         .filter(|story| to_forward_slashes(&story.file_path).contains(&phase_marker))
-        .map(story_overview)
+        .map(|story| story_overview(&repository.repo_root, story))
         .collect::<Vec<_>>();
 
     stories.sort_by(|left, right| left.id.cmp(&right.id));
@@ -1262,8 +1268,9 @@ pub fn rollover_sprint(
 }
 
 pub fn find_story(repo_root: impl AsRef<Path>, story_id: &str) -> Result<Option<StoryDetails>> {
+    let repo_root = repo_root.as_ref();
     let repository = read_repository(repo_root)?;
-    Ok(find_story_in_repository(&repository, story_id))
+    Ok(find_story_in_repository(repo_root, &repository, story_id))
 }
 
 pub fn collect_doctor_issues(repo_root: impl AsRef<Path>) -> Result<Vec<DoctorIssue>> {
@@ -2093,7 +2100,10 @@ fn unique_story_overviews(repository: &Repository) -> Vec<StoryOverview> {
         }
     }
 
-    selected.into_values().map(story_overview).collect()
+    selected
+        .into_values()
+        .map(|story| story_overview(&repository.repo_root, story))
+        .collect()
 }
 
 fn flatten_sprint_stories(sprint: &SprintOverview) -> Vec<StoryOverview> {
@@ -2131,7 +2141,7 @@ fn sprint_overview_from_spec(
     for story in repository.stories.iter().filter(|story| {
         story.frontmatter.get("sprint").map(String::as_str) == Some(spec.sprint_name.as_str())
     }) {
-        let overview = story_overview(story);
+        let overview = story_overview(&repository.repo_root, story);
         stories_by_status
             .entry(overview.status.clone())
             .or_default()
@@ -2229,7 +2239,11 @@ fn select_current_sprint(sprints: &[SprintOverview], today: NaiveDate) -> Result
     }
 }
 
-fn find_story_in_repository(repository: &Repository, story_id: &str) -> Option<StoryDetails> {
+fn find_story_in_repository(
+    repo_root: &Path,
+    repository: &Repository,
+    story_id: &str,
+) -> Option<StoryDetails> {
     let normalized_story_id = story_id.trim().to_ascii_uppercase();
     let mut matches = repository
         .stories
@@ -2246,14 +2260,13 @@ fn find_story_in_repository(repository: &Repository, story_id: &str) -> Option<S
     matches.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
 
     let story = matches.into_iter().next()?;
-    let task_file_path = story
-        .task_file
-        .as_ref()
-        .map(|task_file| task_file.relative_path.clone());
-
     Some(StoryDetails {
-        story: story_overview(story),
-        task_file_path,
+        story: story_overview(repo_root, story),
+        story_file_path: story.relative_path.clone(),
+        epic_id: story.frontmatter.get("epic").cloned(),
+        epic_title: epic_title(repo_root, story),
+        work_started: story.frontmatter.get("work_started").cloned(),
+        work_done: story.frontmatter.get("work_done").cloned(),
         story_statement: extract_markdown_section(&story.body, "Story Statement"),
         acceptance_criteria: extract_markdown_section(&story.body, "Acceptance Criteria"),
         definition_of_done: extract_markdown_section(&story.body, "Definition of Done"),
@@ -3301,7 +3314,27 @@ fn sprint_warnings(
         .collect()
 }
 
-fn story_overview(story: &Story) -> StoryOverview {
+fn epic_title(repo_root: &Path, story: &Story) -> Option<String> {
+    let epic_id = story.frontmatter.get("epic")?.trim();
+    if epic_id.is_empty() {
+        return None;
+    }
+
+    let epic_dir = repo_root.join(story.relative_path.parent()?);
+    let epic_entry = fs::read_dir(epic_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(epic_id) && name.ends_with(".md"))
+        })?;
+    let body = fs::read_to_string(epic_entry.path()).ok()?;
+    story_title(&body)
+}
+
+fn story_overview(repo_root: &Path, story: &Story) -> StoryOverview {
     StoryOverview {
         id: story.frontmatter.get("id").cloned().unwrap_or_else(|| {
             story
@@ -3311,6 +3344,8 @@ fn story_overview(story: &Story) -> StoryOverview {
         }),
         title: story_title(&story.body).unwrap_or_else(|| story.file_name.clone()),
         status: story.frontmatter.get("status").cloned().unwrap_or_default(),
+        epic_id: story.frontmatter.get("epic").cloned(),
+        epic_title: epic_title(repo_root, story),
         assignee: story
             .frontmatter
             .get("assignee")
@@ -3974,6 +4009,11 @@ mod tests {
         assert_eq!(phase.phase, "F1");
         assert!(phase.stories.iter().any(|story| {
             story.id == "US-F1-052" && story.sprint.as_deref() == Some("S000.getting-started")
+        }));
+        assert!(phase.stories.iter().any(|story| {
+            story.id == "US-F1-052"
+                && story.epic_id.as_deref() == Some("EP-F1-06")
+                && story.epic_title.as_deref() == Some("Git-driven kanban and backlog tooling")
         }));
     }
 

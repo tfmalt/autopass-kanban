@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, IsTerminal, Read, Seek, SeekFrom, Write};
 use std::net::TcpListener;
@@ -219,7 +220,7 @@ impl OutputLayout {
         let width = detected_terminal_width().unwrap_or(DEFAULT_OUTPUT_WIDTH);
         if width < MIN_TERMINAL_WIDTH {
             bail!(
-                "Terminal width must be at least {MIN_TERMINAL_WIDTH} columns for kanban sprint output; detected {width}."
+                "Terminal width must be at least {MIN_TERMINAL_WIDTH} columns for kanban output; detected {width}."
             );
         }
         Ok(Self { width })
@@ -1613,6 +1614,11 @@ struct TableCell {
     preformatted: bool,
 }
 
+struct DynamicTableColumn {
+    title: String,
+    width: usize,
+}
+
 impl TableCell {
     fn new(text: impl Into<String>) -> Self {
         Self {
@@ -1656,6 +1662,35 @@ fn push_story_table(
                     CellStyle::Precolored,
                 ),
                 TableCell::new(&story.title),
+                TableCell::new(extract_assignee_name(&story.assignee)),
+                TableCell::styled(
+                    format_colored_task_summary(theme, story.task_summary.as_ref()),
+                    CellStyle::Precolored,
+                ),
+            ]
+        })
+        .collect::<Vec<_>>();
+    push_wrapped_rows(output, theme, &columns, &rows);
+}
+
+fn push_phase_story_table(
+    output: &mut String,
+    theme: &Theme,
+    width: usize,
+    stories: &[&StoryOverview],
+    points_width: usize,
+) {
+    let columns = phase_story_table_columns(width, stories, points_width);
+    let rows = stories
+        .iter()
+        .map(|story| {
+            vec![
+                TableCell::preformatted(
+                    format_colored_story_status_label(theme, story, points_width),
+                    CellStyle::Precolored,
+                ),
+                TableCell::new(&story.title),
+                TableCell::new(story.sprint.as_deref().unwrap_or("~")),
                 TableCell::new(extract_assignee_name(&story.assignee)),
                 TableCell::styled(
                     format_colored_task_summary(theme, story.task_summary.as_ref()),
@@ -1730,6 +1765,51 @@ fn story_table_columns(
     ]
 }
 
+fn phase_story_table_columns(
+    width: usize,
+    stories: &[&StoryOverview],
+    points_width: usize,
+) -> Vec<(&'static str, usize)> {
+    let available = row_content_width(width, 5);
+    let id_width = stories
+        .iter()
+        .map(|story| display_width(&format_story_status_label(story, points_width)))
+        .max()
+        .unwrap_or(5)
+        .clamp(5, 18);
+    let sprint_width = stories
+        .iter()
+        .map(|story| display_width(story.sprint.as_deref().unwrap_or("~")))
+        .max()
+        .unwrap_or(1)
+        .clamp(1, 22);
+    let task_width = stories
+        .iter()
+        .map(|story| display_width(&format_compact_task_summary(story.task_summary.as_ref())))
+        .max()
+        .unwrap_or(5)
+        .clamp(5, 17);
+    let raw_assignee_width = stories
+        .iter()
+        .map(|story| display_width(extract_assignee_name(&story.assignee)))
+        .max()
+        .unwrap_or(8)
+        .max(8);
+    let max_assignee = available.saturating_sub(id_width + sprint_width + task_width + 20);
+    let assignee_width = raw_assignee_width.min(max_assignee.max(8));
+    let title_width = available
+        .saturating_sub(id_width + sprint_width + assignee_width + task_width)
+        .max(1);
+
+    vec![
+        ("Story", id_width),
+        ("Description", title_width),
+        ("Sprint", sprint_width),
+        ("Assignee", assignee_width),
+        ("Tasks", task_width),
+    ]
+}
+
 fn blocked_work_table_columns(
     width: usize,
     items: &[kanban_core::BlockedWorkItem],
@@ -1774,6 +1854,66 @@ fn push_wrapped_rows(
 ) {
     for row in rows {
         push_wrapped_table_row(output, theme, columns, row);
+    }
+}
+
+fn push_wrapped_table(
+    output: &mut String,
+    theme: &Theme,
+    columns: &[DynamicTableColumn],
+    rows: &[Vec<TableCell>],
+) {
+    let header = columns
+        .iter()
+        .map(|column| TableCell::preformatted(theme.label(&column.title), CellStyle::Precolored))
+        .collect::<Vec<_>>();
+    push_wrapped_dynamic_table_row(output, theme, columns, &header);
+
+    let mut separator = String::from("  ");
+    for (index, column) in columns.iter().enumerate() {
+        if index > 0 {
+            separator.push_str("  ");
+        }
+        separator.push_str(&theme.paint(Style::Muted, "─".repeat(column.width)));
+    }
+    push_line(output, &separator);
+
+    for row in rows {
+        push_wrapped_dynamic_table_row(output, theme, columns, row);
+    }
+}
+
+fn push_wrapped_dynamic_table_row(
+    output: &mut String,
+    theme: &Theme,
+    columns: &[DynamicTableColumn],
+    row: &[TableCell],
+) {
+    let wrapped_cells = row
+        .iter()
+        .zip(columns)
+        .map(|(cell, column)| {
+            if cell.preformatted {
+                vec![cell.text.clone()]
+            } else {
+                wrap_text(&cell.text, column.width)
+            }
+        })
+        .collect::<Vec<_>>();
+    let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1);
+
+    for line_index in 0..row_height {
+        let mut line = String::new();
+        line.push_str("  ");
+        for ((cell, column), wrapped) in row.iter().zip(columns).zip(&wrapped_cells) {
+            let value = wrapped.get(line_index).map(String::as_str).unwrap_or("");
+            let padded = pad_to_width(value, column.width);
+            if line.len() > 2 {
+                line.push_str("  ");
+            }
+            line.push_str(&style_table_cell(theme, cell.style, &padded));
+        }
+        push_line(output, &line);
     }
 }
 
@@ -2105,24 +2245,245 @@ fn format_compact_task_summary(summary: Option<&TaskSummary>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
-fn print_phase_overview(theme: &Theme, phase: &PhaseOverview) {
-    println!("{} {}", theme.label("Phase:"), theme.id(&phase.phase));
-    println!(
-        "{} {}",
-        theme.label("Stories:"),
-        theme.count(phase.stories.len())
-    );
-    for story in &phase.stories {
-        let sprint = story.sprint.as_deref().unwrap_or("~");
-        println!(
-            "- {} [{}] sprint={} assignee={} {} {}",
-            theme.id(&story.id),
-            theme.status(&story.status),
-            sprint,
-            story.assignee,
-            theme.story_points(format_story_points(&story.story_points)),
-            story.title
+fn print_phase_overview(theme: &Theme, layout: OutputLayout, phase: &PhaseOverview) {
+    print!("{}", render_phase_overview(theme, layout, phase));
+}
+
+fn render_phase_overview(theme: &Theme, layout: OutputLayout, phase: &PhaseOverview) -> String {
+    let mut output = String::new();
+    let grouped = phase_stories_by_epic(phase);
+    let story_count = phase.stories.len();
+    let drafted_points = phase_story_points_for_statuses(phase, &["draft", "ready"]);
+    let planned_points = phase_story_points_for_statuses(phase, &["todo"]);
+    let in_progress_points =
+        phase_story_points_for_statuses(phase, &["in-progress", "ready-for-qa", "blocked"]);
+    let done_points = phase_story_points_for_statuses(phase, &["done"]);
+    let total_points = drafted_points + planned_points + in_progress_points + done_points;
+    let summary = PhaseHeaderSummary {
+        story_count,
+        epic_count: grouped.len(),
+        drafted_points,
+        planned_points,
+        in_progress_points,
+        done_points,
+        total_points,
+    };
+
+    push_phase_header_band(&mut output, theme, layout, phase, &summary);
+
+    let points_width = story_points_column_width(phase.stories.iter());
+    for (index, (epic_label, stories)) in grouped.iter().enumerate() {
+        if index > 0 {
+            push_line(&mut output, "");
+        }
+
+        let epic_points = sum_story_points(stories.iter().copied());
+        push_line(
+            &mut output,
+            &format!(
+                "{}   {}   {}",
+                theme.heading(epic_label),
+                theme.count(format_story_count(stories.len())),
+                theme.story_points(format_story_points(epic_points)),
+            ),
         );
+
+        let stories_by_status = phase_stories_by_status(stories);
+        for status in phase_status_display_order() {
+            let Some(status_stories) = stories_by_status.get(status) else {
+                continue;
+            };
+
+            push_line(&mut output, "");
+            let icon_label = theme.status_text(status, format!("{} {status}", status_icon(status)));
+            let status_points = sum_story_points(status_stories.iter().copied());
+            push_line(
+                &mut output,
+                &format!(
+                    "{}   {}   {}",
+                    icon_label,
+                    theme.count(format_story_count(status_stories.len())),
+                    theme.story_points(format_story_points(status_points)),
+                ),
+            );
+            push_phase_story_table(
+                &mut output,
+                theme,
+                layout.width,
+                status_stories,
+                points_width,
+            );
+        }
+    }
+
+    output
+}
+
+struct PhaseHeaderSummary {
+    story_count: usize,
+    epic_count: usize,
+    drafted_points: usize,
+    planned_points: usize,
+    in_progress_points: usize,
+    done_points: usize,
+    total_points: usize,
+}
+
+fn push_phase_header_band(
+    output: &mut String,
+    theme: &Theme,
+    layout: OutputLayout,
+    phase: &PhaseOverview,
+    summary: &PhaseHeaderSummary,
+) {
+    let prefix_text = format!("─── {} · Phase Overview ", phase.phase);
+    let suffix_text = " ───";
+    let fill = layout
+        .width
+        .saturating_sub(display_width(&prefix_text) + display_width(suffix_text));
+    push_line(
+        output,
+        &format!(
+            "{}{}",
+            theme.paint(Style::Muted, prefix_text),
+            theme.paint(Style::Muted, format!("{}{}", "─".repeat(fill), suffix_text)),
+        ),
+    );
+    push_line(
+        output,
+        &format!(
+            "  {}  {}",
+            theme.label("Scope:"),
+            theme.paint(
+                Style::Muted,
+                format!("phase backlog grouped by epic ({})", summary.epic_count)
+            )
+        ),
+    );
+
+    let bar = render_progress_bar(
+        theme,
+        summary.done_points,
+        summary.total_points,
+        layout.width,
+    );
+    let pct = summary
+        .done_points
+        .checked_mul(100)
+        .and_then(|value| value.checked_div(summary.total_points))
+        .unwrap_or(0);
+    let progress_points = format!(
+        "{} / {}",
+        format_story_points(summary.done_points),
+        summary.total_points
+    );
+    push_line(
+        output,
+        &format!(
+            "  {}  {}  {}",
+            theme.label("Progress:"),
+            bar,
+            format_args!(
+                "{}  {}",
+                theme.story_points(progress_points),
+                theme.paint(Style::Muted, format!("{pct}%"))
+            )
+        ),
+    );
+
+    let dot = theme.paint(Style::Muted, "·");
+    let segments = [
+        format!(
+            "{} {}",
+            theme.story_points(format_story_points(summary.drafted_points)),
+            theme.paint(Style::Yellow, "drafted")
+        ),
+        format!(
+            "{} {}",
+            theme.story_points(format_story_points(summary.planned_points)),
+            theme.paint(Style::Muted, "planned")
+        ),
+        format!(
+            "{} {}",
+            theme.story_points(format_story_points(summary.in_progress_points)),
+            theme.paint(Style::Blue, "in progress")
+        ),
+        format!(
+            "{} {}",
+            theme.story_points(format_story_points(summary.done_points)),
+            theme.paint(Style::Green, "done")
+        ),
+    ];
+    push_line(
+        output,
+        &format!("  {}", segments.join(&format!("  {dot}  "))),
+    );
+
+    push_line(
+        output,
+        &format!(
+            "  {}  {}  {}",
+            theme.count(format_story_count(summary.story_count)),
+            theme.paint(Style::Muted, format_epic_count(summary.epic_count)),
+            theme.story_points(format!(
+                "{} total",
+                format_story_points(summary.total_points)
+            )),
+        ),
+    );
+    push_line(output, &theme.paint(Style::Muted, "─".repeat(layout.width)));
+}
+
+fn phase_stories_by_epic<'a>(phase: &'a PhaseOverview) -> Vec<(String, Vec<&'a StoryOverview>)> {
+    let mut grouped: BTreeMap<String, Vec<&'a StoryOverview>> = BTreeMap::new();
+    for story in &phase.stories {
+        let label = story_epic_label(story.epic_id.as_deref(), story.epic_title.as_deref())
+            .unwrap_or_else(|| "No epic".to_string());
+        grouped.entry(label).or_default().push(story);
+    }
+    grouped.into_iter().collect()
+}
+
+fn phase_stories_by_status<'a>(
+    stories: &[&'a StoryOverview],
+) -> BTreeMap<&'a str, Vec<&'a StoryOverview>> {
+    let mut grouped: BTreeMap<&'a str, Vec<&'a StoryOverview>> = BTreeMap::new();
+    for story in stories {
+        grouped
+            .entry(story.status.as_str())
+            .or_default()
+            .push(*story);
+    }
+    grouped
+}
+
+fn phase_status_display_order() -> &'static [&'static str] {
+    &[
+        "draft",
+        "ready",
+        "todo",
+        "in-progress",
+        "ready-for-qa",
+        "blocked",
+        "done",
+        "dropped",
+    ]
+}
+
+fn phase_story_points_for_statuses(phase: &PhaseOverview, statuses: &[&str]) -> usize {
+    phase
+        .stories
+        .iter()
+        .filter(|story| statuses.contains(&story.status.as_str()))
+        .map(|story| parse_story_points(&story.story_points))
+        .sum()
+}
+
+fn format_epic_count(count: usize) -> String {
+    if count == 1 {
+        "1 epic".to_string()
+    } else {
+        format!("{count} epics")
     }
 }
 
@@ -2153,81 +2514,676 @@ fn render_story_list(theme: &Theme, scope: &str, stories: &[StoryOverview]) -> S
     output
 }
 
-fn print_story_details(theme: &Theme, details: &StoryDetails) {
-    println!("{} {}", theme.label("Story:"), theme.id(&details.story.id));
-    println!("{} {}", theme.label("Title:"), details.story.title);
-    println!(
-        "{} {}",
-        theme.label("Status:"),
-        theme.status(&details.story.status)
-    );
-    println!("{} {}", theme.label("Assignee:"), details.story.assignee);
-    println!(
-        "{} {}",
-        theme.label("Story points:"),
-        theme.story_points(format_story_points(&details.story.story_points))
-    );
-    println!(
-        "{} {}",
-        theme.label("Path:"),
-        theme.path(details.story.relative_path.display())
-    );
+fn print_story_details(theme: &Theme, layout: OutputLayout, details: &StoryDetails) {
+    print!("{}", render_story_details(theme, layout, details));
+}
 
-    if let Some(sprint) = &details.story.sprint {
-        println!("{} {sprint}", theme.label("Sprint:"));
-    }
-    if let Some(task_file_path) = &details.task_file_path {
-        println!(
-            "{} {}",
-            theme.label("Task file:"),
-            theme.path(task_file_path.display())
-        );
-    }
-    if let Some(summary) = &details.story.task_summary {
-        println!(
-            "{} {}",
-            theme.label("Task summary:"),
-            theme.path(format_task_summary(summary))
-        );
-    }
-
-    print_optional_section(theme, "Story Statement", details.story_statement.as_deref());
-    print_optional_section(
+fn render_story_details(theme: &Theme, layout: OutputLayout, details: &StoryDetails) -> String {
+    let mut output = String::new();
+    push_story_detail_header(&mut output, theme, layout, details);
+    push_story_metadata_table(&mut output, theme, layout, details);
+    push_story_markdown_section(
+        &mut output,
         theme,
+        layout,
+        "Story Statement",
+        details.story_statement.as_deref(),
+    );
+    push_story_markdown_section(
+        &mut output,
+        theme,
+        layout,
         "Acceptance Criteria",
         details.acceptance_criteria.as_deref(),
     );
-    print_optional_section(
+    push_story_markdown_section(
+        &mut output,
         theme,
+        layout,
         "Definition Of Done",
         details.definition_of_done.as_deref(),
     );
-    print_optional_section(
+    push_story_markdown_section(
+        &mut output,
         theme,
+        layout,
         "Notes And Open Questions",
         details.notes_and_open_questions.as_deref(),
     );
+    push_story_tasks_section(&mut output, theme, layout, details);
+    output
+}
 
-    println!("{}", theme.heading("Tasks"));
-    if details.tasks.is_empty() {
-        println!("- none");
+fn push_story_detail_header(
+    output: &mut String,
+    theme: &Theme,
+    layout: OutputLayout,
+    details: &StoryDetails,
+) {
+    let title = format!("{} · {}", details.story.id, details.story.title);
+    let status = format!(
+        "{} {}",
+        status_icon(&details.story.status),
+        details.story.status
+    );
+    let suffix_width = display_width(&status) + 2;
+    let title_width = layout.width.saturating_sub(suffix_width).max(1);
+    let title_line = wrap_text(&title, title_width)
+        .into_iter()
+        .next()
+        .unwrap_or(title);
+    let padding = layout
+        .width
+        .saturating_sub(display_width(&title_line) + suffix_width);
+
+    push_line(
+        output,
+        &format!(
+            "{}{}  {}",
+            highlight_story_id(theme, &title_line),
+            " ".repeat(padding),
+            theme.status_text(&details.story.status, status)
+        ),
+    );
+    push_line(output, &theme.paint(Style::Muted, "─".repeat(layout.width)));
+}
+
+fn highlight_story_id(theme: &Theme, line: &str) -> String {
+    line.split_once(" · ")
+        .map(|(id, title)| format!("{} · {}", theme.id(id), theme.heading(title)))
+        .unwrap_or_else(|| theme.heading(line))
+}
+
+fn push_story_metadata_table(
+    output: &mut String,
+    theme: &Theme,
+    layout: OutputLayout,
+    details: &StoryDetails,
+) {
+    push_line(output, "");
+    push_line(output, &theme.heading("Overview"));
+
+    let columns = two_column_table_columns(layout.width, 13, "Field", "Value");
+    let mut rows = vec![
+        metadata_row(
+            theme,
+            "Status",
+            theme.status_text(
+                &details.story.status,
+                format!(
+                    "{} {}",
+                    status_icon(&details.story.status),
+                    details.story.status
+                ),
+            ),
+            true,
+        ),
+        metadata_row(
+            theme,
+            "Sprint",
+            details.story.sprint.as_deref().unwrap_or("~").to_string(),
+            false,
+        ),
+        metadata_row(theme, "Assignee", details.story.assignee.clone(), false),
+        metadata_row(
+            theme,
+            "Points",
+            theme.story_points(format_story_points(&details.story.story_points)),
+            true,
+        ),
+    ];
+
+    let task_summary = details
+        .story
+        .task_summary
+        .as_ref()
+        .map(|summary| format_colored_task_summary(theme, Some(summary)))
+        .unwrap_or_else(|| "-".to_string());
+    rows.push(metadata_row(theme, "Tasks", task_summary, true));
+    if let Some(phase) = story_phase_label(&details.story_file_path) {
+        rows.push(metadata_row(theme, "Phase", phase, false));
+    }
+    if let Some(epic) = story_epic_label(details.epic_id.as_deref(), details.epic_title.as_deref())
+    {
+        rows.push(metadata_row(theme, "Epic", epic, false));
+    }
+    rows.push(metadata_row(
+        theme,
+        "File",
+        simplify_story_path(&details.story_file_path),
+        false,
+    ));
+    rows.push(metadata_row(
+        theme,
+        "Work started",
+        details
+            .work_started
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("-")
+            .to_string(),
+        false,
+    ));
+    rows.push(metadata_row(
+        theme,
+        "Work done",
+        details
+            .work_done
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("-")
+            .to_string(),
+        false,
+    ));
+
+    push_wrapped_table(output, theme, &columns, &rows);
+}
+
+fn simplify_story_path(path: &Path) -> String {
+    path.strip_prefix("delivery/backlog")
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+fn story_phase_label(path: &Path) -> Option<String> {
+    let phase_dir = path.iter().nth(2)?.to_string_lossy();
+    phase_dir
+        .strip_prefix("phase-")
+        .and_then(|rest| rest.split_once('-'))
+        .map(|(number, slug)| format!("{} {}", number, headline_from_slug(slug)))
+}
+
+fn story_epic_label(epic_id: Option<&str>, epic_title: Option<&str>) -> Option<String> {
+    let epic_id = epic_id?.trim();
+    if epic_id.is_empty() {
+        None
     } else {
-        for task in &details.tasks {
-            println!(
-                "- {} [{}] {}",
-                theme.id(&task.id),
-                theme.status(&task.normalized_status),
-                task.title
-            );
+        let epic_title = epic_title.unwrap_or("").trim();
+        if epic_title.is_empty() {
+            Some(epic_id.to_string())
+        } else {
+            Some(format!("{}  {}", epic_id, epic_title))
         }
     }
 }
 
-fn print_optional_section(theme: &Theme, title: &str, content: Option<&str>) {
-    if let Some(content) = content {
-        println!("{}", theme.heading(format!("{title}:")));
-        println!("{content}");
+fn headline_from_slug(slug: &str) -> String {
+    slug.split('-')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn metadata_row(theme: &Theme, label: &str, value: String, precolored: bool) -> Vec<TableCell> {
+    vec![
+        TableCell::preformatted(theme.label(label), CellStyle::Precolored),
+        if precolored {
+            TableCell::preformatted(value, CellStyle::Precolored)
+        } else {
+            TableCell::new(value)
+        },
+    ]
+}
+
+fn two_column_table_columns(
+    width: usize,
+    first_width: usize,
+    first_title: &str,
+    second_title: &str,
+) -> Vec<DynamicTableColumn> {
+    let available = row_content_width(width, 2);
+    let first_width = first_width.min(available.saturating_sub(1)).max(1);
+    vec![
+        DynamicTableColumn {
+            title: first_title.to_string(),
+            width: first_width,
+        },
+        DynamicTableColumn {
+            title: second_title.to_string(),
+            width: available.saturating_sub(first_width).max(1),
+        },
+    ]
+}
+
+fn push_story_markdown_section(
+    output: &mut String,
+    theme: &Theme,
+    layout: OutputLayout,
+    title: &str,
+    content: Option<&str>,
+) {
+    let Some(content) = content.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    push_line(output, "");
+    push_line(output, &theme.heading(title));
+    push_line(output, &theme.paint(Style::Muted, "─".repeat(title.len())));
+    push_terminal_markdown(output, theme, layout.width, content);
+}
+
+fn push_terminal_markdown(output: &mut String, theme: &Theme, width: usize, content: &str) {
+    let mut table_lines = Vec::new();
+    let mut code_block = CodeBlockKind::None;
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim_end();
+        let trimmed = line.trim();
+
+        if is_markdown_table_line(trimmed) && matches!(code_block, CodeBlockKind::None) {
+            table_lines.push(trimmed.to_string());
+            continue;
+        }
+        flush_markdown_table(output, theme, width, &mut table_lines);
+
+        if trimmed.starts_with("```") {
+            code_block = toggle_code_block(code_block, trimmed);
+            continue;
+        }
+
+        if !matches!(code_block, CodeBlockKind::None) {
+            push_code_block_line(output, theme, width, line, code_block);
+            continue;
+        }
+
+        push_terminal_markdown_line(output, theme, width, line);
     }
+
+    flush_markdown_table(output, theme, width, &mut table_lines);
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum CodeBlockKind {
+    None,
+    Plain,
+    Gherkin,
+}
+
+fn toggle_code_block(current: CodeBlockKind, fence_line: &str) -> CodeBlockKind {
+    if !matches!(current, CodeBlockKind::None) {
+        return CodeBlockKind::None;
+    }
+
+    let info = fence_line.trim_start_matches('`').trim();
+    if info.eq_ignore_ascii_case("gherkin") {
+        CodeBlockKind::Gherkin
+    } else {
+        CodeBlockKind::Plain
+    }
+}
+
+fn push_code_block_line(
+    output: &mut String,
+    theme: &Theme,
+    width: usize,
+    line: &str,
+    code_block: CodeBlockKind,
+) {
+    match code_block {
+        CodeBlockKind::Gherkin => push_gherkin_code_line(output, theme, width, line),
+        CodeBlockKind::Plain => {
+            push_wrapped_hanging_line(output, "  │ ", line, width, |value| theme.path(value));
+        }
+        CodeBlockKind::None => {}
+    }
+}
+
+fn push_gherkin_code_line(output: &mut String, theme: &Theme, width: usize, line: &str) {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        push_line(output, "  │");
+        return;
+    }
+
+    if let Some((keyword, rest)) = gherkin_line(trimmed) {
+        push_wrapped_hanging_line(
+            output,
+            "  │ ",
+            &format!("{} {}", theme.label(keyword), clean_inline_markdown(rest)),
+            width,
+            |value| value.to_string(),
+        );
+    } else {
+        push_wrapped_hanging_line(output, "  │ ", trimmed, width, |value| theme.path(value));
+    }
+}
+
+fn push_terminal_markdown_line(output: &mut String, theme: &Theme, width: usize, line: &str) {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        push_line(output, "");
+        return;
+    }
+
+    if let Some(heading) = markdown_heading_text(trimmed) {
+        push_wrapped_hanging_line(
+            output,
+            "",
+            &clean_inline_markdown(heading),
+            width,
+            |value| theme.heading(value),
+        );
+        return;
+    }
+
+    if let Some(quote) = trimmed.strip_prefix('>') {
+        push_wrapped_hanging_line(
+            output,
+            "  │ ",
+            &clean_inline_markdown(quote.trim()),
+            width,
+            |value| theme.path(value),
+        );
+        return;
+    }
+
+    if let Some((marker, value)) = markdown_list_item(trimmed) {
+        push_wrapped_hanging_line(
+            output,
+            &format!("  {marker} "),
+            &clean_inline_markdown(value),
+            width,
+            |value| value.to_string(),
+        );
+        return;
+    }
+
+    if let Some((keyword, rest)) = gherkin_line(trimmed) {
+        push_wrapped_hanging_line(
+            output,
+            &format!("  {} ", theme.label(keyword)),
+            &clean_inline_markdown(rest),
+            width,
+            |value| value.to_string(),
+        );
+        return;
+    }
+
+    push_wrapped_hanging_line(
+        output,
+        "  ",
+        &clean_inline_markdown(trimmed),
+        width,
+        |value| value.to_string(),
+    );
+}
+
+fn markdown_heading_text(line: &str) -> Option<&str> {
+    let hashes = line.chars().take_while(|ch| *ch == '#').count();
+    if (1..=6).contains(&hashes) && line.as_bytes().get(hashes) == Some(&b' ') {
+        Some(line[hashes + 1..].trim())
+    } else {
+        None
+    }
+}
+
+fn markdown_list_item(line: &str) -> Option<(String, &str)> {
+    for (prefix, marker) in [
+        ("- [x] ", "☑"),
+        ("- [X] ", "☑"),
+        ("- [ ] ", "☐"),
+        ("* [x] ", "☑"),
+        ("* [X] ", "☑"),
+        ("* [ ] ", "☐"),
+        ("- ", "•"),
+        ("* ", "•"),
+    ] {
+        if let Some(value) = line.strip_prefix(prefix) {
+            return Some((marker.to_string(), value.trim()));
+        }
+    }
+
+    let (number, value) = line.split_once(". ")?;
+    if number.chars().all(|ch| ch.is_ascii_digit()) {
+        Some((format!("{number}."), value.trim()))
+    } else {
+        None
+    }
+}
+
+fn gherkin_line(line: &str) -> Option<(&str, &str)> {
+    for keyword in [
+        "Feature:",
+        "Scenario:",
+        "Scenario Outline:",
+        "Given",
+        "When",
+        "Then",
+        "And",
+        "But",
+        "Examples:",
+    ] {
+        if line == keyword {
+            return Some((keyword, ""));
+        }
+        if let Some(rest) = line.strip_prefix(&format!("{keyword} ")) {
+            return Some((keyword, rest.trim()));
+        }
+    }
+    None
+}
+
+fn clean_inline_markdown(value: &str) -> String {
+    value
+        .replace("**", "")
+        .replace("__", "")
+        .replace('`', "")
+        .trim()
+        .to_string()
+}
+
+fn is_markdown_table_line(line: &str) -> bool {
+    line.starts_with('|') && line.matches('|').count() >= 2
+}
+
+fn flush_markdown_table(
+    output: &mut String,
+    theme: &Theme,
+    width: usize,
+    table_lines: &mut Vec<String>,
+) {
+    if table_lines.is_empty() {
+        return;
+    }
+    push_markdown_table(output, theme, width, table_lines);
+    table_lines.clear();
+}
+
+fn push_markdown_table(output: &mut String, theme: &Theme, width: usize, lines: &[String]) {
+    let rows = lines
+        .iter()
+        .filter(|line| !is_markdown_table_separator(line))
+        .map(|line| parse_markdown_table_row(line))
+        .filter(|cells| !cells.is_empty())
+        .collect::<Vec<_>>();
+    let Some((header, body)) = rows.split_first() else {
+        return;
+    };
+    let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if column_count == 0 {
+        return;
+    }
+
+    let columns = markdown_table_columns(width, header, body, column_count);
+    let body_rows = body
+        .iter()
+        .map(|row| {
+            normalize_markdown_row(row, column_count)
+                .into_iter()
+                .map(TableCell::new)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    push_wrapped_table(output, theme, &columns, &body_rows);
+}
+
+fn parse_markdown_table_row(line: &str) -> Vec<String> {
+    line.trim()
+        .trim_matches('|')
+        .split('|')
+        .map(|cell| clean_inline_markdown(cell.trim()))
+        .collect()
+}
+
+fn is_markdown_table_separator(line: &str) -> bool {
+    line.trim()
+        .trim_matches('|')
+        .split('|')
+        .all(|cell| cell.trim().chars().all(|ch| matches!(ch, '-' | ':' | ' ')))
+}
+
+fn normalize_markdown_row(row: &[String], column_count: usize) -> Vec<String> {
+    (0..column_count)
+        .map(|index| row.get(index).cloned().unwrap_or_default())
+        .collect()
+}
+
+fn markdown_table_columns(
+    width: usize,
+    header: &[String],
+    body: &[Vec<String>],
+    column_count: usize,
+) -> Vec<DynamicTableColumn> {
+    let available = row_content_width(width, column_count);
+    let min_width = (available / column_count).clamp(1, 8);
+    let mut widths = (0..column_count)
+        .map(|index| {
+            std::iter::once(header.get(index).map(String::as_str).unwrap_or(""))
+                .chain(
+                    body.iter()
+                        .map(move |row| row.get(index).map(String::as_str).unwrap_or("")),
+                )
+                .map(display_width)
+                .max()
+                .unwrap_or(min_width)
+                .max(min_width)
+        })
+        .collect::<Vec<_>>();
+
+    while widths.iter().sum::<usize>() > available {
+        let Some((index, _)) = widths
+            .iter()
+            .enumerate()
+            .filter(|(_, width)| **width > min_width)
+            .max_by_key(|(_, width)| **width)
+        else {
+            break;
+        };
+        widths[index] -= 1;
+    }
+
+    (0..column_count)
+        .map(|index| DynamicTableColumn {
+            title: header.get(index).cloned().unwrap_or_default(),
+            width: widths.get(index).copied().unwrap_or(min_width),
+        })
+        .collect()
+}
+
+fn push_story_tasks_section(
+    output: &mut String,
+    theme: &Theme,
+    layout: OutputLayout,
+    details: &StoryDetails,
+) {
+    push_line(output, "");
+    push_line(output, &theme.heading("Tasks"));
+    push_line(output, &theme.paint(Style::Muted, "─────"));
+    if details.tasks.is_empty() {
+        push_line(output, "  - none");
+        return;
+    }
+
+    let columns = task_table_columns(layout.width, &details.tasks);
+    let rows = details
+        .tasks
+        .iter()
+        .map(|task| {
+            vec![
+                TableCell::styled(&task.id, CellStyle::Id),
+                TableCell::preformatted(
+                    theme.status_text(
+                        &task.normalized_status,
+                        format!(
+                            "{} {}",
+                            status_icon(&task.normalized_status),
+                            task.normalized_status
+                        ),
+                    ),
+                    CellStyle::Precolored,
+                ),
+                TableCell::new(if task.tags.is_empty() {
+                    "-".to_string()
+                } else {
+                    task.tags.join(", ")
+                }),
+                TableCell::new(if task.description.trim().is_empty() {
+                    task.title.clone()
+                } else {
+                    format!("{} - {}", task.title, task.description.trim())
+                }),
+            ]
+        })
+        .collect::<Vec<_>>();
+    push_wrapped_table(output, theme, &columns, &rows);
+}
+
+fn task_table_columns(width: usize, tasks: &[kanban_core::Task]) -> Vec<DynamicTableColumn> {
+    let available = row_content_width(width, 4);
+    let task_width = tasks
+        .iter()
+        .map(|task| display_width(&task.id))
+        .max()
+        .unwrap_or(4)
+        .clamp(4, 20);
+    let status_width = tasks
+        .iter()
+        .map(|task| {
+            display_width(&format!(
+                "{} {}",
+                status_icon(&task.normalized_status),
+                task.normalized_status
+            ))
+        })
+        .max()
+        .unwrap_or(6)
+        .clamp(6, 16);
+    let tags_width = tasks
+        .iter()
+        .map(|task| display_width(&task.tags.join(", ")))
+        .max()
+        .unwrap_or(4)
+        .clamp(4, 18);
+    let description_width = available
+        .saturating_sub(task_width + status_width + tags_width)
+        .max(20);
+
+    vec![
+        DynamicTableColumn {
+            title: "Task".to_string(),
+            width: task_width,
+        },
+        DynamicTableColumn {
+            title: "Status".to_string(),
+            width: status_width,
+        },
+        DynamicTableColumn {
+            title: "Tags".to_string(),
+            width: tags_width,
+        },
+        DynamicTableColumn {
+            title: "Description".to_string(),
+            width: description_width,
+        },
+    ]
 }
 
 fn print_doctor_findings(theme: &Theme, findings: &[DoctorFinding]) {
@@ -2492,13 +3448,6 @@ fn run_doctor_fix_wizard(theme: &Theme, repo_root: &PathBuf, target: Option<&str
 
     println!("{}", theme.success("Doctor fix wizard completed."));
     Ok(())
-}
-
-fn format_task_summary(summary: &TaskSummary) -> String {
-    format!(
-        "tasks(todo={}, in-progress={}, blocked={}, done={})",
-        summary.todo, summary.in_progress, summary.blocked, summary.done
-    )
 }
 
 /// ZSH helper functions appended after the clap_complete-generated script.
@@ -3400,12 +4349,12 @@ fn main() -> Result<()> {
         Command::Phase { command } => match command {
             PhaseCommand::Show { phase, repo_root } => {
                 let phase = summarize_phase(repo_root, &phase)?;
-                print_phase_overview(&theme, &phase);
+                print_phase_overview(&theme, OutputLayout::for_stdout()?, &phase);
             }
         },
         Command::Story { command } => match command {
             StoryCommand::Show { id, repo_root } => match find_story(repo_root, &id)? {
-                Some(details) => print_story_details(&theme, &details),
+                Some(details) => print_story_details(&theme, OutputLayout::for_stdout()?, &details),
                 None => println!("{} {id}", theme.warning("Story not found:")),
             },
             StoryCommand::List {
@@ -3782,6 +4731,8 @@ mod tests {
                 id: "US-F1-999".to_string(),
                 title: "Improve current sprint terminal rendering so story descriptions wrap responsively inside the detected table boundary".to_string(),
                 status: "in-progress".to_string(),
+                epic_id: Some("EP-F1-99".to_string()),
+                epic_title: Some("Terminal Rendering".to_string()),
                 assignee: "Ada Lovelace <ada@example.test>".to_string(),
                 story_points: "3".to_string(),
                 sprint: Some("S999.test".to_string()),
@@ -3891,6 +4842,8 @@ mod tests {
                 id: "US-F1-001".to_string(),
                 title: "Completed high-value story".to_string(),
                 status: "done".to_string(),
+                epic_id: Some("EP-F1-01".to_string()),
+                epic_title: Some("Test Epic".to_string()),
                 assignee: "TBD".to_string(),
                 story_points: "8".to_string(),
                 sprint: Some("S001.test".to_string()),
@@ -3905,6 +4858,8 @@ mod tests {
                 id: "US-F1-002".to_string(),
                 title: "Remaining smaller story".to_string(),
                 status: "todo".to_string(),
+                epic_id: Some("EP-F1-01".to_string()),
+                epic_title: Some("Test Epic".to_string()),
                 assignee: "TBD".to_string(),
                 story_points: "2".to_string(),
                 sprint: Some("S001.test".to_string()),
@@ -3982,6 +4937,8 @@ mod tests {
                 id: "US-F1-062".to_string(),
                 title: "A larger story".to_string(),
                 status: "todo".to_string(),
+                epic_id: Some("EP-F1-06".to_string()),
+                epic_title: Some("CLI".to_string()),
                 assignee: "Someone <s@example.com>".to_string(),
                 story_points: "13".to_string(),
                 sprint: Some("S001.test".to_string()),
@@ -3996,6 +4953,8 @@ mod tests {
                 id: "US-F3-001".to_string(),
                 title: "A smaller story".to_string(),
                 status: "in-progress".to_string(),
+                epic_id: Some("EP-F3-01".to_string()),
+                epic_title: Some("CLI".to_string()),
                 assignee: "Someone <s@example.com>".to_string(),
                 story_points: "5".to_string(),
                 sprint: Some("S001.test".to_string()),
@@ -4044,6 +5003,8 @@ mod tests {
             id: "US-F1-002".to_string(),
             title: "A story in progress".to_string(),
             status: "in-progress".to_string(),
+            epic_id: Some("EP-F1-01".to_string()),
+            epic_title: Some("CLI".to_string()),
             assignee: "Someone <s@example.com>".to_string(),
             story_points: "3".to_string(),
             sprint: Some("S001.test".to_string()),
@@ -4068,6 +5029,8 @@ mod tests {
                 id: "US-F1-001".to_string(),
                 title: "A completed story".to_string(),
                 status: "done".to_string(),
+                epic_id: Some("EP-F1-01".to_string()),
+                epic_title: Some("CLI".to_string()),
                 assignee: "Someone <s@example.com>".to_string(),
                 story_points: "2".to_string(),
                 sprint: Some("S001.test".to_string()),
@@ -4138,6 +5101,8 @@ mod tests {
                 id: "US-F1-002".to_string(),
                 title: "A story in progress".to_string(),
                 status: "in-progress".to_string(),
+                epic_id: Some("EP-F1-01".to_string()),
+                epic_title: Some("CLI".to_string()),
                 assignee: "Someone <s@example.com>".to_string(),
                 story_points: "3".to_string(),
                 sprint: Some("S001.test".to_string()),
@@ -4271,6 +5236,8 @@ mod tests {
             id: "US-F1-010".to_string(),
             title: "CI pipeline with build and unit tests".to_string(),
             status: "in-progress".to_string(),
+            epic_id: Some("EP-F1-01".to_string()),
+            epic_title: Some("Platform".to_string()),
             assignee: "Ada Lovelace <ada@example.test>".to_string(),
             story_points: "3".to_string(),
             sprint: Some("S000.getting-started".to_string()),
@@ -4287,6 +5254,195 @@ mod tests {
         assert!(output.contains("Scope: active sprint (S000.getting-started)"));
         assert!(output.contains("US-F1-010 [in-progress] sprint=S000.getting-started"));
         assert!(output.contains("◈3"));
+    }
+
+    #[test]
+    fn phase_overview_groups_stories_by_epic_and_status() {
+        let theme = Theme::plain();
+        let phase = PhaseOverview {
+            phase: "F1".to_string(),
+            stories: vec![
+                StoryOverview {
+                    id: "US-F1-010".to_string(),
+                    title: "CI pipeline with build and unit tests".to_string(),
+                    status: "todo".to_string(),
+                    epic_id: Some("EP-F1-01".to_string()),
+                    epic_title: Some("Platform".to_string()),
+                    assignee: "Ada Lovelace <ada@example.test>".to_string(),
+                    story_points: "3".to_string(),
+                    sprint: Some("S000.getting-started".to_string()),
+                    relative_path: PathBuf::from(
+                        "delivery/backlog/phase-1-scaffolding/01.platform/US-F1-010.md",
+                    ),
+                    task_summary: Some(TaskSummary {
+                        todo: 2,
+                        in_progress: 0,
+                        blocked: 0,
+                        done: 1,
+                    }),
+                    task_count: 3,
+                },
+                StoryOverview {
+                    id: "US-F1-011".to_string(),
+                    title: "Preview story details in the terminal".to_string(),
+                    status: "in-progress".to_string(),
+                    epic_id: Some("EP-F1-01".to_string()),
+                    epic_title: Some("Platform".to_string()),
+                    assignee: "Grace Hopper <grace@example.test>".to_string(),
+                    story_points: "5".to_string(),
+                    sprint: None,
+                    relative_path: PathBuf::from(
+                        "delivery/backlog/phase-1-scaffolding/01.platform/US-F1-011.md",
+                    ),
+                    task_summary: Some(TaskSummary {
+                        todo: 1,
+                        in_progress: 2,
+                        blocked: 0,
+                        done: 0,
+                    }),
+                    task_count: 3,
+                },
+                StoryOverview {
+                    id: "US-F1-020".to_string(),
+                    title: "Sync sprint rosters from story metadata".to_string(),
+                    status: "done".to_string(),
+                    epic_id: Some("EP-F1-02".to_string()),
+                    epic_title: Some("Planning".to_string()),
+                    assignee: "TBD".to_string(),
+                    story_points: "2".to_string(),
+                    sprint: Some("S001.foundation".to_string()),
+                    relative_path: PathBuf::from(
+                        "delivery/backlog/phase-1-scaffolding/02.planning/US-F1-020.md",
+                    ),
+                    task_summary: None,
+                    task_count: 0,
+                },
+            ],
+        };
+
+        let output = render_phase_overview(&theme, OutputLayout { width: 100 }, &phase);
+
+        assert!(output.contains("F1 · Phase Overview"));
+        assert!(output.contains("3 stories"));
+        assert!(output.contains("Progress:"));
+        assert!(output.contains("◈2 / 10"));
+        assert!(output.contains("20%"));
+        assert!(output.contains("◈0 drafted"));
+        assert!(output.contains("◈3 planned"));
+        assert!(output.contains("◈5 in progress"));
+        assert!(output.contains("◈2 done"));
+        assert!(output.contains("2 epics"));
+        assert!(output.contains("◈10 total"));
+        assert!(output.contains("EP-F1-01  Platform   2 stories   ◈8"));
+        assert!(output.contains("○ todo   1 story   ◈3"));
+        assert!(output.contains("→ in-progress   1 story   ◈5"));
+        assert!(output.contains("✓ done   1 story   ◈2"));
+        assert!(output.contains("S000.getting-started"));
+        assert!(output.contains("~"));
+        assert!(output.contains("Ada Lovelace"));
+        assert!(output.contains("Grace Hopper"));
+        assert!(output.contains("Sync sprint rosters from story metadata"));
+        for line in output.lines() {
+            assert!(
+                display_width(line) <= 100,
+                "line exceeded 100 columns: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn story_details_render_terminal_formatted_markdown() {
+        let theme = Theme::plain();
+        let details = StoryDetails {
+            story: StoryOverview {
+                id: "US-F1-010".to_string(),
+                title: "CI pipeline with build and unit tests".to_string(),
+                status: "in-progress".to_string(),
+                epic_id: Some("EP-F1-01".to_string()),
+                epic_title: Some("Plattforminfrastruktur".to_string()),
+                assignee: "Ada Lovelace <ada@example.test>".to_string(),
+                story_points: "3".to_string(),
+                sprint: Some("S000.getting-started".to_string()),
+                relative_path: PathBuf::from(
+                    "delivery/backlog/phase-1-scaffolding/01.some-epic/US-F1-010.md",
+                ),
+                task_summary: Some(TaskSummary {
+                    todo: 1,
+                    in_progress: 1,
+                    blocked: 0,
+                    done: 2,
+                }),
+                task_count: 4,
+            },
+            story_file_path: PathBuf::from(
+                "delivery/backlog/phase-1-scaffolding/01.plattforminfrastruktur/US-F1-010.md",
+            ),
+            epic_id: Some("EP-F1-01".to_string()),
+            epic_title: Some("Plattforminfrastruktur".to_string()),
+            work_started: Some("2026-05-21T00:00:00+0200".to_string()),
+            work_done: None,
+            story_statement: Some(
+                "As a developer\n\n- I need **formatted** story output".to_string(),
+            ),
+            acceptance_criteria: Some(
+                "Scenario: Show a story\nGiven a story exists\nWhen I run the command\nThen the story is formatted".to_string(),
+            ),
+            definition_of_done: Some("- [ ] Run `cargo test`".to_string()),
+            notes_and_open_questions: Some(
+                "| Risk | Mitigation |\n| --- | --- |\n| Raw markdown | Render terminal tables |"
+                    .to_string(),
+            ),
+            tasks: vec![kanban_core::Task {
+                id: "TASK-US-F1-010-001".to_string(),
+                title: "Build story renderer".to_string(),
+                status: "In Progress".to_string(),
+                normalized_status: "in-progress".to_string(),
+                tags: vec!["cli".to_string()],
+                description: "Wire command output".to_string(),
+            }],
+        };
+
+        let output = render_story_details(&theme, OutputLayout { width: 100 }, &details);
+
+        assert!(output.contains("US-F1-010 · CI pipeline with build and unit tests"));
+        assert!(output.contains("Overview"));
+        assert!(output.contains("Field"));
+        assert!(output.contains("Value"));
+        assert!(output.contains("Scenario: Show a story"));
+        assert!(output.contains("Given a story exists"));
+        assert!(output.contains("☐ Run cargo test"));
+        assert!(output.contains("Risk"));
+        assert!(output.contains("Mitigation"));
+        assert!(output.contains("1 Scaffolding"));
+        assert!(output.contains("EP-F1-01 Plattforminfrastruktur"));
+        assert!(output.contains("phase-1-scaffolding/01.plattforminfrastruktur/US-F1-010.md"));
+        assert!(output.contains("2026-05-21T00:00:00+0200"));
+        assert!(output.contains("TASK-US-F1-010-001"));
+        assert!(output.contains("→ in-progress"));
+        assert!(output.contains("Build story renderer - Wire command output"));
+        assert!(!output.contains("Story:"));
+        assert!(!output.contains("Task file"));
+        assert!(!output.contains("delivery/backlog/"));
+        assert!(!output.contains("| Risk | Mitigation |"));
+        assert!(!output.contains("- [ ] Run `cargo test`"));
+    }
+
+    #[test]
+    fn fenced_gherkin_blocks_are_syntax_highlighted() {
+        let theme = Theme::color();
+        let mut output = String::new();
+
+        push_terminal_markdown(
+            &mut output,
+            &theme,
+            100,
+            "```gherkin\nGiven a developer opens a pull request\nWhen the pipeline runs\nThen the status is visible\n```",
+        );
+
+        assert!(output.contains("  │ "));
+        assert!(output.contains("\x1b[1mGiven\x1b[0m a developer opens a pull request"));
+        assert!(output.contains("\x1b[1mWhen\x1b[0m the pipeline runs"));
+        assert!(output.contains("\x1b[1mThen\x1b[0m the status is visible"));
     }
 
     #[test]
