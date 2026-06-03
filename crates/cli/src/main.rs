@@ -1454,8 +1454,8 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
         }
     }
 
-    // Status sections: todo, in-progress, ready-for-qa (expanded with story rows)
-    for status in ["todo", "in-progress", "ready-for-qa"] {
+    // Status sections expanded with story rows.
+    for status in ["todo", "in-progress", "ready-for-qa", "done"] {
         let stories = sprint
             .stories_by_status
             .get(status)
@@ -1477,19 +1477,13 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
         }
     }
 
-    // Summary footer: ✓ done N   ✗ blocked N
-    let done_count = sprint
-        .stories_by_status
-        .get("done")
-        .map(|v| v.len())
-        .unwrap_or(0);
+    // Summary footer: ✗ blocked N
     let blocked_count = sprint
         .stories_by_status
         .get("blocked")
         .map(|v| v.len())
         .unwrap_or(0);
     push_line(&mut output, "");
-    let done_part = theme.paint(Style::Green, format!("{} done", status_icon("done")));
     let blocked_style = if blocked_count > 0 {
         Style::Red
     } else {
@@ -1498,13 +1492,7 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
     let blocked_part = theme.paint(blocked_style, format!("{} blocked", status_icon("blocked")));
     push_line(
         &mut output,
-        &format!(
-            "  {}  {}   {}  {}",
-            done_part,
-            theme.count(done_count),
-            blocked_part,
-            theme.count(blocked_count),
-        ),
+        &format!("  {}  {}", blocked_part, theme.count(blocked_count),),
     );
 
     // Blocked work detail callout
@@ -3929,7 +3917,7 @@ mod tests {
     }
 
     #[test]
-    fn done_section_collapsed_in_overview() {
+    fn done_section_expands_in_overview() {
         let theme = Theme::plain();
         let mut stories_by_status = BTreeMap::new();
         stories_by_status.insert(
@@ -3959,12 +3947,10 @@ mod tests {
             warnings: vec![],
         };
         let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
-        // Done count appears in summary line and header band
-        assert!(output.contains("✓ done"), "done summary line missing");
-        // But the story itself should NOT appear as an individual row
+        assert!(output.contains("✓ done  1"), "done section header missing");
         assert!(
-            !output.contains("A completed story"),
-            "done story listed individually"
+            output.contains("A completed story"),
+            "done story should be listed individually"
         );
     }
 
