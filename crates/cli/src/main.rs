@@ -25,6 +25,7 @@ use kanban_core::{
     suggested_sprint_dates, summarize_current_sprint, summarize_phase, summarize_sprint,
     summarize_sprints, sync_sprint_rosters, update_task_in_story, validate_repository,
 };
+use kanban_core::{read_story_file, story_markdown_file, update_story_frontmatter};
 
 const MIN_TERMINAL_WIDTH: usize = 80;
 const DEFAULT_OUTPUT_WIDTH: usize = 100;
@@ -288,11 +289,13 @@ enum SprintCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Show one sprint summary. Effect: read-only inspection of the selected sprint file and frontmatter-derived stories/tasks. Side effects: none."
+        about = "Show one sprint summary. Defaults to the current sprint when NAME is omitted. Effect: read-only inspection of the selected sprint file and frontmatter-derived stories/tasks. Side effects: none."
     )]
     Show {
-        #[arg(help = "Sprint name to inspect, for example S001.foundation.")]
-        name: String,
+        #[arg(
+            help = "Sprint name to inspect, for example S001.foundation. Defaults to the current sprint."
+        )]
+        name: Option<String>,
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
         #[arg(default_value = ".")]
         repo_root: PathBuf,
@@ -370,6 +373,7 @@ enum PhaseCommand {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum StoryCommand {
     #[command(
         about = "Show one story. Effect: read-only inspection of the canonical story file plus acceptance criteria and tasks. Side effects: none."
@@ -442,6 +446,42 @@ enum StoryCommand {
             help = "Target sprint name or Snnn prefix, for example S001.planning or S001."
         )]
         sprint: String,
+        #[arg(help = "Repository root to update. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        about = "Update a story. With no field options, opens $EDITOR for the story markdown. Field options update frontmatter; omit an option value to be prompted with the current value as default."
+    )]
+    Update {
+        #[arg(help = "Story id to update, for example US-F1-053.")]
+        id: String,
+        #[arg(long = "id", num_args = 0..=1, value_name = "ID", help = "Update frontmatter id. Omit VALUE to prompt with the current value.")]
+        frontmatter_id: Option<Option<String>>,
+        #[arg(long = "type", num_args = 0..=1, value_name = "TYPE", help = "Update frontmatter type. Omit VALUE to prompt with the current value.")]
+        story_type: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "STATUS", help = "Update frontmatter status. Omit VALUE to prompt with the current value.")]
+        status: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "EPIC", help = "Update frontmatter epic. Omit VALUE to prompt with the current value.")]
+        epic: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "SPRINT", help = "Update frontmatter sprint. Omit VALUE to prompt with the current value.")]
+        sprint: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "POINTS", help = "Update frontmatter story_points. Omit VALUE to prompt with the current value.")]
+        story_points: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "ASSIGNEE", help = "Update frontmatter assignee. Omit VALUE to prompt with the current value.")]
+        assignee: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "TIMESTAMP", help = "Update frontmatter activated. Omit VALUE to prompt with the current value.")]
+        activated: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "TIMESTAMP", help = "Update frontmatter work_started. Omit VALUE to prompt with the current value.")]
+        work_started: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "TIMESTAMP", help = "Update frontmatter work_done. Omit VALUE to prompt with the current value.")]
+        work_done: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "TIMESTAMP", help = "Update frontmatter created. Omit VALUE to prompt with the current value.")]
+        created: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "TIMESTAMP", help = "Update frontmatter updated. Omit VALUE to prompt with the current value.")]
+        updated: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "PATH", help = "Update frontmatter task_file. Omit VALUE to prompt with the current value.")]
+        task_file: Option<Option<String>>,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
         #[arg(default_value = ".")]
         repo_root: PathBuf,
@@ -792,7 +832,8 @@ fn command_repo_root(command: &Command) -> Option<&PathBuf> {
             StoryCommand::Show { repo_root, .. }
             | StoryCommand::List { repo_root, .. }
             | StoryCommand::Move { repo_root, .. }
-            | StoryCommand::Plan { repo_root, .. } => Some(repo_root),
+            | StoryCommand::Plan { repo_root, .. }
+            | StoryCommand::Update { repo_root, .. } => Some(repo_root),
         },
         Command::Task { command } => match command {
             TaskCommand::Add { repo_root, .. } | TaskCommand::Update { repo_root, .. } => {
@@ -2469,8 +2510,8 @@ fn enhance_zsh_completion(script: &str) -> String {
     let enhanced = script
         // Sprint name arguments
         .replace(
-            "':name -- Sprint name to inspect, for example S001.foundation.:_default'",
-            "':name -- Sprint name to inspect, for example S001.foundation.:_kanban_sprint_names'",
+            "'::name -- Sprint name to inspect, for example S001.foundation. Defaults to the current sprint.:_default'",
+            "'::name -- Sprint name to inspect, for example S001.foundation. Defaults to the current sprint.:_kanban_sprint_names'",
         )
         .replace(
             "':name -- Sprint name to close and roll over.:_default'",
@@ -2832,7 +2873,7 @@ fn enhance_bash_completion(script: &str) -> String {
     let script = inject_bash_dynamic(
         &script,
         "kanban__subcmd__sprint__subcmd__show",
-        "-h --help <NAME> [REPO_ROOT]",
+        "-h --help [NAME] [REPO_ROOT]",
         "sprints",
         3,
     );
@@ -2894,6 +2935,54 @@ fn prompt_with_default(label: &str, default: &str) -> Result<String> {
     } else {
         Ok(value)
     }
+}
+
+fn story_frontmatter_update_value(
+    story: &kanban_core::Story,
+    field_name: &str,
+    option: &Option<Option<String>>,
+) -> Result<Option<(String, String)>> {
+    match option {
+        None => Ok(None),
+        Some(Some(value)) => Ok(Some((field_name.to_string(), value.clone()))),
+        Some(None) => {
+            let default = story
+                .frontmatter
+                .get(field_name)
+                .cloned()
+                .unwrap_or_default();
+            let value = prompt_with_default(field_name, &default)?;
+            Ok(Some((field_name.to_string(), value)))
+        }
+    }
+}
+
+fn open_story_markdown_in_editor(path: &Path) -> Result<()> {
+    let editor = std::env::var("EDITOR").context("$EDITOR must be set to edit story markdown.")?;
+    if editor.trim().is_empty() {
+        bail!("$EDITOR must not be empty.");
+    }
+
+    #[cfg(windows)]
+    let status = ProcessCommand::new("cmd")
+        .arg("/C")
+        .arg(format!("%EDITOR% \"{}\"", path.display()))
+        .status()
+        .context("run $EDITOR")?;
+
+    #[cfg(not(windows))]
+    let status = ProcessCommand::new("sh")
+        .arg("-c")
+        .arg("exec ${EDITOR} \"$1\"")
+        .arg("kanban-editor")
+        .arg(path)
+        .status()
+        .context("run $EDITOR")?;
+
+    if !status.success() {
+        bail!("$EDITOR exited with status {status}.");
+    }
+    Ok(())
 }
 
 fn prompt_date(label: &str, default: NaiveDate) -> Result<NaiveDate> {
@@ -3122,7 +3211,11 @@ fn main() -> Result<()> {
                 }
             }
             SprintCommand::Show { name, repo_root } => {
-                let sprint = summarize_sprint(repo_root, &name)?;
+                let sprint = if let Some(name) = name {
+                    summarize_sprint(repo_root, &name)?
+                } else {
+                    summarize_current_sprint(repo_root)?
+                };
                 print_sprint_overview(&theme, OutputLayout::for_stdout()?, &sprint);
             }
             SprintCommand::Create {
@@ -3315,6 +3408,70 @@ fn main() -> Result<()> {
                         "{} {}",
                         theme.label("Tasks:"),
                         theme.path(task_path.display())
+                    );
+                }
+            }
+            StoryCommand::Update {
+                id,
+                frontmatter_id,
+                story_type,
+                status,
+                epic,
+                sprint,
+                story_points,
+                assignee,
+                activated,
+                work_started,
+                work_done,
+                created,
+                updated,
+                task_file,
+                repo_root,
+            } => {
+                let story_file = story_markdown_file(&repo_root, &id)?;
+                let story = read_story_file(&story_file.absolute_path, &repo_root)?;
+                let mut updates = Vec::new();
+                for (field_name, option) in [
+                    ("id", frontmatter_id),
+                    ("type", story_type),
+                    ("status", status),
+                    ("epic", epic),
+                    ("sprint", sprint),
+                    ("story_points", story_points),
+                    ("assignee", assignee),
+                    ("activated", activated),
+                    ("work_started", work_started),
+                    ("work_done", work_done),
+                    ("created", created),
+                    ("updated", updated),
+                    ("task_file", task_file),
+                ] {
+                    if let Some(update) =
+                        story_frontmatter_update_value(&story, field_name, &option)?
+                    {
+                        updates.push(update);
+                    }
+                }
+
+                if updates.is_empty() {
+                    open_story_markdown_in_editor(&story_file.absolute_path)?;
+                    println!(
+                        "{} {}",
+                        theme.success("Edited"),
+                        theme.path(story_file.story_path.display())
+                    );
+                } else {
+                    let result = update_story_frontmatter(&repo_root, &id, &updates)?;
+                    println!(
+                        "{} {} ({})",
+                        theme.success("Updated"),
+                        theme.id(&result.story_id),
+                        result.updated_fields.join(", ")
+                    );
+                    println!(
+                        "{} {}",
+                        theme.label("Story:"),
+                        theme.path(result.story_path.display())
                     );
                 }
             }
@@ -3894,6 +4051,36 @@ mod tests {
     }
 
     #[test]
+    fn sprint_show_without_name_parses_as_current_sprint() {
+        let args = Args::try_parse_from(["kanban", "sprint", "show"]).unwrap();
+
+        match args.command {
+            Command::Sprint {
+                command: SprintCommand::Show { name, repo_root },
+            } => {
+                assert_eq!(name, None);
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn sprint_show_with_name_still_parses_named_sprint() {
+        let args = Args::try_parse_from(["kanban", "sprint", "show", "S001.foundation"]).unwrap();
+
+        match args.command {
+            Command::Sprint {
+                command: SprintCommand::Show { name, repo_root },
+            } => {
+                assert_eq!(name.as_deref(), Some("S001.foundation"));
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
     fn no_args_output_starts_with_version_line() {
         let output =
             render_no_args_help_output(&Theme::plain()).expect("no-args output should render");
@@ -3981,6 +4168,63 @@ mod tests {
 
         assert_eq!(command_repo_root(&command), Some(&repo_root));
     }
+
+    #[test]
+    fn story_update_parses_direct_frontmatter_values() {
+        let args = Args::try_parse_from([
+            "kanban",
+            "story",
+            "update",
+            "US-F1-099",
+            "--story-points",
+            "5",
+            "--status",
+            "ready",
+        ])
+        .unwrap();
+
+        match args.command {
+            Command::Story {
+                command:
+                    StoryCommand::Update {
+                        id,
+                        story_points,
+                        status,
+                        repo_root,
+                        ..
+                    },
+            } => {
+                assert_eq!(id, "US-F1-099");
+                assert_eq!(story_points, Some(Some("5".to_string())));
+                assert_eq!(status, Some(Some("ready".to_string())));
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn story_update_parses_bare_frontmatter_option_as_prompt() {
+        let args =
+            Args::try_parse_from(["kanban", "story", "update", "US-F1-099", "--story-points"])
+                .unwrap();
+
+        match args.command {
+            Command::Story {
+                command:
+                    StoryCommand::Update {
+                        story_points,
+                        status,
+                        ..
+                    },
+            } => {
+                assert_eq!(story_points, Some(None));
+                assert_eq!(status, None);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
     #[test]
     fn doctor_show_subcommand_parses() {
         let args = Args::try_parse_from(["kanban", "doctor", "show"]).unwrap();

@@ -226,6 +226,20 @@ pub struct TaskMutationResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoryFileResult {
+    pub story_id: String,
+    pub story_path: PathBuf,
+    pub absolute_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoryUpdateResult {
+    pub story_id: String,
+    pub story_path: PathBuf,
+    pub updated_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RolloverResult {
     pub from_sprint: String,
     pub to_sprint: String,
@@ -1099,6 +1113,60 @@ pub fn update_task_in_story(
         story_id: story.frontmatter.get("id").cloned().unwrap_or_default(),
         task_id: task_id.trim().to_ascii_uppercase(),
         task_file_path: relative_path(&repository.repo_root, &task_file_path),
+    })
+}
+
+pub fn story_markdown_file(repo_root: impl AsRef<Path>, story_id: &str) -> Result<StoryFileResult> {
+    let repository = read_repository(repo_root)?;
+    let story = find_story_for_write(&repository, story_id)?;
+    Ok(StoryFileResult {
+        story_id: story.frontmatter.get("id").cloned().unwrap_or_default(),
+        story_path: story.relative_path.clone(),
+        absolute_path: story.file_path.clone(),
+    })
+}
+
+pub fn update_story_frontmatter(
+    repo_root: impl AsRef<Path>,
+    story_id: &str,
+    updates: &[(String, String)],
+) -> Result<StoryUpdateResult> {
+    let config = load_kanban_config(repo_root)?;
+    let repository = read_repository(&config.repo_root)?;
+    let story = find_story_for_write(&repository, story_id)?;
+    if updates.is_empty() {
+        bail!("No story frontmatter fields were provided.");
+    }
+
+    let update_refs = updates
+        .iter()
+        .map(|(field, value)| (field.as_str(), Some(value.clone())))
+        .collect::<Vec<_>>();
+    let updated = upsert_frontmatter_markdown(&story.markdown, &update_refs)?;
+    fs::write(&story.file_path, updated)
+        .with_context(|| format!("write story file {}", story.file_path.display()))?;
+
+    let mut affected_sprints = BTreeSet::new();
+    if let Some(sprint) = story.frontmatter.get("sprint")
+        && !sprint.trim().is_empty()
+        && sprint.as_str() != "~"
+    {
+        affected_sprints.insert(sprint.clone());
+    }
+    if let Some((_, sprint)) = updates.iter().find(|(field, _)| field == "sprint")
+        && !sprint.trim().is_empty()
+        && sprint.as_str() != "~"
+    {
+        affected_sprints.insert(sprint.clone());
+    }
+    for sprint in affected_sprints {
+        regenerate_sprint_roster(&config, &sprint)?;
+    }
+
+    Ok(StoryUpdateResult {
+        story_id: story.frontmatter.get("id").cloned().unwrap_or_default(),
+        story_path: story.relative_path.clone(),
+        updated_fields: updates.iter().map(|(field, _)| field.clone()).collect(),
     })
 }
 
@@ -2995,6 +3063,21 @@ fn find_sprint_story_for_write<'a>(
         .ok_or_else(|| anyhow!("Sprint story not found: {normalized_story_id}"))
 }
 
+fn find_story_for_write<'a>(repository: &'a Repository, story_id: &str) -> Result<&'a Story> {
+    let normalized_story_id = story_id.trim().to_ascii_uppercase();
+    repository
+        .stories
+        .iter()
+        .find(|story| {
+            story
+                .frontmatter
+                .get("id")
+                .map(|id| id.eq_ignore_ascii_case(&normalized_story_id))
+                .unwrap_or(false)
+        })
+        .ok_or_else(|| anyhow!("Story not found: {normalized_story_id}"))
+}
+
 fn next_task_id(story: &Story, task_file: &TaskFile) -> String {
     let story_id = story.frontmatter.get("id").cloned().unwrap_or_default();
     let next_number = task_file
@@ -3562,6 +3645,38 @@ mod tests {
     }
 
     #[test]
+    fn update_story_frontmatter_writes_requested_fields() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-099-test-story.md",
+            "id: US-F1-099\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint:\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let result = update_story_frontmatter(
+            temp_root.path(),
+            "US-F1-099",
+            &[
+                ("status".to_string(), "ready".to_string()),
+                ("story_points".to_string(), "5".to_string()),
+                ("assignee".to_string(), "TBD".to_string()),
+            ],
+        )
+        .unwrap();
+
+        let markdown = fs::read_to_string(story_path).unwrap();
+        assert_eq!(result.story_id, "US-F1-099");
+        assert_eq!(
+            result.updated_fields,
+            vec!["status", "story_points", "assignee"]
+        );
+        assert!(markdown.contains("status: ready"));
+        assert!(markdown.contains("story_points: 5"));
+        assert!(markdown.contains("assignee: TBD"));
+    }
+
+    #[test]
     fn validate_story_accepts_single_source_story_fixture() {
         let temp_root = tempdir().unwrap();
         init_temp_repo(temp_root.path());
@@ -3922,8 +4037,15 @@ mod tests {
         let issues = collect_doctor_issues_for_story(temp_root.path(), "US-F1-053").unwrap();
 
         assert!(!issues.is_empty());
-        assert!(issues.iter().all(|issue| issue.story_id.as_deref() == Some("US-F1-053")));
-        assert!(issues.iter().any(|issue| issue.file_path.as_ref() == Some(&relative_path(temp_root.path(), &story_path))));
+        assert!(
+            issues
+                .iter()
+                .all(|issue| issue.story_id.as_deref() == Some("US-F1-053"))
+        );
+        assert!(
+            issues.iter().any(|issue| issue.file_path.as_ref()
+                == Some(&relative_path(temp_root.path(), &story_path)))
+        );
     }
 
     #[test]
@@ -4220,7 +4342,12 @@ mod tests {
 
         assert!(err.to_string().contains("Name <email>"));
         assert!(story_path.exists());
-        assert!(!temp_root.path().join("delivery/sprints/S001.foundation/02.in-progress").exists());
+        assert!(
+            !temp_root
+                .path()
+                .join("delivery/sprints/S001.foundation/02.in-progress")
+                .exists()
+        );
     }
 
     #[test]
