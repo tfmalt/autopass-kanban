@@ -60,10 +60,7 @@ pub(crate) const STATUS_PROGRESSION: [&str; 6] = [
 
 pub(crate) const SPRINT_STATUSES: [&str; 4] = ["planned", "active", "closed", "cancelled"];
 
-pub(crate) const ROSTER_COLUMN_ORDER: [&str; 5] =
-    ["in-progress", "ready-for-qa", "todo", "blocked", "done"];
-
-pub(crate) const ROSTER_HEADING: &str = "## Stories (generated — do not edit)";
+pub(crate) const ROSTER_HEADING: &str = "## User Stories selected for sprint";
 
 pub(crate) const CANONICAL_TASK_STATUSES: [&str; 4] = ["todo", "in-progress", "blocked", "done"];
 

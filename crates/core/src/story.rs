@@ -663,7 +663,10 @@ mod tests {
         let sprint_markdown =
             fs::read_to_string(temp_root.path().join("delivery/sprints/S001.foundation.md"))
                 .unwrap();
-        assert!(sprint_markdown.contains("- in-progress: US-F1-053"));
+        assert!(sprint_markdown.contains("| Metric | Stories | Points |"));
+        assert!(sprint_markdown.contains("| Story | Points | Assignee | Tasks |"));
+        assert!(sprint_markdown.contains("### in-progress"));
+        assert!(sprint_markdown.contains("mailto:test@example.com"));
         assert_eq!(
             result.task_path,
             Some(relative_path(
@@ -874,7 +877,10 @@ mod tests {
         );
         let sprint_markdown =
             fs::read_to_string(temp_root.path().join("delivery/sprints/S001.planning.md")).unwrap();
-        assert!(sprint_markdown.contains("- todo: US-F2-001"));
+        assert!(sprint_markdown.contains("| Metric | Stories | Points |"));
+        assert!(sprint_markdown.contains("| Story | Points | Assignee | Tasks |"));
+        assert!(sprint_markdown.contains("### todo"));
+        assert!(sprint_markdown.contains("[**US-F2-001** Ingest passage events](../backlog/"));
     }
 
     #[test]

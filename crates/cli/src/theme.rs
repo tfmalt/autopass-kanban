@@ -77,7 +77,7 @@ impl Theme {
     }
 
     pub(crate) fn heading(&self, value: impl std::fmt::Display) -> String {
-        self.paint(Style::Bold, value)
+        self.paint(Style::Cyan, value)
     }
 
     pub(crate) fn label(&self, value: impl std::fmt::Display) -> String {

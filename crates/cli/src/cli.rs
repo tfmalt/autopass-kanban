@@ -158,7 +158,7 @@ pub(crate) enum SprintCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Regenerate generated story rosters in all sprint files. Effect: rewrites only generated ## Stories blocks."
+        about = "Regenerate linked user-story tables in all sprint files. Effect: rewrites only generated ## User Stories selected for sprint blocks."
     )]
     Sync {
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
@@ -223,7 +223,7 @@ pub(crate) enum StoryCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Move a story to another status. Effect: updates the canonical story frontmatter and regenerates the sprint roster. Side effects: in-progress sets assignee/work_started; done refreshes work_done."
+        about = "Move a story to another status. Effect: updates the canonical story frontmatter and regenerates the sprint story table. Side effects: in-progress sets assignee/work_started; done refreshes work_done."
     )]
     Move {
         #[arg(help = "Story id to move, for example US-F1-053.")]
@@ -244,7 +244,7 @@ pub(crate) enum StoryCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Plan a backlog story into a sprint. Effect: updates the canonical story frontmatter (status=todo, sprint, activated, updated) and regenerates the sprint roster. Side effects: none beyond those markdown updates."
+        about = "Plan a backlog story into a sprint. Effect: updates the canonical story frontmatter (status=todo, sprint, activated, updated) and regenerates the sprint story table. Side effects: none beyond those markdown updates."
     )]
     Plan {
         #[arg(help = "Backlog story id to plan, for example US-F2-001.")]
@@ -563,7 +563,7 @@ pub(crate) enum Command {
         command: PhaseCommand,
     },
     #[command(
-        about = "Inspect or move user stories. Effects depend on subcommand; write operations mutate canonical story frontmatter and sprint roster markdown."
+        about = "Inspect or move user stories. Effects depend on subcommand; write operations mutate canonical story frontmatter and sprint story table markdown."
     )]
     Story {
         #[command(subcommand)]

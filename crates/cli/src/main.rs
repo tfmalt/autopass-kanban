@@ -285,9 +285,12 @@ fn main() -> Result<()> {
             SprintCommand::Sync { repo_root } => {
                 let changed = sync_sprint_rosters(repo_root)?;
                 if changed.is_empty() {
-                    println!("{}", theme.success("Sprint rosters already up to date."));
+                    println!(
+                        "{}",
+                        theme.success("Sprint story tables already up to date.")
+                    );
                 } else {
-                    println!("{}", theme.success("Regenerated sprint rosters:"));
+                    println!("{}", theme.success("Regenerated sprint story tables:"));
                     for sprint in changed {
                         println!("- {}", theme.id(sprint));
                     }
