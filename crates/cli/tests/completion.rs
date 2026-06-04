@@ -570,3 +570,102 @@ fn sprint_commands_use_theme_config_from_target_repo_root() {
         "expected ANSI styling from target repo config, got: {stdout}"
     );
 }
+
+#[test]
+fn zsh_completion_includes_task_status_helper() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("_kanban_task_statuses"),
+        "zsh completion should define _kanban_task_statuses"
+    );
+    assert!(stdout.contains("todo"));
+    assert!(stdout.contains("in-progress"));
+    assert!(stdout.contains("blocked"));
+}
+
+#[test]
+fn zsh_completion_includes_story_status_helper() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("_kanban_story_statuses"),
+        "zsh completion should define _kanban_story_statuses"
+    );
+    assert!(stdout.contains("backlog"));
+    assert!(stdout.contains("todo"));
+    assert!(stdout.contains("ready-for-qa"));
+}
+
+#[test]
+fn zsh_completion_replaces_story_move_status_with_helper() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("':status -- Target status, for example todo, in-progress, ready-for-qa, done, or blocked.:_kanban_story_statuses'"),
+        "story move status arg should use _kanban_story_statuses"
+    );
+}
+
+#[test]
+fn zsh_completion_replaces_task_status_with_helper() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("'--status=[Initial task status to write. Defaults to todo.]:STATUS:_kanban_task_statuses'"),
+        "task add --status option should use _kanban_task_statuses"
+    );
+    assert!(
+        stdout.contains("'--status=[Replacement task status. Omitted means keep the current status.]:STATUS:_kanban_task_statuses'"),
+        "task update --status option should use _kanban_task_statuses"
+    );
+}
+
+#[test]
+fn zsh_completion_replaces_story_plan_sprint_with_helper() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains(":_kanban_sprint_names'") && stdout.contains("Target sprint"),
+        "story plan sprint arg should use _kanban_sprint_names"
+    );
+}
+
+#[test]
+fn zsh_completion_replaces_story_update_sprint_with_helper() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("--sprint=[Update frontmatter sprint")
+            && stdout.contains(":_kanban_sprint_names'"),
+        "story update --sprint option should use _kanban_sprint_names"
+    );
+}
+
+#[test]
+fn bash_completion_includes_story_plan_completion() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("kanban__subcmd__story__subcmd__plan"),
+        "bash completion should have story plan case block"
+    );
+    assert!(
+        stdout.contains("list-ids sprints"),
+        "bash story plan --sprint should complete with sprints"
+    );
+}

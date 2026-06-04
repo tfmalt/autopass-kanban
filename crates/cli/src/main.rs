@@ -4413,7 +4413,7 @@ fn run_doctor_fix_wizard(theme: &Theme, repo_root: &PathBuf, target: Option<&str
 
 /// ZSH helper functions appended after the clap_complete-generated script.
 /// These provide dynamic completion for config keys/values, sprint names, story IDs,
-/// doctor fix targets, and epic IDs.
+/// doctor fix targets, epic IDs, task statuses, and phase IDs.
 const ZSH_DYNAMIC_HELPERS: &str = r#"
 _kanban_config_keys() {
     local -a keys
@@ -4495,10 +4495,32 @@ _kanban_epic_ids() {
     done < <(kanban list-ids epics 2>/dev/null)
     compadd -a ids
 }
+_kanban_task_statuses() {
+    local -a statuses
+    statuses=(
+        todo
+        in-progress
+        blocked
+        done
+    )
+    compadd -a statuses
+}
+_kanban_story_statuses() {
+    local -a statuses
+    statuses=(
+        backlog
+        todo
+        in-progress
+        ready-for-qa
+        blocked
+        done
+    )
+    compadd -a statuses
+}
 "#;
 
 /// Enhance the zsh completion script by replacing `_default` completions for
-/// sprint name, story ID, and doctor fix target arguments with dynamic lookup helpers.
+/// sprint name, story ID, task status, and doctor fix target arguments with dynamic lookup helpers.
 fn enhance_zsh_completion(script: &str) -> String {
     let enhanced = script
         // Sprint name arguments
@@ -4509,6 +4531,16 @@ fn enhance_zsh_completion(script: &str) -> String {
         .replace(
             "':name -- Sprint name to close and roll over.:_default'",
             "':name -- Sprint name to close and roll over.:_kanban_sprint_names'",
+        )
+        // Story plan sprint argument
+        .replace(
+            "':sprint -- Target sprint name or Snnn prefix, for example S001.planning or S001.:_default'",
+            "':sprint -- Target sprint name or Snnn prefix, for example S001.planning or S001.:_kanban_sprint_names'",
+        )
+        // Story update --sprint option
+        .replace(
+            "'--sprint=[Update frontmatter sprint. Omit VALUE to prompt with the current value.]:SPRINT:_default'",
+            "'--sprint=[Update frontmatter sprint. Omit VALUE to prompt with the current value.]:SPRINT:_kanban_sprint_names'",
         )
         // Story ID arguments (story show, story move, task add, task update)
         .replace(
@@ -4540,6 +4572,26 @@ fn enhance_zsh_completion(script: &str) -> String {
             "':value -- Configuration value. Use comma-separated values for story_points.allowed_values.:_default'",
             "':value -- Configuration value. Use comma-separated values for story_points.allowed_values.:_kanban_config_values'",
         )
+        // Story move status argument
+        .replace(
+            "':status -- Target status, for example todo, in-progress, ready-for-qa, done, or blocked.:_default'",
+            "':status -- Target status, for example todo, in-progress, ready-for-qa, done, or blocked.:_kanban_story_statuses'",
+        )
+        // Task add/update status argument and option
+         .replace(
+             "'--status=[Initial task status to write. Defaults to todo.]:STATUS:_default'",
+             "'--status=[Initial task status to write. Defaults to todo.]:STATUS:_kanban_task_statuses'",
+         )
+         .replace(
+             "'--status=[Replacement task status. Omitted means keep the current status.]:STATUS:_default'",
+             "'--status=[Replacement task status. Omitted means keep the current status.]:STATUS:_kanban_task_statuses'",
+         )
+         // Story update status option
+         .replace(
+             "'--status=[Update frontmatter status. Omit VALUE to prompt with the current value.]:STATUS:_default'",
+             "'--status=[Update frontmatter status. Omit VALUE to prompt with the current value.]:STATUS:_kanban_story_statuses'",
+         )
+        // Sprint create date options
         .replace(
             "'--number=[Sprint number. Defaults to the next suggested number.]:N:_default'",
             "'--number=[Sprint number. Defaults to the next suggested number.]:N:'",
@@ -4556,6 +4608,28 @@ fn enhance_zsh_completion(script: &str) -> String {
             "'--end=[End date. Defaults to the suggested next end date.]:YYYY-MM-DD:_default'",
             "'--end=[End date. Defaults to the suggested next end date.]:YYYY-MM-DD:'",
         )
+        // Story update date options
+        .replace(
+            "'--activated=[Update frontmatter activated. Omit VALUE to prompt with the current value.]:TIMESTAMP:_default'",
+            "'--activated=[Update frontmatter activated. Omit VALUE to prompt with the current value.]:TIMESTAMP:'",
+        )
+        .replace(
+            "'--work_started=[Update frontmatter work_started. Omit VALUE to prompt with the current value.]:TIMESTAMP:_default'",
+            "'--work_started=[Update frontmatter work_started. Omit VALUE to prompt with the current value.]:TIMESTAMP:'",
+        )
+        .replace(
+            "'--work_done=[Update frontmatter work_done. Omit VALUE to prompt with the current value.]:TIMESTAMP:_default'",
+            "'--work_done=[Update frontmatter work_done. Omit VALUE to prompt with the current value.]:TIMESTAMP:'",
+        )
+        .replace(
+            "'--created=[Update frontmatter created. Omit VALUE to prompt with the current value.]:TIMESTAMP:_default'",
+            "'--created=[Update frontmatter created. Omit VALUE to prompt with the current value.]:TIMESTAMP:'",
+        )
+        .replace(
+            "'--updated=[Update frontmatter updated. Omit VALUE to prompt with the current value.]:TIMESTAMP:_default'",
+            "'--updated=[Update frontmatter updated. Omit VALUE to prompt with the current value.]:TIMESTAMP:'",
+        )
+        // Web log lines option
         .replace(
             "'--lines=[Only print the last N log lines.]:N:_default'",
             "'--lines=[Only print the last N log lines.]:N:'",
@@ -4890,6 +4964,261 @@ fn inject_bash_web_log(script: &str) -> String {
     }
 }
 
+fn inject_bash_story_plan(script: &str) -> String {
+    let old = r#"        kanban__subcmd__story__subcmd__plan)
+             opts="-h --sprint --format --help <ID> [REPO_ROOT]"
+             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                 return 0
+             fi
+             case "${prev}" in
+                 --sprint)
+                     COMPREPLY=($(compgen -f "${cur}"))
+                     return 0
+                     ;;
+                 --format)
+                     COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                     return 0
+                     ;;
+                 *)
+                     COMPREPLY=()
+                     ;;
+             esac
+             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+             return 0"#;
+    let new = r#"        kanban__subcmd__story__subcmd__plan)
+             opts="-h --sprint --format --help <ID> [REPO_ROOT]"
+             if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
+                 COMPREPLY=( $(compgen -W "$(kanban list-ids stories 2>/dev/null)" -- "${cur}") )
+                 return 0
+             fi
+             case "${prev}" in
+                 --sprint)
+                     COMPREPLY=( $(compgen -W "$(kanban list-ids sprints 2>/dev/null)" -- "${cur}") )
+                     return 0
+                     ;;
+                 --format)
+                     COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                     return 0
+                     ;;
+                 *)
+                     COMPREPLY=()
+                     ;;
+             esac
+             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+             return 0"#;
+    if script.contains(old) {
+        script.replacen(old, new, 1)
+    } else {
+        script.to_string()
+    }
+}
+
+fn inject_bash_story_move_status(script: &str) -> String {
+    let old = r#"        kanban__subcmd__story__subcmd__move)
+             opts="-a -h --assignee --format --help <ID> <STATUS> [REPO_ROOT]"
+             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                 return 0
+             fi
+             case "${prev}" in
+                 --assignee)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --format)
+                     COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                     return 0
+                     ;;
+                 *)
+                     COMPREPLY=()
+                     ;;
+             esac
+             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+             return 0"#;
+    let new = r#"        kanban__subcmd__story__subcmd__move)
+             opts="-a -h --assignee --format --help <ID> <STATUS> [REPO_ROOT]"
+             story_statuses="backlog todo in-progress ready-for-qa blocked done"
+             if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
+                 COMPREPLY=( $(compgen -W "$(kanban list-ids stories 2>/dev/null)" -- "${cur}") )
+                 return 0
+             fi
+             if [[ ${COMP_CWORD} -eq 4 && ${cur} != -* ]] ; then
+                 COMPREPLY=( $(compgen -W "${story_statuses}" -- "${cur}") )
+                 return 0
+             fi
+             case "${prev}" in
+                 --assignee)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --format)
+                     COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                     return 0
+                     ;;
+                 *)
+                     COMPREPLY=()
+                     ;;
+             esac
+             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+             return 0"#;
+    if script.contains(old) {
+        script.replacen(old, new, 1)
+    } else {
+        script.to_string()
+    }
+}
+
+fn inject_bash_task_add_status(script: &str) -> String {
+    let old = r#"        kanban__subcmd__task__subcmd__add)
+             opts="-h --title --status --tags --description --format --help <STORY_ID> [REPO_ROOT]"
+             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                 return 0
+             fi
+             case "${prev}" in
+                 --title)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --status)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --tags)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --description)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --format)
+                     COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                     return 0
+                     ;;
+                 *)
+                     COMPREPLY=()
+                     ;;
+             esac
+             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+             return 0"#;
+    let new = r#"        kanban__subcmd__task__subcmd__add)
+             opts="-h --title --status --tags --description --format --help <STORY_ID> [REPO_ROOT]"
+             task_statuses="todo in-progress blocked done"
+             if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
+                 COMPREPLY=( $(compgen -W "$(kanban list-ids stories 2>/dev/null)" -- "${cur}") )
+                 return 0
+             fi
+             case "${prev}" in
+                 --title)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --status)
+                     COMPREPLY=( $(compgen -W "${task_statuses}" -- "${cur}") )
+                     return 0
+                     ;;
+                 --tags)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --description)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --format)
+                     COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                     return 0
+                     ;;
+                 *)
+                     COMPREPLY=()
+                     ;;
+             esac
+             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+             return 0"#;
+    if script.contains(old) {
+        script.replacen(old, new, 1)
+    } else {
+        script.to_string()
+    }
+}
+
+fn inject_bash_task_update_status(script: &str) -> String {
+    let old = r#"        kanban__subcmd__task__subcmd__update)
+             opts="-h --title --status --tags --description --format --help <STORY_ID> <TASK_ID> [REPO_ROOT]"
+             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                 return 0
+             fi
+             case "${prev}" in
+                 --title)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --status)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --tags)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --description)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --format)
+                     COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                     return 0
+                     ;;
+                 *)
+                     COMPREPLY=()
+                     ;;
+             esac
+             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+             return 0"#;
+    let new = r#"        kanban__subcmd__task__subcmd__update)
+             opts="-h --title --status --tags --description --format --help <STORY_ID> <TASK_ID> [REPO_ROOT]"
+             task_statuses="todo in-progress blocked done"
+             if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
+                 COMPREPLY=( $(compgen -W "$(kanban list-ids stories 2>/dev/null)" -- "${cur}") )
+                 return 0
+             fi
+             case "${prev}" in
+                 --title)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --status)
+                     COMPREPLY=( $(compgen -W "${task_statuses}" -- "${cur}") )
+                     return 0
+                     ;;
+                 --tags)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --description)
+                     COMPREPLY=()
+                     return 0
+                     ;;
+                 --format)
+                     COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                     return 0
+                     ;;
+                 *)
+                     COMPREPLY=()
+                     ;;
+             esac
+             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+             return 0"#;
+    if script.contains(old) {
+        script.replacen(old, new, 1)
+    } else {
+        script.to_string()
+    }
+}
+
 /// Enhance the bash completion script with dynamic sprint name, story ID,
 /// and doctor fix target completions.
 fn enhance_bash_completion(script: &str) -> String {
@@ -4916,13 +5245,8 @@ fn enhance_bash_completion(script: &str) -> String {
         "stories",
         3,
     );
-    let script = inject_bash_dynamic(
-        &script,
-        "kanban__subcmd__story__subcmd__move",
-        "-a -h --assignee --format --help <ID> <STATUS> [REPO_ROOT]",
-        "stories",
-        3,
-    );
+    let script = inject_bash_story_move_status(&script);
+    let script = inject_bash_story_plan(&script);
     let script = inject_bash_dynamic(
         &script,
         "kanban__subcmd__task__subcmd__add",
@@ -4937,6 +5261,8 @@ fn enhance_bash_completion(script: &str) -> String {
         "stories",
         3,
     );
+    let script = inject_bash_task_add_status(&script);
+    let script = inject_bash_task_update_status(&script);
     let script = inject_bash_doctor_fix_target(&script);
     let script = inject_bash_config_get(&script);
     let script = inject_bash_config_set(&script);
