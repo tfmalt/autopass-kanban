@@ -6,6 +6,22 @@ CLI binary name:
 - `kanban`
 - short alias in help/docs: `kb`
 
+## Repository quick start
+
+Run `kanban init` once from the repository root. For this repository, shared
+config is already stored in `.kanban/`, so setup is typically only needed for a
+fresh clone or if the local config was removed. After that, enable shell
+completion and run commands such as `kanban sprint current`, `kanban sprint
+sync`, and `kanban story list --current` from the repository root.
+
+## Release build
+
+Build the optimized release binary with:
+
+```sh
+cargo build -p kanban-cli --release
+```
+
 Implemented commands:
 - `kanban init [repo_root]`
 - `kanban config show [repo_root]`

@@ -36,6 +36,8 @@ use serde::Serialize;
 
 const MIN_TERMINAL_WIDTH: usize = 80;
 const DEFAULT_OUTPUT_WIDTH: usize = 100;
+const SPRINT_CONTENT_INSET: usize = 2;
+const SPRINT_STORY_ROW_PREFIX: &str = "    · ";
 const CLAP_STYLING: Styles = Styles::styled()
     .header(
         ClapStyle::new()
@@ -88,6 +90,7 @@ struct Theme {
 #[derive(Copy, Clone)]
 enum Style {
     Bold,
+    DarkGray,
     Muted,
     Blue,
     Cyan,
@@ -127,17 +130,25 @@ impl Theme {
             return value.to_string();
         }
 
-        let code = match style {
-            Style::Bold => "1",
-            Style::Muted => "2",
-            Style::Blue => "1;34",
-            Style::Cyan => "1;36",
-            Style::Green => "1;32",
-            Style::Purple => "1;35",
-            Style::Red => "1;31",
-            Style::Yellow => "1;33",
-        };
+        let code = foreground_code(style);
         format!("\x1b[{code}m{value}\x1b[0m")
+    }
+
+    fn paint_with_background(
+        &self,
+        foreground: Style,
+        background: Style,
+        value: impl std::fmt::Display,
+    ) -> String {
+        if !self.color {
+            return value.to_string();
+        }
+
+        format!(
+            "\x1b[{};{}m{value}\x1b[0m",
+            foreground_code(foreground),
+            background_code(background)
+        )
     }
 
     fn heading(&self, value: impl std::fmt::Display) -> String {
@@ -213,6 +224,33 @@ impl Theme {
             "info" => self.paint(Style::Cyan, severity),
             _ => severity.to_string(),
         }
+    }
+}
+
+fn foreground_code(style: Style) -> &'static str {
+    match style {
+        Style::Bold => "1",
+        Style::DarkGray => "90",
+        Style::Muted => "2",
+        Style::Blue => "1;34",
+        Style::Cyan => "1;36",
+        Style::Green => "1;32",
+        Style::Purple => "1;35",
+        Style::Red => "1;31",
+        Style::Yellow => "1;33",
+    }
+}
+
+fn background_code(style: Style) -> &'static str {
+    match style {
+        Style::Bold | Style::Muted => "100",
+        Style::DarkGray => "40",
+        Style::Blue => "44",
+        Style::Cyan => "46",
+        Style::Green => "42",
+        Style::Purple => "45",
+        Style::Red => "41",
+        Style::Yellow => "43",
     }
 }
 
@@ -315,6 +353,8 @@ enum SprintCommand {
             help = "Sprint name to inspect, for example S001.foundation. Defaults to the current sprint."
         )]
         name: Option<String>,
+        #[arg(long, help = "Only print the sprint status header.")]
+        short: bool,
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
         #[arg(default_value = ".")]
         repo_root: PathBuf,
@@ -1254,7 +1294,12 @@ fn emit_json(command: &Command) -> i32 {
             )),
         },
         Command::Sprint {
-            command: SprintCommand::Show { name, repo_root },
+            command:
+                SprintCommand::Show {
+                    name,
+                    short: _short,
+                    repo_root,
+                },
         } => {
             let sprint_result = match name {
                 Some(name) => summarize_sprint(repo_root, name),
@@ -2401,22 +2446,43 @@ fn print_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOve
     print!("{}", render_sprint_overview(theme, layout, sprint));
 }
 
+fn print_sprint_overview_short(theme: &Theme, layout: OutputLayout, sprint: &SprintOverview) {
+    print!("{}", render_sprint_overview_short(theme, layout, sprint));
+}
+
 fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOverview) -> String {
     let mut output = String::new();
+    let content_width = sprint_content_width(layout.width);
+    let story_table_width = sprint_story_table_width(layout.width);
+    let blocked_table_width = sprint_table_width(layout.width);
+    let mut has_content_section = false;
 
     // Dashboard header band: top separator, progress line, count line, bottom separator
     push_sprint_header_band(&mut output, theme, layout, sprint);
 
     // Sprint goal (below bottom separator)
     if let Some(goal) = &sprint.sprint_goal {
-        push_wrapped_label_value(&mut output, theme, "Sprint Goal:", goal, layout.width);
+        push_sprint_section_divider_before_next(
+            &mut output,
+            theme,
+            layout.width,
+            &mut has_content_section,
+        );
+        push_wrapped_label_value_inset(&mut output, theme, "Sprint Goal:", goal, content_width);
     }
 
     // Warnings
     if !sprint.warnings.is_empty() {
-        push_line(&mut output, "");
+        push_sprint_section_divider_before_next(
+            &mut output,
+            theme,
+            layout.width,
+            &mut has_content_section,
+        );
         for warning in &sprint.warnings {
-            push_wrapped_hanging_line(&mut output, "", warning, layout.width, |v| theme.warning(v));
+            push_wrapped_hanging_line_inset(&mut output, "", warning, content_width, |v| {
+                theme.warning(v)
+            });
         }
     }
 
@@ -2427,13 +2493,18 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
             .get(status)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        push_line(&mut output, "");
+        push_sprint_section_divider_before_next(
+            &mut output,
+            theme,
+            layout.width,
+            &mut has_content_section,
+        );
         let icon_label = theme.status_text(status, format!("{} {status}", status_icon(status)));
         let status_points = sum_story_points(stories.iter());
         let points_label = theme.story_points(format_story_points(status_points));
         let story_count = format_story_count(stories.len());
         if stories.is_empty() {
-            push_line(
+            push_inset_line(
                 &mut output,
                 &format!(
                     "{icon_label}   {}   {points_label}   · none",
@@ -2441,7 +2512,7 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
                 ),
             );
         } else {
-            push_line(
+            push_inset_line(
                 &mut output,
                 &format!(
                     "{icon_label}   {}   {points_label}",
@@ -2450,7 +2521,7 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
             );
             let points_width =
                 story_points_column_width(sprint.stories_by_status.values().flat_map(|v| v.iter()));
-            push_story_table(&mut output, theme, layout.width, stories, points_width);
+            push_story_table(&mut output, theme, story_table_width, stories, points_width);
         }
     }
 
@@ -2465,17 +2536,22 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
         .get("blocked")
         .map(|stories| sum_story_points(stories.iter()))
         .unwrap_or(0);
-    push_line(&mut output, "");
+    push_sprint_section_divider_before_next(
+        &mut output,
+        theme,
+        layout.width,
+        &mut has_content_section,
+    );
     let blocked_style = if blocked_count > 0 {
         Style::Red
     } else {
         Style::Muted
     };
     let blocked_part = theme.paint(blocked_style, format!("{} blocked", status_icon("blocked")));
-    push_line(
+    push_inset_line(
         &mut output,
         &format!(
-            "  {}   {}   {}",
+            "{}   {}   {}",
             blocked_part,
             theme.count(format_story_count(blocked_count)),
             theme.story_points(format_story_points(blocked_points)),
@@ -2483,14 +2559,34 @@ fn render_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOv
     );
 
     // Blocked work detail callout
-    push_line(&mut output, "");
-    push_line(&mut output, &theme.heading("Blocked work"));
+    push_sprint_section_divider_before_next(
+        &mut output,
+        theme,
+        layout.width,
+        &mut has_content_section,
+    );
+    push_inset_line(&mut output, &theme.heading("Blocked work"));
     if sprint.blocked_work.is_empty() {
-        push_line(&mut output, "  - none");
+        push_inset_line(&mut output, "- none");
     } else {
-        push_blocked_work_table(&mut output, theme, layout.width, &sprint.blocked_work);
+        push_blocked_work_table(
+            &mut output,
+            theme,
+            blocked_table_width,
+            &sprint.blocked_work,
+        );
     }
 
+    output
+}
+
+fn render_sprint_overview_short(
+    theme: &Theme,
+    layout: OutputLayout,
+    sprint: &SprintOverview,
+) -> String {
+    let mut output = String::new();
+    push_sprint_header_band(&mut output, theme, layout, sprint);
     output
 }
 
@@ -2522,7 +2618,44 @@ fn push_line(output: &mut String, line: &str) {
     output.push('\n');
 }
 
-fn push_wrapped_label_value(
+fn push_inset_line(output: &mut String, line: &str) {
+    push_line(
+        output,
+        &format!("{}{}", " ".repeat(SPRINT_CONTENT_INSET), line),
+    );
+}
+
+fn sprint_content_width(width: usize) -> usize {
+    width.saturating_sub(SPRINT_CONTENT_INSET * 2).max(1)
+}
+
+fn sprint_table_width(width: usize) -> usize {
+    width.saturating_sub(SPRINT_CONTENT_INSET).max(1)
+}
+
+fn sprint_story_table_width(width: usize) -> usize {
+    width
+        .saturating_sub(display_width(SPRINT_STORY_ROW_PREFIX))
+        .max(1)
+}
+
+fn push_sprint_section_divider(output: &mut String, theme: &Theme, width: usize) {
+    push_line(output, &theme.paint(Style::Muted, "─".repeat(width)));
+}
+
+fn push_sprint_section_divider_before_next(
+    output: &mut String,
+    theme: &Theme,
+    width: usize,
+    has_content_section: &mut bool,
+) {
+    if *has_content_section {
+        push_sprint_section_divider(output, theme, width);
+    }
+    *has_content_section = true;
+}
+
+fn push_wrapped_label_value_inset(
     output: &mut String,
     theme: &Theme,
     label: &str,
@@ -2534,9 +2667,30 @@ fn push_wrapped_label_value(
     let wrapped = wrap_text(value, value_width);
     for (index, line) in wrapped.iter().enumerate() {
         if index == 0 {
-            push_line(output, &format!("{} {line}", theme.label(label)));
+            push_inset_line(output, &format!("{} {line}", theme.label(label)));
         } else {
-            push_line(output, &format!("{}{line}", " ".repeat(prefix_width)));
+            push_inset_line(output, &format!("{}{line}", " ".repeat(prefix_width)));
+        }
+    }
+}
+
+fn push_wrapped_hanging_line_inset(
+    output: &mut String,
+    prefix: &str,
+    value: &str,
+    width: usize,
+    style: impl Fn(&str) -> String,
+) {
+    let value_width = width.saturating_sub(display_width(prefix)).max(1);
+    let wrapped = wrap_text(value, value_width);
+    for (index, line) in wrapped.iter().enumerate() {
+        if index == 0 {
+            push_inset_line(output, &format!("{prefix}{}", style(line)));
+        } else {
+            push_inset_line(
+                output,
+                &format!("{}{line}", " ".repeat(display_width(prefix))),
+            );
         }
     }
 }
@@ -2631,7 +2785,7 @@ fn push_story_table(
             ]
         })
         .collect::<Vec<_>>();
-    push_wrapped_rows(output, theme, &columns, &rows);
+    push_wrapped_story_rows(output, theme, &columns, &rows);
 }
 
 fn push_phase_story_table(
@@ -2818,6 +2972,17 @@ fn push_wrapped_rows(
     }
 }
 
+fn push_wrapped_story_rows(
+    output: &mut String,
+    theme: &Theme,
+    columns: &[(&'static str, usize)],
+    rows: &[Vec<TableCell>],
+) {
+    for row in rows {
+        push_wrapped_story_table_row(output, theme, columns, row);
+    }
+}
+
 fn push_wrapped_table(
     output: &mut String,
     theme: &Theme,
@@ -2904,6 +3069,45 @@ fn push_wrapped_table_row(
             let value = wrapped.get(line_index).map(String::as_str).unwrap_or("");
             let padded = pad_to_width(value, *width);
             if line.len() > 2 {
+                line.push_str("  ");
+            }
+            line.push_str(&style_table_cell(theme, cell.style, &padded));
+        }
+        push_line(output, &line);
+    }
+}
+
+fn push_wrapped_story_table_row(
+    output: &mut String,
+    theme: &Theme,
+    columns: &[(&'static str, usize)],
+    row: &[TableCell],
+) {
+    let wrapped_cells = row
+        .iter()
+        .zip(columns)
+        .map(|(cell, (_, width))| {
+            if cell.preformatted {
+                vec![cell.text.clone()]
+            } else {
+                wrap_text(&cell.text, *width)
+            }
+        })
+        .collect::<Vec<_>>();
+    let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1);
+
+    for line_index in 0..row_height {
+        let prefix = if line_index == 0 {
+            SPRINT_STORY_ROW_PREFIX.to_string()
+        } else {
+            " ".repeat(display_width(SPRINT_STORY_ROW_PREFIX))
+        };
+        let mut line = prefix;
+        let prefix_width = display_width(&line);
+        for ((cell, (_, width)), wrapped) in row.iter().zip(columns).zip(&wrapped_cells) {
+            let value = wrapped.get(line_index).map(String::as_str).unwrap_or("");
+            let padded = pad_to_width(value, *width);
+            if display_width(&line) > prefix_width {
                 line.push_str("  ");
             }
             line.push_str(&style_table_cell(theme, cell.style, &padded));
@@ -3054,18 +3258,107 @@ fn sprint_status_label(end_date: &str, readme_status: Option<&str>) -> &'static 
     }
 }
 
-fn render_progress_bar(theme: &Theme, done: usize, total: usize, width: usize) -> String {
-    let bar_width = (width / 8).clamp(8, 20);
-    let filled = done
-        .checked_mul(bar_width)
-        .and_then(|value| value.checked_div(total))
-        .unwrap_or(0);
-    let empty = bar_width.saturating_sub(filled);
-    format!(
-        "{}{}",
-        theme.paint(Style::Blue, "█".repeat(filled)),
-        theme.paint(Style::Muted, "░".repeat(empty)),
-    )
+fn render_progress_bar(
+    theme: &Theme,
+    done: usize,
+    in_progress: usize,
+    total: usize,
+    width: usize,
+) -> String {
+    let bar_width = (width / 5).clamp(8, 24).saturating_sub(2);
+    let body_width = bar_width.saturating_sub(2);
+    let total_units = body_width * 8;
+    let total = total.max(1);
+    let done = done.min(total);
+    let active = done.saturating_add(in_progress).min(total);
+    let done_units = scaled_bar_units(done, total, total_units);
+    let active_units = scaled_bar_units(active, total, total_units);
+    let mut bar = String::new();
+
+    let first_segment = progress_segment_for_unit(0, done_units, active_units);
+    bar.push_str(&theme.paint(progress_segment_style(first_segment), "\u{e0b6}"));
+
+    for cell in 0..body_width {
+        let start = cell * 8;
+        let first = progress_segment_for_unit(start, done_units, active_units);
+        let split = (1..8)
+            .find(|offset| {
+                progress_segment_for_unit(start + offset, done_units, active_units) != first
+            })
+            .unwrap_or(8);
+        if split == 8 {
+            bar.push_str(&theme.paint(
+                progress_segment_style(first),
+                progress_segment_full_char(first),
+            ));
+        } else {
+            let next = progress_segment_for_unit(start + split, done_units, active_units);
+            bar.push_str(&theme.paint_with_background(
+                progress_segment_style(first),
+                progress_segment_style(next),
+                progress_fraction_char(split),
+            ));
+        }
+    }
+
+    let last_segment =
+        progress_segment_for_unit(total_units.saturating_sub(1), done_units, active_units);
+    bar.push_str(&theme.paint(progress_segment_style(last_segment), "\u{e0b4}"));
+
+    bar
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum ProgressSegment {
+    Done,
+    InProgress,
+    Empty,
+}
+
+fn scaled_bar_units(value: usize, total: usize, total_units: usize) -> usize {
+    (value * total_units + total / 2) / total
+}
+
+fn progress_segment_for_unit(
+    unit: usize,
+    done_units: usize,
+    active_units: usize,
+) -> ProgressSegment {
+    if unit < done_units {
+        ProgressSegment::Done
+    } else if unit < active_units {
+        ProgressSegment::InProgress
+    } else {
+        ProgressSegment::Empty
+    }
+}
+
+fn progress_segment_style(segment: ProgressSegment) -> Style {
+    match segment {
+        ProgressSegment::Done => Style::Green,
+        ProgressSegment::InProgress => Style::Blue,
+        ProgressSegment::Empty => Style::DarkGray,
+    }
+}
+
+fn progress_segment_full_char(segment: ProgressSegment) -> &'static str {
+    match segment {
+        ProgressSegment::Done | ProgressSegment::InProgress => "█",
+        ProgressSegment::Empty => "░",
+    }
+}
+
+fn progress_fraction_char(units: usize) -> &'static str {
+    match units {
+        1 => "▏",
+        2 => "▎",
+        3 => "▍",
+        4 => "▌",
+        5 => "▋",
+        6 => "▊",
+        7 => "▉",
+        _ => "█",
+    }
 }
 
 fn format_colored_task_summary(theme: &Theme, summary: Option<&TaskSummary>) -> String {
@@ -3097,7 +3390,8 @@ fn push_sprint_header_band(
     let status_label = sprint_status_label(&sprint.end_date, sprint.readme_status.as_deref());
 
     // Top separator: ─── S000 · Headline [fill] status ───
-    let prefix_text = format!("─── {} · {} ", sprint_id, headline);
+    let title_text = format!("{} · {}", sprint_id, headline);
+    let prefix_text = format!("─── {title_text} ");
     let suffix_text = format!(" {} ───", status_label);
     let fill = layout
         .width
@@ -3110,12 +3404,16 @@ fn push_sprint_header_band(
     push_line(
         output,
         &format!(
-            "{} {} {}",
-            theme.paint(Style::Muted, format!("{}{}", prefix_text, "─".repeat(fill))),
+            "{}{}{} {} {}",
+            theme.paint(Style::Muted, "─── "),
+            theme.paint(Style::Cyan, title_text),
+            theme.paint(Style::Muted, format!(" {}", "─".repeat(fill))),
             colored_status,
             theme.paint(Style::Muted, "───"),
         ),
     );
+
+    push_line(output, "");
 
     // Counts per status
     let total_points: usize = sprint
@@ -3153,9 +3451,20 @@ fn push_sprint_header_band(
         .get("blocked")
         .map(|v| v.len())
         .unwrap_or(0);
+    let in_progress_points = sprint
+        .stories_by_status
+        .get("in-progress")
+        .map(|stories| sum_story_points(stories.iter()))
+        .unwrap_or(0);
 
     // Progress line
-    let bar = render_progress_bar(theme, done_points, total_points, layout.width);
+    let bar = render_progress_bar(
+        theme,
+        done_points,
+        in_progress_points,
+        total_points,
+        layout.width,
+    );
     let pct = done_points
         .checked_mul(100)
         .and_then(|value| value.checked_div(total_points))
@@ -3195,6 +3504,8 @@ fn push_sprint_header_band(
         output,
         &format!("  {}", segments.join(&format!("  {dot}  "))),
     );
+
+    push_line(output, "");
 
     // Bottom separator: full-width dashes
     push_line(output, &theme.paint(Style::Muted, "─".repeat(layout.width)));
@@ -3325,6 +3636,7 @@ fn push_phase_header_band(
     let bar = render_progress_bar(
         theme,
         summary.done_points,
+        summary.in_progress_points,
         summary.total_points,
         layout.width,
     );
@@ -4413,7 +4725,7 @@ fn run_doctor_fix_wizard(theme: &Theme, repo_root: &PathBuf, target: Option<&str
 
 /// ZSH helper functions appended after the clap_complete-generated script.
 /// These provide dynamic completion for config keys/values, sprint names, story IDs,
-/// doctor fix targets, epic IDs, task statuses, and phase IDs.
+/// doctor fix targets, epic IDs, task statuses, story update option values, and phase IDs.
 const ZSH_DYNAMIC_HELPERS: &str = r#"
 _kanban_config_keys() {
     local -a keys
@@ -4455,16 +4767,55 @@ _kanban_sprint_names() {
 _kanban_story_ids() {
     local -a ids descriptions
     local id title
+    local needle="$PREFIX"
     while IFS=$'\t' read -r id title; do
         [[ -z "$id" ]] && continue
-        ids+=( "$id" )
-        if [[ -n "$title" ]]; then
-            descriptions+=( "$id -- $title" )
-        else
-            descriptions+=( "$id" )
+        if [[ -z "$needle" || "$id" == *"$needle"* ]]; then
+            ids+=( "$id" )
+            if [[ -n "$title" ]]; then
+                descriptions+=( "$id -- $title" )
+            else
+                descriptions+=( "$id" )
+            fi
         fi
     done < <(kanban list-ids stories-with-titles 2>/dev/null)
     compadd -d descriptions -a ids
+}
+_kanban_story_or_epic_ids() {
+    local -a ids
+    local id needle="$PREFIX"
+    while IFS= read -r id; do
+        [[ -n "$id" && ( -z "$needle" || "$id" == *"$needle"* ) ]] && ids+=( "$id" )
+    done < <(kanban list-ids stories 2>/dev/null)
+    while IFS= read -r id; do
+        [[ -n "$id" && ( -z "$needle" || "$id" == *"$needle"* ) ]] && ids+=( "$id" )
+    done < <(kanban list-ids epics 2>/dev/null)
+    compadd -a ids
+}
+_kanban_story_types() {
+    compadd user-story epic
+}
+_kanban_story_update_statuses() {
+    local -a statuses
+    statuses=(
+        draft
+        ready
+        todo
+        in-progress
+        ready-for-qa
+        blocked
+        done
+        dropped
+    )
+    compadd -a statuses
+}
+_kanban_story_point_values() {
+    local -a values
+    local value
+    while IFS= read -r value; do
+        [[ -n "$value" ]] && values+=( "$value" )
+    done < <(kanban config get story_points.allowed_values 2>/dev/null | tr -d '[]",' | tr '[:space:]' '\n')
+    compadd -a values
 }
 _kanban_doctor_fix_targets() {
     local -a ids descriptions
@@ -4490,8 +4841,9 @@ _kanban_doctor_command_or_repo_root() {
 _kanban_epic_ids() {
     local -a ids
     local id
+    local needle="$PREFIX"
     while IFS= read -r id; do
-        [[ -n "$id" ]] && ids+=( "$id" )
+        [[ -n "$id" && ( -z "$needle" || "$id" == *"$needle"* ) ]] && ids+=( "$id" )
     done < <(kanban list-ids epics 2>/dev/null)
     compadd -a ids
 }
@@ -4520,7 +4872,7 @@ _kanban_story_statuses() {
 "#;
 
 /// Enhance the zsh completion script by replacing `_default` completions for
-/// sprint name, story ID, task status, and doctor fix target arguments with dynamic lookup helpers.
+/// sprint name, story ID, story update options, task status, and doctor fix target arguments with dynamic lookup helpers.
 fn enhance_zsh_completion(script: &str) -> String {
     let enhanced = script
         // Sprint name arguments
@@ -4546,6 +4898,34 @@ fn enhance_zsh_completion(script: &str) -> String {
         .replace(
             "':id -- Story id to inspect, for example US-F1-053.:_default'",
             "':id -- Story id to inspect, for example US-F1-053.:_kanban_story_ids'",
+        )
+        .replace(
+            "':id -- Story id to update, for example US-F1-053.:_default'",
+            "':id -- Story id to update, for example US-F1-053.:_kanban_story_or_epic_ids'",
+        )
+        .replace(
+            "'--id=[Update frontmatter id. Omit VALUE to prompt with the current value.]::ID:_default'",
+            "'--id=[Update frontmatter id. Omit VALUE to prompt with the current value.]::ID:_kanban_story_or_epic_ids'",
+        )
+        .replace(
+            "'--type=[Update frontmatter type. Omit VALUE to prompt with the current value.]::TYPE:_default'",
+            "'--type=[Update frontmatter type. Omit VALUE to prompt with the current value.]::TYPE:_kanban_story_types'",
+        )
+        .replace(
+            "'--status=[Update frontmatter status. Omit VALUE to prompt with the current value.]::STATUS:_default'",
+            "'--status=[Update frontmatter status. Omit VALUE to prompt with the current value.]::STATUS:_kanban_story_update_statuses'",
+        )
+        .replace(
+            "'--epic=[Update frontmatter epic. Omit VALUE to prompt with the current value.]::EPIC:_default'",
+            "'--epic=[Update frontmatter epic. Omit VALUE to prompt with the current value.]::EPIC:_kanban_epic_ids'",
+        )
+        .replace(
+            "'--sprint=[Update frontmatter sprint. Omit VALUE to prompt with the current value.]::SPRINT:_default'",
+            "'--sprint=[Update frontmatter sprint. Omit VALUE to prompt with the current value.]::SPRINT:_kanban_sprint_names'",
+        )
+        .replace(
+            "'--story-points=[Update frontmatter story_points. Omit VALUE to prompt with the current value.]::POINTS:_default'",
+            "'--story-points=[Update frontmatter story_points. Omit VALUE to prompt with the current value.]::POINTS:_kanban_story_point_values'",
         )
         .replace(
             "':id -- Sprint story id to move, for example US-F1-053.:_default'",
@@ -4586,12 +4966,7 @@ fn enhance_zsh_completion(script: &str) -> String {
              "'--status=[Replacement task status. Omitted means keep the current status.]:STATUS:_default'",
              "'--status=[Replacement task status. Omitted means keep the current status.]:STATUS:_kanban_task_statuses'",
          )
-         // Story update status option
-         .replace(
-             "'--status=[Update frontmatter status. Omit VALUE to prompt with the current value.]:STATUS:_default'",
-             "'--status=[Update frontmatter status. Omit VALUE to prompt with the current value.]:STATUS:_kanban_story_statuses'",
-         )
-        // Sprint create date options
+         // Sprint create date options
         .replace(
             "'--number=[Sprint number. Defaults to the next suggested number.]:N:_default'",
             "'--number=[Sprint number. Defaults to the next suggested number.]:N:'",
@@ -4644,7 +5019,7 @@ fn inject_bash_dynamic(script: &str, label: &str, opts: &str, kind: &str, pos: u
         "        {label})\n            opts=\"{opts}\"\n            if [[ ${{cur}} == -* || ${{COMP_CWORD}} -eq {pos} ]] ; then\n                COMPREPLY=( $(compgen -W \"${{opts}}\" -- \"${{cur}}\") )\n                return 0\n            fi"
     );
     let new = format!(
-        "        {label})\n            opts=\"{opts}\"\n            if [[ ${{COMP_CWORD}} -eq {pos} && ${{cur}} != -* ]]; then\n                COMPREPLY=( $(compgen -W \"$(kanban list-ids {kind} 2>/dev/null)\" -- \"${{cur}}\") )\n                return 0\n            fi\n            if [[ ${{cur}} == -* || ${{COMP_CWORD}} -eq {pos} ]] ; then\n                COMPREPLY=( $(compgen -W \"${{opts}}\" -- \"${{cur}}\") )\n                return 0\n            fi"
+        "        {label})\n            opts=\"{opts}\"\n            if [[ ${{COMP_CWORD}} -eq {pos} && ${{cur}} != -* ]]; then\n                local -a matches=()\n                local id\n                while IFS= read -r id; do\n                    [[ -n \"$id\" && \"$id\" == *\"${{cur}}\"* ]] && matches+=( \"$id\" )\n                done < <(kanban list-ids {kind} 2>/dev/null)\n                COMPREPLY=( \"${{matches[@]}}\" )\n                return 0\n            fi\n            if [[ ${{cur}} == -* || ${{COMP_CWORD}} -eq {pos} ]] ; then\n                COMPREPLY=( $(compgen -W \"${{opts}}\" -- \"${{cur}}\") )\n                return 0\n            fi"
     );
     if script.contains(&old) {
         script.replacen(&old, &new, 1)
@@ -4674,7 +5049,12 @@ fn inject_bash_doctor_fix_target(script: &str) -> String {
     let new = r#"        kanban__subcmd__doctor__subcmd__fix)
             opts="-h --format --help [TARGET] [REPO_ROOT]"
             if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                COMPREPLY=( $(compgen -W "current $(kanban list-ids stories 2>/dev/null)" -- "${cur}") )
+                local -a matches=( current )
+                local id
+                while IFS= read -r id; do
+                    [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                done < <(kanban list-ids stories 2>/dev/null)
+                COMPREPLY=( "${matches[@]}" )
                 return 0
             fi
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -5245,6 +5625,7 @@ fn enhance_bash_completion(script: &str) -> String {
         "stories",
         3,
     );
+    let script = inject_bash_story_update_dynamic(&script);
     let script = inject_bash_story_move_status(&script);
     let script = inject_bash_story_plan(&script);
     let script = inject_bash_dynamic(
@@ -5267,6 +5648,296 @@ fn enhance_bash_completion(script: &str) -> String {
     let script = inject_bash_config_get(&script);
     let script = inject_bash_config_set(&script);
     inject_bash_web_log(&script)
+}
+
+#[allow(dead_code)]
+fn inject_bash_story_update(script: &str) -> String {
+    let old = r#"        kanban__subcmd__story__subcmd__update)
+            opts="-h --id --type --status --epic --sprint --story-points --assignee --activated --work-started --work-done --created --updated --task-file --format --help <ID> [REPO_ROOT]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --type)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --status)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --epic)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --sprint)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --story-points)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --assignee)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --activated)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --work-started)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --work-done)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --created)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --updated)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --task-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0"#;
+    let new = r#"        kanban__subcmd__story__subcmd__update)
+            opts="-h --id --type --status --epic --sprint --story-points --assignee --activated --work-started --work-done --created --updated --task-file --format --help <ID> [REPO_ROOT]"
+            if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
+                local -a matches=()
+                local id
+                while IFS= read -r id; do
+                    [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                done < <(kanban list-ids stories 2>/dev/null)
+                while IFS= read -r id; do
+                    [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                done < <(kanban list-ids epics 2>/dev/null)
+                COMPREPLY=( "${matches[@]}" )
+                return 0
+            fi
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --id)
+                    local -a matches=()
+                    local id
+                    while IFS= read -r id; do
+                        [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                    done < <(kanban list-ids stories 2>/dev/null)
+                    while IFS= read -r id; do
+                        [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                    done < <(kanban list-ids epics 2>/dev/null)
+                    COMPREPLY=( "${matches[@]}" )
+                    return 0
+                    ;;
+                --type)
+                    COMPREPLY=( $(compgen -W "user-story epic" -- "${cur}") )
+                    return 0
+                    ;;
+                --status)
+                    COMPREPLY=( $(compgen -W "draft ready todo in-progress ready-for-qa blocked done dropped" -- "${cur}") )
+                    return 0
+                    ;;
+                --epic)
+                    local -a matches=()
+                    local id
+                    while IFS= read -r id; do
+                        [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                    done < <(kanban list-ids epics 2>/dev/null)
+                    COMPREPLY=( "${matches[@]}" )
+                    return 0
+                    ;;
+                --sprint)
+                    COMPREPLY=( $(compgen -W "$(kanban list-ids sprints 2>/dev/null)" -- "${cur}") )
+                    return 0
+                    ;;
+                --story-points)
+                    COMPREPLY=( $(compgen -W "$(kanban config get story_points.allowed_values 2>/dev/null | tr -d '[]",' | tr '[:space:]' ' ')" -- "${cur}") )
+                    return 0
+                    ;;
+                --assignee)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --activated)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --work-started)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --work-done)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --created)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --updated)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --task-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0"#;
+    if script.contains(old) {
+        script.replacen(old, new, 1)
+    } else {
+        script.to_string()
+    }
+}
+
+fn inject_bash_story_update_dynamic(script: &str) -> String {
+    let start_marker = "        kanban__subcmd__story__subcmd__update)\n";
+    let end_marker = "        kanban__subcmd__task)\n";
+    let Some(start) = script.find(start_marker) else {
+        return script.to_string();
+    };
+    let Some(end) = script[start..]
+        .find(end_marker)
+        .map(|offset| start + offset)
+    else {
+        return script.to_string();
+    };
+
+    let replacement = r#"        kanban__subcmd__story__subcmd__update)
+            opts="-h --id --type --status --epic --sprint --story-points --assignee --activated --work-started --work-done --created --updated --task-file --format --help <ID> [REPO_ROOT]"
+            if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
+                local -a matches=()
+                local id
+                while IFS= read -r id; do
+                    [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                done < <(kanban list-ids stories 2>/dev/null)
+                while IFS= read -r id; do
+                    [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                done < <(kanban list-ids epics 2>/dev/null)
+                COMPREPLY=( "${matches[@]}" )
+                return 0
+            fi
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --id)
+                    local -a matches=()
+                    local id
+                    while IFS= read -r id; do
+                        [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                    done < <(kanban list-ids stories 2>/dev/null)
+                    while IFS= read -r id; do
+                        [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                    done < <(kanban list-ids epics 2>/dev/null)
+                    COMPREPLY=( "${matches[@]}" )
+                    return 0
+                    ;;
+                --type)
+                    COMPREPLY=( $(compgen -W "user-story epic" -- "${cur}") )
+                    return 0
+                    ;;
+                --status)
+                    COMPREPLY=( $(compgen -W "draft ready todo in-progress ready-for-qa blocked done dropped" -- "${cur}") )
+                    return 0
+                    ;;
+                --epic)
+                    local -a matches=()
+                    local id
+                    while IFS= read -r id; do
+                        [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                    done < <(kanban list-ids epics 2>/dev/null)
+                    COMPREPLY=( "${matches[@]}" )
+                    return 0
+                    ;;
+                --sprint)
+                    COMPREPLY=( $(compgen -W "$(kanban list-ids sprints 2>/dev/null)" -- "${cur}") )
+                    return 0
+                    ;;
+                --story-points)
+                    COMPREPLY=( $(compgen -W "$(kanban config get story_points.allowed_values 2>/dev/null | tr -d '[],\"' | tr '[:space:]' ' ')" -- "${cur}") )
+                    return 0
+                    ;;
+                --assignee)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --activated)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --work-started)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --work-done)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --created)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --updated)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+                --task-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=( $(compgen -W "human json" -- "${cur}") )
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+"#;
+
+    let mut result =
+        String::with_capacity(script.len() + replacement.len().saturating_sub(end - start));
+    result.push_str(&script[..start]);
+    result.push_str(replacement);
+    result.push_str(&script[end..]);
+    result
 }
 
 fn prompt(message: &str) -> Result<String> {
@@ -5566,13 +6237,21 @@ fn main() -> Result<()> {
                     );
                 }
             }
-            SprintCommand::Show { name, repo_root } => {
+            SprintCommand::Show {
+                name,
+                short,
+                repo_root,
+            } => {
                 let sprint = if let Some(name) = name {
                     summarize_sprint(repo_root, &name)?
                 } else {
                     summarize_current_sprint(repo_root)?
                 };
-                print_sprint_overview(&theme, OutputLayout::for_stdout()?, &sprint);
+                if short {
+                    print_sprint_overview_short(&theme, OutputLayout::for_stdout()?, &sprint);
+                } else {
+                    print_sprint_overview(&theme, OutputLayout::for_stdout()?, &sprint);
+                }
             }
             SprintCommand::Create {
                 number,
@@ -6150,10 +6829,51 @@ mod tests {
     #[test]
     fn progress_bar_scales_with_terminal_width() {
         let theme = Theme::plain();
-        let bar_80 = render_progress_bar(&theme, 6, 14, 80);
-        let bar_120 = render_progress_bar(&theme, 6, 14, 120);
-        assert_eq!(display_width(&bar_80), 80 / 8);
-        assert_eq!(display_width(&bar_120), 120 / 8);
+        let bar_80 = render_progress_bar(&theme, 6, 4, 14, 80);
+        let bar_120 = render_progress_bar(&theme, 6, 4, 14, 120);
+        assert_eq!(display_width(&bar_80), 80 / 5 - 2);
+        assert_eq!(display_width(&bar_120), 120 / 5 - 2);
+        assert!(bar_80.starts_with("\u{e0b6}"));
+        assert!(bar_80.ends_with("\u{e0b4}"));
+    }
+
+    #[test]
+    fn progress_bar_uses_done_and_in_progress_status_colors() {
+        let theme = Theme::color();
+        let bar = render_progress_bar(&theme, 5, 3, 10, 100);
+
+        assert!(
+            bar.contains("\x1b[1;32m"),
+            "done segment should be green: {bar}"
+        );
+        assert!(
+            bar.contains("\x1b[1;34m"),
+            "in-progress segment should be blue: {bar}"
+        );
+        assert!(
+            bar.contains("\x1b[1;34;40m"),
+            "in-progress boundary should use dark gray background: {bar}"
+        );
+        assert!(
+            bar.contains("\x1b[90m\u{e0b4}"),
+            "right cap should use dark gray foreground: {bar}"
+        );
+        assert_eq!(display_width(&bar), 100 / 5 - 2);
+    }
+
+    #[test]
+    fn progress_bar_uses_eighth_block_resolution() {
+        let plain = render_progress_bar(&Theme::plain(), 1, 0, 7, 100);
+        assert!(
+            plain.contains("▎"),
+            "expected one-quarter boundary after cap columns: {plain}"
+        );
+
+        let colored = render_progress_bar(&Theme::color(), 1, 1, 7, 100);
+        assert!(
+            colored.contains("\x1b[1;32;44m▎"),
+            "done to in-progress boundary should use green foreground and blue background: {colored}"
+        );
     }
 
     #[test]
@@ -6307,6 +7027,10 @@ mod tests {
             "story row should include story points: {output}"
         );
         assert!(
+            output.contains("    · US-F1-062 ◈13"),
+            "story row should be indented below the status header and prefixed with a bullet: {output}"
+        );
+        assert!(
             output.contains("○ todo   1 story   ◈13"),
             "todo header should include story point total: {output}"
         );
@@ -6406,8 +7130,8 @@ mod tests {
         assert!(
             output
                 .lines()
-                .any(|line| line == "○ todo   0 stories   ◈0   · none"),
-            "todo section should be flush-left"
+                .any(|line| line == "  ○ todo   0 stories   ◈0   · none"),
+            "todo section should be inset by two spaces"
         );
         assert!(
             output.contains("none"),
@@ -6416,7 +7140,7 @@ mod tests {
     }
 
     #[test]
-    fn warnings_and_status_headers_are_flush_left() {
+    fn sprint_sections_are_divided_and_inset() {
         let theme = Theme::plain();
         let mut stories_by_status = BTreeMap::new();
         stories_by_status.insert(
@@ -6449,16 +7173,75 @@ mod tests {
         };
 
         let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
+        let divider = "─".repeat(100);
 
         assert!(
-            output.lines().any(|line| line == "A warning line"),
-            "warning should be flush-left"
+            output.lines().any(|line| line == divider),
+            "section divider should span the full width without indentation"
+        );
+        assert!(
+            output.lines().any(|line| line == "  A warning line"),
+            "warning should be inset by two spaces"
         );
         assert!(
             output
                 .lines()
-                .any(|line| line == "→ in-progress   1 story   ◈3"),
-            "status header should be flush-left"
+                .any(|line| line == "  → in-progress   1 story   ◈3"),
+            "status header should be inset by two spaces"
+        );
+    }
+
+    #[test]
+    fn sprint_header_title_uses_bright_color() {
+        let theme = Theme::color();
+        let sprint = SprintOverview {
+            sprint_name: "S001.scaffolding".to_string(),
+            headline: "scaffolding".to_string(),
+            sprint_goal: None,
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("README.md"),
+            readme_status: None,
+            stories_by_status: BTreeMap::new(),
+            blocked_work: vec![],
+            warnings: vec![],
+        };
+
+        let output = render_sprint_overview_short(&theme, OutputLayout { width: 100 }, &sprint);
+
+        assert!(
+            output.contains("\x1b[1;36mS001 · Scaffolding\x1b[0m"),
+            "sprint title should be highlighted with bright cyan: {output:?}"
+        );
+    }
+
+    #[test]
+    fn sprint_header_band_has_blank_lines_around_status_rows() {
+        let theme = Theme::plain();
+        let sprint = SprintOverview {
+            sprint_name: "S001.test".to_string(),
+            headline: "test".to_string(),
+            sprint_goal: None,
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("README.md"),
+            readme_status: None,
+            stories_by_status: BTreeMap::new(),
+            blocked_work: vec![],
+            warnings: vec![],
+        };
+
+        let output = render_sprint_overview_short(&theme, OutputLayout { width: 100 }, &sprint);
+        let lines: Vec<&str> = output.lines().collect();
+
+        assert_eq!(lines.len(), 6, "header should only contain the header band");
+        assert!(
+            lines[1].is_empty(),
+            "blank line should appear above the status rows"
+        );
+        assert!(
+            lines[4].is_empty(),
+            "blank line should appear below the status rows"
         );
     }
 
@@ -6480,9 +7263,15 @@ mod tests {
 
         match args.command {
             Command::Sprint {
-                command: SprintCommand::Show { name, repo_root },
+                command:
+                    SprintCommand::Show {
+                        name,
+                        short,
+                        repo_root,
+                    },
             } => {
                 assert_eq!(name, None);
+                assert!(!short);
                 assert_eq!(repo_root, PathBuf::from("."));
             }
             _ => panic!("unexpected command"),
@@ -6495,10 +7284,30 @@ mod tests {
 
         match args.command {
             Command::Sprint {
-                command: SprintCommand::Show { name, repo_root },
+                command:
+                    SprintCommand::Show {
+                        name,
+                        short,
+                        repo_root,
+                    },
             } => {
                 assert_eq!(name.as_deref(), Some("S001.foundation"));
+                assert!(!short);
                 assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn sprint_show_short_flag_parses() {
+        let args = Args::try_parse_from(["kanban", "sprint", "show", "--short"]).unwrap();
+
+        match args.command {
+            Command::Sprint {
+                command: SprintCommand::Show { short, .. },
+            } => {
+                assert!(short);
             }
             _ => panic!("unexpected command"),
         }

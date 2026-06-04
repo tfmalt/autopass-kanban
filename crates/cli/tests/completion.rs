@@ -330,8 +330,10 @@ fn bash_completion_includes_dynamic_doctor_fix_target_completion() {
         "bash completion should include the doctor fix case block"
     );
     assert!(
-        stdout.contains("current $(kanban list-ids stories 2>/dev/null)"),
-        "bash completion should include current plus story IDs for doctor fix"
+        stdout.contains("local -a matches=( current )")
+            && stdout.contains("kanban list-ids stories 2>/dev/null")
+            && stdout.contains("$id"),
+        "bash completion should seed current and append story IDs for doctor fix"
     );
 }
 
@@ -655,6 +657,48 @@ fn zsh_completion_replaces_story_update_sprint_with_helper() {
 }
 
 #[test]
+fn zsh_completion_replaces_story_update_id_with_helper() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains(
+            "':id -- Story id to update, for example US-F1-053.:_kanban_story_or_epic_ids'"
+        ),
+        "story update positional id should use _kanban_story_or_epic_ids"
+    );
+}
+
+#[test]
+fn zsh_completion_replaces_story_update_id_epic_and_options() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("'--id=[Update frontmatter id. Omit VALUE to prompt with the current value.]::ID:_kanban_story_or_epic_ids'"),
+        "story update id option should use _kanban_story_or_epic_ids"
+    );
+    assert!(
+        stdout.contains("'--epic=[Update frontmatter epic. Omit VALUE to prompt with the current value.]::EPIC:_kanban_epic_ids'"),
+        "story update epic option should use _kanban_epic_ids"
+    );
+    assert!(
+        stdout.contains("'--status=[Update frontmatter status. Omit VALUE to prompt with the current value.]::STATUS:_kanban_story_update_statuses'"),
+        "story update status option should use _kanban_story_update_statuses"
+    );
+    assert!(
+        stdout.contains("'--story-points=[Update frontmatter story_points. Omit VALUE to prompt with the current value.]::POINTS:_kanban_story_point_values'"),
+        "story update story_points option should use _kanban_story_point_values"
+    );
+    assert!(
+        stdout.contains("== *\"$needle\"*"),
+        "partial matching should use substring checks"
+    );
+}
+
+#[test]
 fn bash_completion_includes_story_plan_completion() {
     let output = kanban(&["completion", "bash"]);
 
@@ -667,5 +711,22 @@ fn bash_completion_includes_story_plan_completion() {
     assert!(
         stdout.contains("list-ids sprints"),
         "bash story plan --sprint should complete with sprints"
+    );
+}
+
+#[test]
+fn bash_completion_replaces_story_update_id_with_helper() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("kanban__subcmd__story__subcmd__update)")
+            && stdout.contains("local -a matches=()")
+            && stdout.contains("kanban list-ids stories 2>/dev/null")
+            && stdout.contains("kanban list-ids epics 2>/dev/null")
+            && stdout.contains("== *\"${cur}\"*")
+            && stdout.contains("COMPREPLY=( \"${matches[@]}\" )"),
+        "story update positional id should complete with substring matching against stories and epics"
     );
 }

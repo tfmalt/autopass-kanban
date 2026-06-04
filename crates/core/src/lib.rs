@@ -2064,12 +2064,12 @@ pub fn validate_story(story: &Story) -> Vec<ValidationIssue> {
         );
     }
 
-    if assignee_required(story) && !story.frontmatter_keys.contains("assignee") {
+    if assignee_required(story) && !assignee_is_set(story) {
         add_issue(
             story,
             &mut issues,
             "missing-field:assignee",
-            "Stories with started work must have assignee set.".to_string(),
+            "Stories outside draft/todo must have assignee set.".to_string(),
         );
     }
 
@@ -3565,14 +3565,17 @@ fn validate_timestamp_field(
 }
 
 fn assignee_required(story: &Story) -> bool {
-    matches!(
+    !matches!(
         story.frontmatter.get("status").map(String::as_str),
-        Some("in-progress" | "ready-for-qa" | "blocked" | "done")
-    ) || story
+        Some("draft" | "todo")
+    )
+}
+
+fn assignee_is_set(story: &Story) -> bool {
+    story
         .frontmatter
-        .get("work_started")
-        .map(String::as_str)
-        .is_some_and(|value| !value.is_empty())
+        .get("assignee")
+        .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn add_issue(
@@ -3854,7 +3857,29 @@ mod tests {
     }
 
     #[test]
-    fn validate_story_requires_assignee_after_work_has_started() {
+    fn validate_story_allows_todo_without_assignee_even_after_work_started() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-051-build-shared-backlog-parsing-and-validation-core.md");
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-051\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nstory_points: 5\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(story_path, temp_root.path()).unwrap();
+        let issues = validate_story(&story);
+        let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+
+        assert!(!rules.contains(&"missing-field:assignee"));
+    }
+
+    #[test]
+    fn validate_story_requires_assignee_when_in_progress() {
         let temp_root = tempdir().unwrap();
         init_temp_repo(temp_root.path());
         let story_path = temp_root
@@ -3865,6 +3890,28 @@ mod tests {
         fs::write(
             &story_path,
             "---\nid: US-F1-051\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nstory_points: 5\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(story_path, temp_root.path()).unwrap();
+        let issues = validate_story(&story);
+        let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+
+        assert!(rules.contains(&"missing-field:assignee"));
+    }
+
+    #[test]
+    fn validate_story_requires_non_empty_assignee_when_in_progress() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-051-build-shared-backlog-parsing-and-validation-core.md");
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-051\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee:\nstory_points: 5\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
         )
         .unwrap();
 
