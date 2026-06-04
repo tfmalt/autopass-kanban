@@ -2035,17 +2035,17 @@ pub fn validate_story(story: &Story) -> Vec<ValidationIssue> {
         }
     }
 
-    validate_timestamp_field(story, &mut issues, "created", false);
-    validate_timestamp_field(story, &mut issues, "updated", false);
-    validate_timestamp_field(story, &mut issues, "work_started", true);
-    validate_timestamp_field(story, &mut issues, "work_done", true);
+    validate_timestamp_field(story, &mut issues, "created", false, true);
+    validate_timestamp_field(story, &mut issues, "updated", false, true);
+    validate_timestamp_field(story, &mut issues, "work_started", true, false);
+    validate_timestamp_field(story, &mut issues, "work_done", true, false);
 
     if story
         .frontmatter
         .get("sprint")
         .is_some_and(|sprint| !sprint.trim().is_empty() && sprint.as_str() != "~")
     {
-        validate_timestamp_field(story, &mut issues, "activated", true);
+        validate_timestamp_field(story, &mut issues, "activated", true, false);
     }
 
     if story.frontmatter.get("status").map(String::as_str) == Some("in-progress")
@@ -3535,6 +3535,7 @@ fn validate_timestamp_field(
     issues: &mut Vec<ValidationIssue>,
     field_name: &str,
     allow_empty: bool,
+    allow_date_only: bool,
 ) {
     let value = story
         .frontmatter
@@ -3547,14 +3548,18 @@ fn validate_timestamp_field(
 
     let timestamp_pattern = Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}$")
         .expect("valid timestamp regex");
-    if !timestamp_pattern.is_match(value) {
+    let date_pattern = Regex::new(r"^\d{4}-\d{2}-\d{2}$").expect("valid date regex");
+    if !(timestamp_pattern.is_match(value) || allow_date_only && date_pattern.is_match(value)) {
+        let expected_format = if allow_date_only {
+            "local ISO 8601 with numeric timezone offset or YYYY-MM-DD"
+        } else {
+            "local ISO 8601 with numeric timezone offset"
+        };
         add_issue(
             story,
             issues,
             format!("invalid-timestamp:{field_name}"),
-            format!(
-                "Frontmatter field \"{field_name}\" must use local ISO 8601 with numeric timezone offset."
-            ),
+            format!("Frontmatter field \"{field_name}\" must use {expected_format}."),
         );
     }
 }
@@ -3787,7 +3792,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_story_reports_invalid_timestamps_on_draft_backlog_fixture() {
+    fn validate_story_allows_date_only_created_and_updated_on_draft_backlog_fixture() {
         let temp_root = tempdir().unwrap();
         init_temp_repo(temp_root.path());
         let story_path = temp_root
@@ -3806,12 +3811,12 @@ mod tests {
         let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
         assert!(!rules.contains(&"missing-field:assignee"));
-        assert!(rules.contains(&"invalid-timestamp:created"));
-        assert!(rules.contains(&"invalid-timestamp:updated"));
+        assert!(!rules.contains(&"invalid-timestamp:created"));
+        assert!(!rules.contains(&"invalid-timestamp:updated"));
     }
 
     #[test]
-    fn doctor_fix_normalizes_date_only_timestamp_as_info() {
+    fn doctor_does_not_report_date_only_created_or_updated() {
         let temp_root = tempdir().unwrap();
         init_temp_repo(temp_root.path());
         let story_path = temp_root
@@ -3821,40 +3826,30 @@ mod tests {
         fs::create_dir_all(story_path.parent().unwrap()).unwrap();
         fs::write(
             &story_path,
-            "---\nid: US-F1-050\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-31\n---\n# User Story\n",
+            "---\nid: US-F1-050\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28\nupdated: 2026-05-31\n---\n# User Story\n",
         )
         .unwrap();
 
-        let issue = collect_doctor_issues_for_story(temp_root.path(), "US-F1-050")
-            .unwrap()
-            .into_iter()
-            .find(|issue| issue.rule == "invalid-timestamp:updated")
-            .unwrap();
-
-        assert_eq!(issue.severity, "info");
-        assert_eq!(issue.fix_kind, DoctorFixKind::Automatic);
-        assert_eq!(issue.prompt, DoctorPrompt::None);
-        assert_eq!(
-            issue.fix_preview,
-            Some(DoctorFixPreview {
-                field_name: "updated".to_string(),
-                old_value: "2026-05-31".to_string(),
-                new_value: date_only_timestamp("2026-05-31").unwrap(),
-            })
-        );
-
-        let result =
-            apply_doctor_fix(temp_root.path(), &issue, &DoctorFixInput::default()).unwrap();
-        let expected_timestamp = date_only_timestamp("2026-05-31").unwrap();
-        let updated = fs::read_to_string(&story_path).unwrap();
-
-        assert!(result.message.contains("INFO"));
-        assert!(updated.contains(&format!("updated: {expected_timestamp}")));
+        let issues = collect_doctor_issues_for_story(temp_root.path(), "US-F1-050").unwrap();
         assert!(
-            collect_doctor_issues_for_story(temp_root.path(), "US-F1-050")
-                .unwrap()
-                .into_iter()
+            issues
+                .iter()
+                .all(|issue| issue.rule != "invalid-timestamp:created")
+        );
+        assert!(
+            issues
+                .iter()
                 .all(|issue| issue.rule != "invalid-timestamp:updated")
+        );
+        assert!(
+            fs::read_to_string(&story_path)
+                .unwrap()
+                .contains("created: 2026-05-28")
+        );
+        assert!(
+            fs::read_to_string(&story_path)
+                .unwrap()
+                .contains("updated: 2026-05-31")
         );
     }
 
