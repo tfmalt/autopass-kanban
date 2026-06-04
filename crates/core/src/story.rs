@@ -465,14 +465,9 @@ pub(crate) fn find_story_in_repository(
 }
 
 pub(crate) fn normalize_story_status_input(status: &str) -> Result<String> {
-    let lowercase = status.trim().to_ascii_lowercase();
-    let normalized = match lowercase.as_str() {
-        "to do" => "todo",
-        "in progress" => "in-progress",
-        other => other,
-    };
-    if CANONICAL_STORY_STATUSES.contains(&normalized) {
-        Ok(normalized.to_string())
+    let normalized = normalize_status_alias(status);
+    if CANONICAL_STORY_STATUSES.contains(&normalized.as_str()) {
+        Ok(normalized)
     } else {
         bail!("Unsupported story status: {status}");
     }
@@ -560,5 +555,393 @@ pub(crate) fn story_overview(repo_root: &Path, story: &Story) -> StoryOverview {
             .as_ref()
             .map(|task_file| task_file.tasks.len())
             .unwrap_or(0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn update_story_frontmatter_writes_requested_fields() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-099-test-story.md",
+            "id: US-F1-099\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint:\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let result = update_story_frontmatter(
+            temp_root.path(),
+            "US-F1-099",
+            &[
+                ("status".to_string(), "ready".to_string()),
+                ("story_points".to_string(), "5".to_string()),
+                ("assignee".to_string(), "TBD".to_string()),
+            ],
+        )
+        .unwrap();
+
+        let markdown = fs::read_to_string(story_path).unwrap();
+        assert_eq!(result.story_id, "US-F1-099");
+        assert_eq!(
+            result.updated_fields,
+            vec!["status", "story_points", "assignee"]
+        );
+        assert!(markdown.contains("status: ready"));
+        assert!(markdown.contains("story_points: 5"));
+        assert!(markdown.contains("assignee: TBD"));
+    }
+
+    #[test]
+    fn list_all_stories_returns_single_story_entry() {
+        let repo_root = repo_root();
+
+        let stories = list_all_stories(&repo_root).unwrap();
+        let matching = stories
+            .iter()
+            .find(|story| story.id == "US-F1-010")
+            .unwrap();
+        let count = stories
+            .iter()
+            .filter(|story| story.id == "US-F1-010")
+            .count();
+
+        assert_eq!(count, 1);
+        assert!(
+            matching
+                .relative_path
+                .to_string_lossy()
+                .contains("US-F1-010")
+        );
+    }
+
+    #[test]
+    fn find_story_exposes_acceptance_criteria_and_tasks() {
+        let repo_root = repo_root();
+        let story = find_story(&repo_root, "US-F1-010").unwrap().unwrap();
+
+        assert!(
+            story
+                .acceptance_criteria
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Scenario 1")
+        );
+        assert_eq!(story.tasks.len(), 4);
+    }
+
+    #[test]
+    fn move_story_to_status_updates_single_story_and_roster() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_git_config(temp_root.path(), "Test User", "test@example.com");
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "planned",
+        );
+        let story_path = write_story_with_task_file(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md",
+            "id: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: Old Owner <old@example.com>\nstory_points: 8\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let result = move_story_to_status(temp_root.path(), "US-F1-053", "in-progress").unwrap();
+
+        assert_eq!(result.to_status, "in-progress");
+        let moved_story = fs::read_to_string(&story_path).unwrap();
+        assert!(moved_story.contains("status: in-progress"));
+        assert!(moved_story.contains("assignee: Test User <test@example.com>"));
+        assert!(moved_story.contains("work_started: 20"));
+        let sprint_markdown =
+            fs::read_to_string(temp_root.path().join("delivery/sprints/S001.foundation.md"))
+                .unwrap();
+        assert!(sprint_markdown.contains("- in-progress: US-F1-053"));
+        assert_eq!(
+            result.task_path,
+            Some(relative_path(
+                temp_root.path(),
+                &story_path.with_extension("tasks.md")
+            ))
+        );
+    }
+
+    #[test]
+    fn move_story_to_status_updates_story_in_place_without_creating_status_folders() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "active",
+        );
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md",
+            "id: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let result = move_story_to_status(temp_root.path(), "US-F1-053", "ready-for-qa").unwrap();
+
+        assert_eq!(result.to_status, "ready-for-qa");
+        assert_eq!(temp_root.path().join(&result.story_path), story_path);
+        let moved_story = fs::read_to_string(&story_path).unwrap();
+        assert!(moved_story.contains("status: ready-for-qa"));
+    }
+
+    #[test]
+    fn move_story_to_in_progress_refreshes_assignee_when_already_in_progress() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_git_config(temp_root.path(), "Test User", "test@example.com");
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "active",
+        );
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md",
+            "id: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: Old Owner <old@example.com>\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let result = move_story_to_status(temp_root.path(), "US-F1-053", "in-progress").unwrap();
+
+        assert_eq!(result.to_status, "in-progress");
+        assert_eq!(temp_root.path().join(result.story_path), story_path);
+        let backlog_story = fs::read_to_string(&story_path).unwrap();
+        assert!(backlog_story.contains("assignee: Test User <test@example.com>"));
+    }
+
+    #[test]
+    fn move_story_to_in_progress_uses_assignee_override() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "planned",
+        );
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md",
+            "id: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 8\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let result = move_story_to_status_with_assignee(
+            temp_root.path(),
+            "US-F1-053",
+            "in-progress",
+            Some("Override User <override@example.com>"),
+        )
+        .unwrap();
+
+        assert_eq!(temp_root.path().join(result.story_path), story_path);
+        let backlog_story = fs::read_to_string(&story_path).unwrap();
+        assert!(backlog_story.contains("assignee: Override User <override@example.com>"));
+    }
+
+    #[test]
+    fn move_story_rejects_invalid_assignee_override_before_moving_files() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "planned",
+        );
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md",
+            "id: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 8\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let err = move_story_to_status_with_assignee(
+            temp_root.path(),
+            "US-F1-053",
+            "in-progress",
+            Some("Invalid User"),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("Name <email>"));
+        assert!(story_path.exists());
+        assert!(
+            !temp_root
+                .path()
+                .join("delivery/sprints/S001.foundation/02.in-progress")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn move_story_to_done_refreshes_existing_work_done() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "active",
+        );
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md",
+            "id: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done: 1999-01-01T00:00:00+0100\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let result = move_story_to_status(temp_root.path(), "US-F1-053", "done").unwrap();
+
+        assert_eq!(result.to_status, "done");
+        assert_eq!(temp_root.path().join(result.story_path), story_path);
+        let moved_story = fs::read_to_string(&story_path).unwrap();
+        let backlog_story = moved_story.clone();
+        assert!(moved_story.contains("status: done"));
+        assert!(!moved_story.contains("work_done: 1999-01-01T00:00:00+0100"));
+        assert!(!backlog_story.contains("work_done: 1999-01-01T00:00:00+0100"));
+        assert!(moved_story.contains("work_done: 20"));
+        assert!(backlog_story.contains("work_done: 20"));
+    }
+
+    #[test]
+    fn plan_story_into_sprint_updates_story_in_place() {
+        let temp_root = tempdir().unwrap();
+        write_git_config(temp_root.path(), "Test User", "test@example.com");
+        init_temp_repo(temp_root.path());
+
+        write_sprint_file(
+            temp_root.path(),
+            "S001.planning",
+            "planning",
+            "2999-01-04",
+            "2999-01-15",
+            "planned",
+        );
+
+        let backlog_dir = temp_root
+            .path()
+            .join("delivery/backlog/phase-2-core-logic/01.passage-ingestion");
+        fs::create_dir_all(&backlog_dir).unwrap();
+        let backlog_story = backlog_dir.join("US-F2-001-ingest-passage-events.md");
+        fs::write(
+            &backlog_story,
+            "---\nid: US-F2-001\ntype: user-story\nstatus: todo\nepic: EP-F2-01\nsprint:\nstory_points: 8\nactivated:\ncreated: 2026-05-20\nupdated: 2026-05-20\n---\n\n# User Story: Ingest passage events\n",
+        )
+        .unwrap();
+
+        let result =
+            plan_story_into_sprint(temp_root.path(), "US-F2-001", "S001.planning").unwrap();
+
+        assert_eq!(result.story_id, "US-F2-001");
+        assert_eq!(result.sprint_name, "S001.planning");
+
+        let story = read_story_file(&backlog_story, temp_root.path()).unwrap();
+        assert_eq!(
+            story.frontmatter.get("status").map(String::as_str),
+            Some("todo")
+        );
+        assert_eq!(
+            story.frontmatter.get("sprint").map(String::as_str),
+            Some("S001.planning")
+        );
+        assert!(
+            story
+                .frontmatter
+                .get("activated")
+                .map(|value| !value.is_empty())
+                .unwrap_or(false)
+        );
+        let sprint_markdown =
+            fs::read_to_string(temp_root.path().join("delivery/sprints/S001.planning.md")).unwrap();
+        assert!(sprint_markdown.contains("- todo: US-F2-001"));
+    }
+
+    #[test]
+    fn plan_story_into_sprint_rejects_unknown_sprint() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let backlog_dir = temp_root.path().join("doc/backlog/phase-2-core-logic/01.x");
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            backlog_dir.join("US-F2-009-x.md"),
+            "---\nid: US-F2-009\ntype: user-story\nstatus: todo\nepic: EP-F2-01\nsprint:\nstory_points: 3\n---\n\n# x\n",
+        )
+        .unwrap();
+
+        let err = plan_story_into_sprint(temp_root.path(), "US-F2-009", "S404.nope").unwrap_err();
+        assert!(err.to_string().contains("S404.nope"));
+    }
+
+    #[test]
+    fn task_mutations_update_sibling_task_file_only() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "active",
+        );
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md",
+            "id: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+        fs::write(
+            story_path.with_extension("tasks.md"),
+            "# Tasks for US-F1-053\n\nParent User Story: US-F1-053\nSprint: S001.foundation\n\n---\n",
+        ).unwrap();
+
+        let add_result = add_task_to_story(
+            temp_root.path(),
+            "US-F1-053",
+            "Add new task",
+            "todo",
+            &["cli".to_string(), "write".to_string()],
+            "Add command coverage.",
+        )
+        .unwrap();
+        let task_markdown =
+            fs::read_to_string(temp_root.path().join(add_result.task_file_path.clone())).unwrap();
+        assert!(task_markdown.contains("TASK-US-F1-053-001"));
+        assert!(task_markdown.contains("Add new task"));
+
+        update_task_in_story(
+            temp_root.path(),
+            "US-F1-053",
+            "TASK-US-F1-053-001",
+            Some("done"),
+            None,
+            None,
+            Some("Completed command coverage."),
+        )
+        .unwrap();
+        let updated_markdown =
+            fs::read_to_string(temp_root.path().join(add_result.task_file_path)).unwrap();
+        assert!(updated_markdown.contains("Status: Done"));
+        assert!(updated_markdown.contains("Completed command coverage."));
     }
 }

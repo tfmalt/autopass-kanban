@@ -477,3 +477,16 @@ pub(crate) fn push_word_wrapped(
     }
     *current = chunk;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_width_ignores_ansi_codes() {
+        assert_eq!(display_width("\x1b[1;32mhello\x1b[0m"), 5);
+        assert_eq!(display_width("hello"), 5);
+        assert_eq!(display_width("\x1b[2m✓4\x1b[0m"), 2);
+        assert_eq!(display_width(""), 0);
+    }
+}

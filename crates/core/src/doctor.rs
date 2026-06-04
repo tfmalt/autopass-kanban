@@ -889,3 +889,133 @@ pub(crate) fn doctor_readme_field_value(
     let _ = repo_root;
     Ok(value)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn doctor_does_not_report_date_only_created_or_updated() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = temp_root
+            .path()
+            .join("delivery/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-050-test-draft-story.md");
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-050\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28\nupdated: 2026-05-31\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let issues = collect_doctor_issues_for_story(temp_root.path(), "US-F1-050").unwrap();
+        assert!(
+            issues
+                .iter()
+                .all(|issue| issue.rule != "invalid-timestamp:created")
+        );
+        assert!(
+            issues
+                .iter()
+                .all(|issue| issue.rule != "invalid-timestamp:updated")
+        );
+        assert!(
+            fs::read_to_string(&story_path)
+                .unwrap()
+                .contains("created: 2026-05-28")
+        );
+        assert!(
+            fs::read_to_string(&story_path)
+                .unwrap()
+                .contains("updated: 2026-05-31")
+        );
+    }
+
+    #[test]
+    fn doctor_reports_sprint_status_disagreement_with_current_dates() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2026-05-18",
+            "2026-05-29",
+            "planned",
+        );
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md",
+            "id: US-F1-052\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let findings = doctor_repository_at_date(
+            temp_root.path(),
+            NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
+        )
+        .unwrap();
+
+        assert!(findings.iter().any(|finding| {
+            finding.scope == "S001.foundation"
+                && finding
+                    .message
+                    .contains("README frontmatter is authoritative")
+        }));
+    }
+
+    #[test]
+    fn collect_doctor_issues_for_story_targets_single_canonical_story_file() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md",
+            "id: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let issues = collect_doctor_issues_for_story(temp_root.path(), "US-F1-053").unwrap();
+
+        assert!(!issues.is_empty());
+        assert!(
+            issues
+                .iter()
+                .all(|issue| issue.story_id.as_deref() == Some("US-F1-053"))
+        );
+        assert!(
+            issues.iter().any(|issue| issue.file_path.as_ref()
+                == Some(&relative_path(temp_root.path(), &story_path)))
+        );
+    }
+
+    #[test]
+    fn apply_doctor_fix_sets_missing_assignee_on_story_file() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_git_config(temp_root.path(), "Test User", "test@example.com");
+        let story_path = temp_root
+            .path()
+            .join("delivery/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-051-build-shared-backlog-parsing-and-validation-core.md");
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-051\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nstory_points: 5\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let issue = collect_doctor_issues_for_story(temp_root.path(), "US-F1-051")
+            .unwrap()
+            .into_iter()
+            .find(|issue| issue.rule == "missing-field:assignee")
+            .unwrap();
+        let result =
+            apply_doctor_fix(temp_root.path(), &issue, &DoctorFixInput::default()).unwrap();
+        let updated = fs::read_to_string(&story_path).unwrap();
+
+        assert!(result.message.contains("Set assignee"));
+        assert!(updated.contains("assignee: Test User <test@example.com>"));
+    }
+}

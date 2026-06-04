@@ -205,18 +205,31 @@ pub(crate) fn push_story_metadata_table(
 }
 
 pub(crate) fn simplify_story_path(path: &Path) -> String {
-    path.strip_prefix("delivery/backlog")
-        .unwrap_or(path)
-        .display()
-        .to_string()
+    // Display the path starting from the phase directory when present so the
+    // output is independent of the configured backlog root location.
+    match phase_component_index(path) {
+        Some(index) => path
+            .iter()
+            .skip(index)
+            .collect::<PathBuf>()
+            .display()
+            .to_string(),
+        None => path.display().to_string(),
+    }
 }
 
 pub(crate) fn story_phase_label(path: &Path) -> Option<String> {
-    let phase_dir = path.iter().nth(2)?.to_string_lossy();
+    let index = phase_component_index(path)?;
+    let phase_dir = path.iter().nth(index)?.to_string_lossy();
     phase_dir
         .strip_prefix("phase-")
         .and_then(|rest| rest.split_once('-'))
         .map(|(number, slug)| format!("{} {}", number, headline_from_slug(slug)))
+}
+
+fn phase_component_index(path: &Path) -> Option<usize> {
+    path.iter()
+        .position(|component| component.to_string_lossy().starts_with("phase-"))
 }
 
 pub(crate) fn story_epic_label(epic_id: Option<&str>, epic_title: Option<&str>) -> Option<String> {
@@ -398,4 +411,114 @@ pub(crate) fn task_table_columns(
             width: description_width,
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn print_story_list_renders_scope_and_story_rows() {
+        let theme = Theme::plain();
+        let stories = vec![StoryOverview {
+            id: "US-F1-010".to_string(),
+            title: "CI pipeline with build and unit tests".to_string(),
+            status: "in-progress".to_string(),
+            epic_id: Some("EP-F1-01".to_string()),
+            epic_title: Some("Platform".to_string()),
+            assignee: "Ada Lovelace <ada@example.test>".to_string(),
+            story_points: "3".to_string(),
+            sprint: Some("S000.getting-started".to_string()),
+            relative_path: PathBuf::from(
+                "delivery/backlog/phase-1-scaffolding/01.some-epic/US-F1-010.md",
+            ),
+            task_summary: None,
+            task_count: 0,
+        }];
+
+        let output = render_story_list(&theme, "active sprint (S000.getting-started)", &stories);
+
+        assert!(output.contains("Stories: 1"));
+        assert!(output.contains("Scope: active sprint (S000.getting-started)"));
+        assert!(output.contains("US-F1-010 [in-progress] sprint=S000.getting-started"));
+        assert!(output.contains("◈3"));
+    }
+
+    #[test]
+    fn story_details_render_terminal_formatted_markdown() {
+        let theme = Theme::plain();
+        let details = StoryDetails {
+            story: StoryOverview {
+                id: "US-F1-010".to_string(),
+                title: "CI pipeline with build and unit tests".to_string(),
+                status: "in-progress".to_string(),
+                epic_id: Some("EP-F1-01".to_string()),
+                epic_title: Some("Plattforminfrastruktur".to_string()),
+                assignee: "Ada Lovelace <ada@example.test>".to_string(),
+                story_points: "3".to_string(),
+                sprint: Some("S000.getting-started".to_string()),
+                relative_path: PathBuf::from(
+                    "delivery/backlog/phase-1-scaffolding/01.some-epic/US-F1-010.md",
+                ),
+                task_summary: Some(TaskSummary {
+                    todo: 1,
+                    in_progress: 1,
+                    blocked: 0,
+                    done: 2,
+                }),
+                task_count: 4,
+            },
+            story_file_path: PathBuf::from(
+                "delivery/backlog/phase-1-scaffolding/01.plattforminfrastruktur/US-F1-010.md",
+            ),
+            task_file_path: None,
+            epic_id: Some("EP-F1-01".to_string()),
+            epic_title: Some("Plattforminfrastruktur".to_string()),
+            work_started: Some("2026-05-21T00:00:00+0200".to_string()),
+            work_done: None,
+            story_statement: Some(
+                "As a developer\n\n- I need **formatted** story output".to_string(),
+            ),
+            acceptance_criteria: Some(
+                "Scenario: Show a story\nGiven a story exists\nWhen I run the command\nThen the story is formatted".to_string(),
+            ),
+            definition_of_done: Some("- [ ] Run `cargo test`".to_string()),
+            notes_and_open_questions: Some(
+                "| Risk | Mitigation |\n| --- | --- |\n| Raw markdown | Render terminal tables |"
+                    .to_string(),
+            ),
+            tasks: vec![kanban_core::Task {
+                id: "TASK-US-F1-010-001".to_string(),
+                title: "Build story renderer".to_string(),
+                status: "In Progress".to_string(),
+                normalized_status: "in-progress".to_string(),
+                tags: vec!["cli".to_string()],
+                description: "Wire command output".to_string(),
+            }],
+        };
+
+        let output = render_story_details(&theme, OutputLayout { width: 100 }, &details);
+
+        assert!(output.contains("US-F1-010 · CI pipeline with build and unit tests"));
+        assert!(output.contains("Overview"));
+        assert!(output.contains("Field"));
+        assert!(output.contains("Value"));
+        assert!(output.contains("Scenario: Show a story"));
+        assert!(output.contains("Given a story exists"));
+        assert!(output.contains("☐ Run cargo test"));
+        assert!(output.contains("Risk"));
+        assert!(output.contains("Mitigation"));
+        assert!(output.contains("1 Scaffolding"));
+        assert!(output.contains("EP-F1-01 Plattforminfrastruktur"));
+        assert!(output.contains("phase-1-scaffolding/01.plattforminfrastruktur/US-F1-010.md"));
+        assert!(output.contains("2026-05-21T00:00:00+0200"));
+        assert!(output.contains("TASK-US-F1-010-001"));
+        assert!(output.contains("→ in-progress"));
+        assert!(output.contains("Build story renderer - Wire command output"));
+        assert!(!output.contains("Story:"));
+        assert!(!output.contains("Task file"));
+        assert!(!output.contains("delivery/backlog/"));
+        assert!(!output.contains("| Risk | Mitigation |"));
+        assert!(!output.contains("- [ ] Run `cargo test`"));
+    }
 }

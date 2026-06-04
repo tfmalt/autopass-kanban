@@ -178,3 +178,26 @@ pub(crate) fn background_code(style: Style) -> &'static str {
         Style::Yellow => "43",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_theme_preserves_text_without_ansi_codes() {
+        let theme = Theme::plain();
+
+        assert_eq!(theme.status("blocked"), "blocked");
+        assert_eq!(theme.id("US-F1-056"), "US-F1-056");
+        assert!(!theme.status("done").contains("\x1b["));
+    }
+
+    #[test]
+    fn color_theme_keeps_status_text_while_adding_ansi_codes() {
+        let theme = Theme::color();
+        let styled = theme.status("in-progress");
+
+        assert!(styled.contains("\x1b["));
+        assert!(styled.contains("in-progress"));
+    }
+}

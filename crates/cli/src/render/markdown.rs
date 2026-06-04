@@ -341,3 +341,26 @@ pub(crate) fn markdown_table_columns(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fenced_gherkin_blocks_are_syntax_highlighted() {
+        let theme = Theme::color();
+        let mut output = String::new();
+
+        push_terminal_markdown(
+            &mut output,
+            &theme,
+            100,
+            "```gherkin\nGiven a developer opens a pull request\nWhen the pipeline runs\nThen the status is visible\n```",
+        );
+
+        assert!(output.contains("  │ "));
+        assert!(output.contains("\x1b[1mGiven\x1b[0m a developer opens a pull request"));
+        assert!(output.contains("\x1b[1mWhen\x1b[0m the pipeline runs"));
+        assert!(output.contains("\x1b[1mThen\x1b[0m the status is visible"));
+    }
+}

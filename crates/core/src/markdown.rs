@@ -2,6 +2,7 @@ use crate::constants::*;
 use crate::model::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::util::*;
 
 pub fn parse_frontmatter(markdown: &str) -> ParsedFrontmatter {
     let normalized = markdown.replace("\r\n", "\n");
@@ -452,11 +453,7 @@ pub(crate) fn parse_scalar(raw_value: &str) -> String {
 }
 
 pub(crate) fn normalize_task_status(status: &str) -> String {
-    match status.trim().to_ascii_lowercase().as_str() {
-        "to do" => "todo".to_string(),
-        "in progress" => "in-progress".to_string(),
-        other => other.to_string(),
-    }
+    normalize_status_alias(status)
 }
 
 pub(crate) fn capture_line_value(block: &str, prefix: &str) -> Option<String> {
@@ -476,4 +473,29 @@ pub(crate) fn capture_description(block: &str) -> String {
         description = stripped.trim_end().to_string();
     }
     description
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_update_preserves_other_task_headings() {
+        let markdown = "# Tasks for US-F1-053\n\n---\n\n## TASK-US-F1-053-001 - First task\n\nStatus: To Do\nTags: docs\n\nDescription:\nFirst.\n\n---\n\n## TASK-US-F1-053-002 - Second task\n\nStatus: To Do\nTags: cli\n\nDescription:\nSecond.\n\n---\n\n## TASK-US-F1-053-003 - Third task\n\nStatus: To Do\nTags: tests\n\nDescription:\nThird.\n";
+
+        let updated = rewrite_task_markdown(
+            markdown,
+            "TASK-US-F1-053-002",
+            Some("done"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(updated.contains("## TASK-US-F1-053-001 - First task"));
+        assert!(updated.contains("## TASK-US-F1-053-002 - Second task"));
+        assert!(updated.contains("## TASK-US-F1-053-003 - Third task"));
+        assert!(updated.contains("Status: Done"));
+    }
 }

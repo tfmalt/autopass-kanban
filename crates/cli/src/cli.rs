@@ -699,3 +699,281 @@ pub(crate) fn list_ids_kind_label(kind: ListIdsKind) -> &'static str {
         ListIdsKind::Epics => "epics",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_repo_root_uses_subcommand_repo_root() {
+        let repo_root = PathBuf::from("/tmp/kanban-repo");
+        let command = Command::Sprint {
+            command: SprintCommand::List {
+                repo_root: repo_root.clone(),
+            },
+        };
+
+        assert_eq!(command_repo_root(&command), Some(&repo_root));
+    }
+
+    #[test]
+    fn sprint_show_without_name_parses_as_current_sprint() {
+        let args = Args::try_parse_from(["kanban", "sprint", "show"]).unwrap();
+
+        match args.command {
+            Command::Sprint {
+                command:
+                    SprintCommand::Show {
+                        name,
+                        short,
+                        repo_root,
+                    },
+            } => {
+                assert_eq!(name, None);
+                assert!(!short);
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn sprint_show_with_name_still_parses_named_sprint() {
+        let args = Args::try_parse_from(["kanban", "sprint", "show", "S001.foundation"]).unwrap();
+
+        match args.command {
+            Command::Sprint {
+                command:
+                    SprintCommand::Show {
+                        name,
+                        short,
+                        repo_root,
+                    },
+            } => {
+                assert_eq!(name.as_deref(), Some("S001.foundation"));
+                assert!(!short);
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn sprint_show_short_flag_parses() {
+        let args = Args::try_parse_from(["kanban", "sprint", "show", "--short"]).unwrap();
+
+        match args.command {
+            Command::Sprint {
+                command: SprintCommand::Show { short, .. },
+            } => {
+                assert!(short);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn story_list_command_reuses_story_repo_root() {
+        let repo_root = PathBuf::from("/tmp/kanban-repo");
+        let command = Command::Story {
+            command: StoryCommand::List {
+                current: false,
+                all: false,
+                next: false,
+                sprint: None,
+                repo_root: repo_root.clone(),
+            },
+        };
+
+        assert_eq!(command_repo_root(&command), Some(&repo_root));
+    }
+
+    #[test]
+    fn story_update_parses_direct_frontmatter_values() {
+        let args = Args::try_parse_from([
+            "kanban",
+            "story",
+            "update",
+            "US-F1-099",
+            "--story-points",
+            "5",
+            "--status",
+            "ready",
+        ])
+        .unwrap();
+
+        match args.command {
+            Command::Story {
+                command:
+                    StoryCommand::Update {
+                        id,
+                        story_points,
+                        status,
+                        repo_root,
+                        ..
+                    },
+            } => {
+                assert_eq!(id, "US-F1-099");
+                assert_eq!(story_points, Some(Some("5".to_string())));
+                assert_eq!(status, Some(Some("ready".to_string())));
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn story_update_parses_bare_frontmatter_option_as_prompt() {
+        let args =
+            Args::try_parse_from(["kanban", "story", "update", "US-F1-099", "--story-points"])
+                .unwrap();
+
+        match args.command {
+            Command::Story {
+                command:
+                    StoryCommand::Update {
+                        story_points,
+                        status,
+                        ..
+                    },
+            } => {
+                assert_eq!(story_points, Some(None));
+                assert_eq!(status, None);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn doctor_show_subcommand_parses() {
+        let args = Args::try_parse_from(["kanban", "doctor", "show"]).unwrap();
+
+        match args.command {
+            Command::Doctor {
+                command: DoctorCommand::Show { repo_root },
+            } => assert_eq!(repo_root, PathBuf::from(".")),
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn doctor_fix_current_parses() {
+        let args = Args::try_parse_from(["kanban", "doctor", "fix", "current"]).unwrap();
+
+        match args.command {
+            Command::Doctor {
+                command: DoctorCommand::Fix { target, repo_root },
+            } => {
+                assert_eq!(target.as_deref(), Some("current"));
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn doctor_fix_story_parses() {
+        let args = Args::try_parse_from(["kanban", "doctor", "fix", "US-F1-053"]).unwrap();
+
+        match args.command {
+            Command::Doctor {
+                command: DoctorCommand::Fix { target, repo_root },
+            } => {
+                assert_eq!(target.as_deref(), Some("US-F1-053"));
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn web_start_command_parses_flags() {
+        let args = Args::try_parse_from(["kanban", "web", "start", "--dev", "--open", "/tmp/repo"])
+            .unwrap();
+
+        match args.command {
+            Command::Web {
+                command:
+                    WebCommand::Start {
+                        foreground,
+                        open,
+                        dev,
+                        build,
+                        repo_root,
+                    },
+            } => {
+                assert!(!foreground);
+                assert!(open);
+                assert!(dev);
+                assert!(!build);
+                assert_eq!(repo_root, PathBuf::from("/tmp/repo"));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn web_restart_command_parses_build_flag() {
+        let args = Args::try_parse_from(["kanban", "web", "restart", "--build"]).unwrap();
+
+        match args.command {
+            Command::Web {
+                command:
+                    WebCommand::Restart {
+                        open,
+                        dev,
+                        build,
+                        repo_root,
+                    },
+            } => {
+                assert!(!open);
+                assert!(!dev);
+                assert!(build);
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn web_log_command_parses_lines_and_follow() {
+        let args = Args::try_parse_from([
+            "kanban",
+            "web",
+            "log",
+            "--lines",
+            "50",
+            "--follow",
+            "/tmp/repo",
+        ])
+        .unwrap();
+
+        match args.command {
+            Command::Web {
+                command:
+                    WebCommand::Log {
+                        lines,
+                        follow,
+                        repo_root,
+                    },
+            } => {
+                assert_eq!(lines, Some(50));
+                assert!(follow);
+                assert_eq!(repo_root, PathBuf::from("/tmp/repo"));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn command_repo_root_uses_web_subcommand_repo_root() {
+        let repo_root = PathBuf::from("/tmp/kanban-repo");
+        let command = Command::Web {
+            command: WebCommand::Status {
+                repo_root: repo_root.clone(),
+            },
+        };
+
+        assert_eq!(command_repo_root(&command), Some(&repo_root));
+    }
+}

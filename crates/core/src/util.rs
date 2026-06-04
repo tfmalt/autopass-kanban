@@ -6,6 +6,17 @@ pub(crate) fn current_timestamp_string() -> String {
     Local::now().format("%Y-%m-%dT%H:%M:%S%z").to_string()
 }
 
+/// Normalize a status string by trimming, lowercasing, and mapping the
+/// spaced human aliases (`to do`, `in progress`) to their canonical
+/// hyphenated forms. Unknown values pass through unchanged.
+pub(crate) fn normalize_status_alias(status: &str) -> String {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "to do" => "todo".to_string(),
+        "in progress" => "in-progress".to_string(),
+        other => other.to_string(),
+    }
+}
+
 pub(crate) fn current_git_assignee(repo_root: &Path) -> Result<String> {
     let name = git_config_value(repo_root, "user.name")?;
     let email = git_config_value(repo_root, "user.email")?;

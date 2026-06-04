@@ -699,3 +699,85 @@ pub(crate) fn print_web_log(
         thread::sleep(Duration::from_millis(500));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_runtime_paths_live_under_kanban_run() {
+        let paths = web_runtime_paths(Path::new("/tmp/repo"));
+
+        assert_eq!(paths.run_dir, PathBuf::from("/tmp/repo/.kanban/run"));
+        assert_eq!(
+            paths.pid_file,
+            PathBuf::from("/tmp/repo/.kanban/run/web.pid")
+        );
+        assert_eq!(
+            paths.port_file,
+            PathBuf::from("/tmp/repo/.kanban/run/web.port")
+        );
+        assert_eq!(
+            paths.log_file,
+            PathBuf::from("/tmp/repo/.kanban/run/web.log")
+        );
+    }
+
+    #[test]
+    fn web_already_running_error_uses_icon_and_aligned_guidance() {
+        let output = render_web_already_running_error(&Theme::plain(), 77322, 100);
+
+        assert_eq!(
+            output,
+            "✖ Error: kanban web is already running with PID 77322.\n  Use `kanban web status` or `kanban web restart`.\n"
+        );
+    }
+
+    #[test]
+    fn web_already_running_error_wraps_with_hanging_indent() {
+        let output = render_web_already_running_error(&Theme::plain(), 77322, 48);
+
+        for line in output.lines().skip(1) {
+            assert!(line.starts_with("  "), "line was not indented: {line}");
+        }
+        assert!(output.contains("\n  77322.\n"));
+        assert!(output.contains("\n  `kanban web restart`.\n"));
+    }
+
+    #[test]
+    fn web_already_running_error_uses_theme_colors_for_error_and_commands() {
+        let output = render_web_already_running_error(&Theme::color(), 77322, 100);
+
+        assert!(output.contains("\x1b[1;31m✖\x1b[0m"));
+        assert!(output.contains("\x1b[1;31mError:\x1b[0m"));
+        assert!(output.contains("\x1b[1;34m`kanban web status`\x1b[0m"));
+        assert!(output.contains("\x1b[1;34m`kanban web restart`\x1b[0m"));
+    }
+
+    #[test]
+    fn web_port_fallback_warning_reports_actual_url() {
+        let output = render_web_port_fallback_warning(&Theme::plain(), "127.0.0.1", 3000, 3001);
+
+        assert_eq!(
+            output,
+            "Warning: another service is already using http://127.0.0.1:3000; starting kanban web UI on http://127.0.0.1:3001 instead."
+        );
+    }
+
+    #[test]
+    fn web_start_specs_select_production_or_dev_command() {
+        let repo_root = Path::new("/tmp/repo");
+
+        let production = build_web_start_command_spec(repo_root, false);
+        assert_eq!(production.program, "node");
+        assert_eq!(production.cwd, PathBuf::from("/tmp/repo"));
+        assert!(production.args[0].ends_with("tools/kanban-web/dist/server/index.js"));
+
+        let dev = build_web_start_command_spec(repo_root, true);
+        assert_eq!(dev.program, "npm");
+        assert_eq!(dev.cwd, PathBuf::from("/tmp/repo"));
+        assert_eq!(dev.args[0], "--prefix");
+        assert!(dev.args[1].ends_with("tools/kanban-web"));
+        assert_eq!(&dev.args[2..], ["run", "dev:server"]);
+    }
+}

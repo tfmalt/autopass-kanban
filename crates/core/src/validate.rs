@@ -339,3 +339,176 @@ pub(crate) fn add_issue(
         message,
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn validate_story_accepts_single_source_story_fixture() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-010-ci-pipeline-build-and-unit-tests.md",
+            "id: US-F1-010\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.scaffolding-part-1\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let story = read_story_file(story_path, temp_root.path()).unwrap();
+        assert!(validate_story(&story).is_empty());
+    }
+
+    #[test]
+    fn validate_story_allows_date_only_created_and_updated_on_draft_backlog_fixture() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-050-test-draft-story.md");
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-050\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28\nupdated: 2026-05-28\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(story_path, temp_root.path()).unwrap();
+        let issues = validate_story(&story);
+        let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+
+        assert!(!rules.contains(&"missing-field:assignee"));
+        assert!(!rules.contains(&"invalid-timestamp:created"));
+        assert!(!rules.contains(&"invalid-timestamp:updated"));
+    }
+
+    #[test]
+    fn validate_story_allows_todo_without_assignee_even_after_work_started() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-051-build-shared-backlog-parsing-and-validation-core.md");
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-051\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nstory_points: 5\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(story_path, temp_root.path()).unwrap();
+        let issues = validate_story(&story);
+        let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+
+        assert!(!rules.contains(&"missing-field:assignee"));
+    }
+
+    #[test]
+    fn validate_story_requires_assignee_when_in_progress() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-051-build-shared-backlog-parsing-and-validation-core.md");
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-051\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nstory_points: 5\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(story_path, temp_root.path()).unwrap();
+        let issues = validate_story(&story);
+        let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+
+        assert!(rules.contains(&"missing-field:assignee"));
+    }
+
+    #[test]
+    fn validate_story_requires_non_empty_assignee_when_in_progress() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-051-build-shared-backlog-parsing-and-validation-core.md");
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-051\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee:\nstory_points: 5\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(story_path, temp_root.path()).unwrap();
+        let issues = validate_story(&story);
+        let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+
+        assert!(rules.contains(&"missing-field:assignee"));
+    }
+
+    #[test]
+    fn validate_repository_flags_invalid_sprint_status_and_missing_task_file_after_start() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "paused",
+        );
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-051-build-shared-backlog-parsing-and-validation-core.md",
+            "id: US-F1-051\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: Test User <test@example.com>\nstory_points: 5\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ntask_file: US-F1-051-build-shared-backlog-parsing-and-validation-core.tasks.md\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let validation = validate_repository(temp_root.path()).unwrap();
+        let rules: Vec<&str> = validation
+            .issues
+            .iter()
+            .map(|issue| issue.rule.as_str())
+            .collect();
+
+        assert!(rules.contains(&"invalid-sprint-readme-status"));
+        assert!(rules.contains(&"missing-task-file"));
+    }
+
+    #[test]
+    fn read_and_validate_story_use_configured_backlog_and_sprint_paths() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        set_config_value(temp_root.path(), "paths.backlog", "planning/backlog").unwrap();
+        set_config_value(temp_root.path(), "paths.sprints", "planning/sprints").unwrap();
+
+        let sprint_file = temp_root.path().join("planning/sprints/S001.foundation.md");
+        let backlog_dir = temp_root
+            .path()
+            .join("planning/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+        let story_file = "US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md";
+
+        fs::create_dir_all(sprint_file.parent().unwrap()).unwrap();
+        fs::create_dir_all(&backlog_dir).unwrap();
+        fs::write(
+            &sprint_file,
+            sprint_readme("S001", "foundation", "2099-06-01", "2099-06-12", "planned"),
+        )
+        .unwrap();
+        fs::write(
+            backlog_dir.join(story_file),
+            "---\nid: US-F1-052\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: Add read-only CLI for sprint and backlog inspection\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(backlog_dir.join(story_file), temp_root.path()).unwrap();
+        let validation = validate_repository(temp_root.path()).unwrap();
+
+        assert_eq!(story.sprint_name.as_deref(), Some("S001.foundation"));
+        assert!(validation.issues.is_empty());
+    }
+}

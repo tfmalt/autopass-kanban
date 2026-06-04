@@ -86,3 +86,25 @@ pub(crate) fn sprint_status_label(end_date: &str, readme_status: Option<&str>) -
         "active"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assignee_strips_email() {
+        assert_eq!(
+            extract_assignee_name("Geir Ivar Jerstad <g@v.no>"),
+            "Geir Ivar Jerstad"
+        );
+        assert_eq!(
+            extract_assignee_name("Thomas Malt <thomas.malt@vegvesen.no>"),
+            "Thomas Malt"
+        );
+        assert_eq!(
+            extract_assignee_name("Sondre Bjerkerud and Erik Itland"),
+            "Sondre Bjerkerud and Erik Itland"
+        );
+        assert_eq!(extract_assignee_name("TBD"), "TBD");
+    }
+}

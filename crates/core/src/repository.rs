@@ -241,3 +241,47 @@ pub(crate) fn story_location(file_path: &Path, config: &KanbanConfig) -> StoryLo
     let _ = (file_path, config);
     StoryLocation { sprint_name: None }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn collect_user_story_files_returns_backlog_stories_but_not_task_files() {
+        let repo_root = repo_root();
+        let story_files = collect_user_story_files(&repo_root).unwrap();
+
+        assert!(story_files.iter().any(|story_file| {
+            story_file.ends_with("US-F1-010-ci-pipeline-build-and-unit-tests.md")
+        }));
+        assert!(
+            !story_files
+                .iter()
+                .any(|story_file| story_file.to_string_lossy().ends_with(".tasks.md"))
+        );
+    }
+
+    #[test]
+    fn read_story_file_reads_canonical_backlog_story_and_sibling_tasks() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = write_story_with_task_file(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-001-test-story.md",
+            "id: US-F1-001\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: Test User <test@example.com>\nstory_points: 5\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let story = read_story_file(&story_path, temp_root.path()).unwrap();
+
+        assert_eq!(story.sprint_name.as_deref(), Some("S001.foundation"));
+        assert_eq!(
+            story.frontmatter.get("status").map(String::as_str),
+            Some("in-progress")
+        );
+        let task_file = story.task_file.as_ref().unwrap();
+        assert!(task_file.exists);
+        assert_eq!(task_file.tasks.len(), 1);
+    }
+}

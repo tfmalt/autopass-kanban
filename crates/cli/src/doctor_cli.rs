@@ -274,3 +274,48 @@ pub(crate) fn run_doctor_fix_wizard(
     println!("{}", theme.success("Doctor fix wizard completed."));
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn doctor_fix_preview_renders_key_old_and_new_values() {
+        let theme = Theme::plain();
+        let issue = DoctorIssue {
+            severity: "info".to_string(),
+            scope: "story.md".to_string(),
+            file_path: None,
+            story_id: None,
+            sprint_name: None,
+            rule: "invalid-timestamp:updated".to_string(),
+            message: String::new(),
+            suggestion: String::new(),
+            fix_preview: Some(kanban_core::DoctorFixPreview {
+                field_name: "updated".to_string(),
+                old_value: "2026-05-31".to_string(),
+                new_value: "2026-05-31T00:00:00+0200".to_string(),
+            }),
+            fix_kind: DoctorFixKind::Automatic,
+            prompt: DoctorPrompt::None,
+        };
+
+        assert_eq!(
+            format_doctor_fix_preview(&theme, &issue),
+            "updated: 2026-05-31 -> 2026-05-31T00:00:00+0200"
+        );
+    }
+
+    #[test]
+    fn doctor_frontmatter_tokens_are_highlighted_with_color_theme() {
+        let theme = Theme::color();
+        let highlighted = highlight_frontmatter_tokens(
+            &theme,
+            "Frontmatter field \"updated\" must replace `2026-05-31`.",
+        );
+
+        assert!(highlighted.contains("\x1b["));
+        assert!(highlighted.contains("updated"));
+        assert!(highlighted.contains("2026-05-31"));
+    }
+}

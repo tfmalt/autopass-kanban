@@ -662,3 +662,273 @@ pub(crate) fn sprint_warnings(
         .map(|finding| finding.message)
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn summarize_current_sprint_uses_sprint_file_dates() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2026-05-18",
+            "2026-05-29",
+            "planned",
+        );
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md",
+            "id: US-F1-052\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let sprint = summarize_current_sprint_at_date(
+            temp_root.path(),
+            NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(sprint.sprint_name, "S001.foundation");
+        assert_eq!(
+            sprint.sprint_goal.as_deref(),
+            Some("Keep the team aligned on a visible sprint outcome.")
+        );
+        assert_eq!(sprint.readme_status.as_deref(), Some("planned"));
+    }
+
+    #[test]
+    fn summarize_current_sprint_prefers_single_active_sprint_when_dates_are_overdue() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2026-05-18",
+            "2026-05-29",
+            "active",
+        );
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md",
+            "id: US-F1-052\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let sprint = summarize_current_sprint_at_date(
+            temp_root.path(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(sprint.sprint_name, "S001.foundation");
+        assert_eq!(sprint.readme_status.as_deref(), Some("active"));
+    }
+
+    #[test]
+    fn list_current_sprint_stories_returns_flattened_current_sprint_rows() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2026-05-18",
+            "2026-05-29",
+            "active",
+        );
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md",
+            "id: US-F1-052\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md",
+            "id: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: Test User <test@example.com>\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let (sprint_name, stories) = list_current_sprint_stories(temp_root.path()).unwrap();
+
+        assert_eq!(sprint_name, "S001.foundation");
+        assert_eq!(stories.len(), 2);
+        assert_eq!(stories[0].id, "US-F1-052");
+        assert_eq!(stories[1].id, "US-F1-053");
+    }
+
+    #[test]
+    fn list_next_sprint_stories_uses_next_numbered_sprint_after_current() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let today = Local::now().date_naive();
+        let current_start = today.checked_sub_days(Days::new(1)).unwrap().to_string();
+        let current_end = today.checked_add_days(Days::new(1)).unwrap().to_string();
+        let next_start = today.checked_add_days(Days::new(2)).unwrap().to_string();
+        let next_end = today.checked_add_days(Days::new(13)).unwrap().to_string();
+
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            &current_start,
+            &current_end,
+            "active",
+        );
+        write_sprint_file(
+            temp_root.path(),
+            "S002.delivery",
+            "delivery",
+            &next_start,
+            &next_end,
+            "planned",
+        );
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-054-add-cli-support-for-completing-tasks-from-the-terminal.md",
+            "id: US-F1-054\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S002.delivery\nassignee: TBD\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let (sprint_name, stories) = list_next_sprint_stories(temp_root.path()).unwrap();
+
+        assert_eq!(sprint_name, "S002.delivery");
+        assert_eq!(stories.len(), 1);
+        assert_eq!(stories[0].id, "US-F1-054");
+    }
+
+    #[test]
+    fn create_sprint_creates_single_file_and_readme() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        fs::create_dir_all(temp_root.path().join("delivery/sprints")).unwrap();
+        let today = Local::now().date_naive();
+        let input = CreateSprintInput {
+            number: 1,
+            start_date: today,
+            end_date: today + Days::new(11),
+            headline: "Foundation Sprint".to_string(),
+        };
+
+        let result = create_sprint(temp_root.path(), &input).unwrap();
+
+        assert_eq!(result.sprint_name, "S001.foundation-sprint");
+        let sprint_file = temp_root.path().join(&result.sprint_path);
+        assert!(sprint_file.exists());
+        let markdown = fs::read_to_string(sprint_file).unwrap();
+        assert!(markdown.contains("status: planned"));
+        assert!(markdown.contains(ROSTER_HEADING));
+    }
+
+    #[test]
+    fn create_sprint_uses_configured_sprints_path() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        set_config_value(temp_root.path(), "paths.sprints", "planning/sprints").unwrap();
+        let today = Local::now().date_naive();
+        let input = CreateSprintInput {
+            number: 1,
+            start_date: today,
+            end_date: today + Days::new(11),
+            headline: "Foundation Sprint".to_string(),
+        };
+
+        let result = create_sprint(temp_root.path(), &input).unwrap();
+
+        assert_eq!(
+            result.sprint_path,
+            PathBuf::from("planning/sprints/S001.foundation-sprint.md")
+        );
+        assert!(
+            temp_root
+                .path()
+                .join("planning/sprints/S001.foundation-sprint.md")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn suggested_next_sprint_dates_use_latest_sprint_file_end_date() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let sprints_root = temp_root.path().join("delivery/sprints");
+        fs::create_dir_all(&sprints_root).unwrap();
+        fs::write(
+            sprints_root.join("S000.getting-started.md"),
+            sprint_readme(
+                "S000",
+                "getting-started",
+                "2026-05-18",
+                "2026-05-29",
+                "closed",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            sprints_root.join("S001.foundation.md"),
+            sprint_readme("S001", "foundation", "2026-06-02", "2026-06-13", "planned"),
+        )
+        .unwrap();
+
+        let suggestion = suggested_next_sprint_dates(temp_root.path())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(suggestion.0, NaiveDate::from_ymd_opt(2026, 6, 15).unwrap());
+        assert_eq!(suggestion.1, NaiveDate::from_ymd_opt(2026, 6, 26).unwrap());
+    }
+
+    #[test]
+    fn rollover_moves_unfinished_stories_and_updates_closed_summary() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let backlog_dir = temp_root
+            .path()
+            .join("delivery/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+
+        fs::create_dir_all(&backlog_dir).unwrap();
+        let sprint_file = temp_root.path().join("delivery/sprints/S001.foundation.md");
+        fs::create_dir_all(sprint_file.parent().unwrap()).unwrap();
+        fs::write(
+            &sprint_file,
+            format!(
+                "{}\n## End-Of-Sprint Summary\n\nSprint still active.\n\n## Expected Carry-Over / Unfinished Stories\n\nNot determined yet.\n",
+                sprint_readme("S001", "foundation", "2099-06-01", "2099-06-12", "active")
+            ),
+        ).unwrap();
+        fs::write(
+            backlog_dir.join("US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md"),
+            "---\nid: US-F1-052\ntype: user-story\nstatus: done\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 5\nwork_started: 2026-05-28T16:30:54+0200\nwork_done: 2026-05-28T22:06:38+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T22:06:38+0200\n---\n# User Story: Add read-only CLI for sprint and backlog inspection\n",
+        ).unwrap();
+        fs::write(
+            backlog_dir.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+            "---\nid: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 8\nwork_started: 2026-05-28T22:35:00+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T22:35:00+0200\n---\n# User Story: Add CLI support for status moves and sprint rollover\n",
+        ).unwrap();
+
+        let next_start = NaiveDate::from_ymd_opt(2099, 6, 15).unwrap();
+        let next_end = NaiveDate::from_ymd_opt(2099, 6, 26).unwrap();
+        let next_input = CreateSprintInput {
+            number: 2,
+            start_date: next_start,
+            end_date: next_end,
+            headline: "next-sprint".to_string(),
+        };
+
+        let result =
+            rollover_sprint(temp_root.path(), "S001.foundation", Some(&next_input)).unwrap();
+
+        assert!(result.created_next_sprint);
+        assert_eq!(result.completed_story_ids, vec!["US-F1-052".to_string()]);
+        assert_eq!(result.carried_story_ids, vec!["US-F1-053".to_string()]);
+        let carried_story = fs::read_to_string(
+            backlog_dir.join("US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md"),
+        )
+        .unwrap();
+        assert!(carried_story.contains("sprint: S002.next-sprint"));
+        let closed_summary = fs::read_to_string(&sprint_file).unwrap();
+        assert!(closed_summary.contains("Completed stories in `S001.foundation`: US-F1-052."));
+        assert!(closed_summary.contains("Moved to `S002.next-sprint`: US-F1-053."));
+    }
+}

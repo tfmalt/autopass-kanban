@@ -256,3 +256,102 @@ pub(crate) fn format_epic_count(count: usize) -> String {
         format!("{count} epics")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn phase_overview_groups_stories_by_epic_and_status() {
+        let theme = Theme::plain();
+        let phase = PhaseOverview {
+            phase: "F1".to_string(),
+            stories: vec![
+                StoryOverview {
+                    id: "US-F1-010".to_string(),
+                    title: "CI pipeline with build and unit tests".to_string(),
+                    status: "todo".to_string(),
+                    epic_id: Some("EP-F1-01".to_string()),
+                    epic_title: Some("Platform".to_string()),
+                    assignee: "Ada Lovelace <ada@example.test>".to_string(),
+                    story_points: "3".to_string(),
+                    sprint: Some("S000.getting-started".to_string()),
+                    relative_path: PathBuf::from(
+                        "delivery/backlog/phase-1-scaffolding/01.platform/US-F1-010.md",
+                    ),
+                    task_summary: Some(TaskSummary {
+                        todo: 2,
+                        in_progress: 0,
+                        blocked: 0,
+                        done: 1,
+                    }),
+                    task_count: 3,
+                },
+                StoryOverview {
+                    id: "US-F1-011".to_string(),
+                    title: "Preview story details in the terminal".to_string(),
+                    status: "in-progress".to_string(),
+                    epic_id: Some("EP-F1-01".to_string()),
+                    epic_title: Some("Platform".to_string()),
+                    assignee: "Grace Hopper <grace@example.test>".to_string(),
+                    story_points: "5".to_string(),
+                    sprint: None,
+                    relative_path: PathBuf::from(
+                        "delivery/backlog/phase-1-scaffolding/01.platform/US-F1-011.md",
+                    ),
+                    task_summary: Some(TaskSummary {
+                        todo: 1,
+                        in_progress: 2,
+                        blocked: 0,
+                        done: 0,
+                    }),
+                    task_count: 3,
+                },
+                StoryOverview {
+                    id: "US-F1-020".to_string(),
+                    title: "Sync sprint rosters from story metadata".to_string(),
+                    status: "done".to_string(),
+                    epic_id: Some("EP-F1-02".to_string()),
+                    epic_title: Some("Planning".to_string()),
+                    assignee: "TBD".to_string(),
+                    story_points: "2".to_string(),
+                    sprint: Some("S001.foundation".to_string()),
+                    relative_path: PathBuf::from(
+                        "delivery/backlog/phase-1-scaffolding/02.planning/US-F1-020.md",
+                    ),
+                    task_summary: None,
+                    task_count: 0,
+                },
+            ],
+        };
+
+        let output = render_phase_overview(&theme, OutputLayout { width: 100 }, &phase);
+
+        assert!(output.contains("F1 · Phase Overview"));
+        assert!(output.contains("3 stories"));
+        assert!(output.contains("Progress:"));
+        assert!(output.contains("◈2 / 10"));
+        assert!(output.contains("20%"));
+        assert!(output.contains("◈0 drafted"));
+        assert!(output.contains("◈3 planned"));
+        assert!(output.contains("◈5 in progress"));
+        assert!(output.contains("◈2 done"));
+        assert!(output.contains("2 epics"));
+        assert!(output.contains("◈10 total"));
+        assert!(output.contains("EP-F1-01  Platform   2 stories   ◈8"));
+        assert!(output.contains("○ todo   1 story   ◈3"));
+        assert!(output.contains("→ in-progress   1 story   ◈5"));
+        assert!(output.contains("✓ done   1 story   ◈2"));
+        assert!(output.contains("S000.getting-started"));
+        assert!(output.contains("~"));
+        assert!(output.contains("Ada Lovelace"));
+        assert!(output.contains("Grace Hopper"));
+        assert!(output.contains("Sync sprint rosters from story metadata"));
+        for line in output.lines() {
+            assert!(
+                display_width(line) <= 100,
+                "line exceeded 100 columns: {line}"
+            );
+        }
+    }
+}

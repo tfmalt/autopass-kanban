@@ -44,3 +44,25 @@ pub(crate) fn normalize_phase_input(phase: &str) -> Result<String> {
         trimmed.to_string()
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::*;
+
+    #[test]
+    fn summarize_phase_lists_backlog_stories_with_sprint_assignment() {
+        let repo_root = repo_root();
+        let phase = summarize_phase(&repo_root, "F1").unwrap();
+
+        assert_eq!(phase.phase, "F1");
+        assert!(phase.stories.iter().any(|story| {
+            story.id == "US-F1-052" && story.sprint.as_deref() == Some("S000.getting-started")
+        }));
+        assert!(phase.stories.iter().any(|story| {
+            story.id == "US-F1-052"
+                && story.epic_id.as_deref() == Some("EP-F1-06")
+                && story.epic_title.as_deref() == Some("Git-driven kanban and backlog tooling")
+        }));
+    }
+}

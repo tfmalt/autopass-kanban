@@ -445,3 +445,454 @@ pub(crate) fn format_compact_task_summary(summary: Option<&TaskSummary>) -> Stri
         .map(|s| format!("✓{} ▶{} ·{} ✗{}", s.done, s.in_progress, s.todo, s.blocked))
         .unwrap_or_else(|| "-".to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sprint_overview_wraps_story_rows_to_terminal_width() {
+        let theme = Theme::plain();
+        let mut stories_by_status = BTreeMap::new();
+        stories_by_status.insert(
+            "in-progress".to_string(),
+            vec![StoryOverview {
+                id: "US-F1-999".to_string(),
+                title: "Improve current sprint terminal rendering so story descriptions wrap responsively inside the detected table boundary".to_string(),
+                status: "in-progress".to_string(),
+                epic_id: Some("EP-F1-99".to_string()),
+                epic_title: Some("Terminal Rendering".to_string()),
+                assignee: "Ada Lovelace <ada@example.test>".to_string(),
+                story_points: "3".to_string(),
+                sprint: Some("S999.test".to_string()),
+                relative_path: PathBuf::from("delivery/backlog/phase-9-test/US-F1-999.md"),
+                task_summary: Some(TaskSummary {
+                    todo: 1,
+                    in_progress: 2,
+                    blocked: 3,
+                    done: 4,
+                }),
+                task_count: 10,
+            }],
+        );
+        let sprint = SprintOverview {
+            sprint_name: "S999.test".to_string(),
+            headline: "terminal-wrapping".to_string(),
+            sprint_goal: Some(
+                "Keep sprint output useful without repeating implementation file paths.".to_string(),
+            ),
+            start_date: "2026-05-29".to_string(),
+            end_date: "2026-06-12".to_string(),
+            readme_path: PathBuf::from("delivery/sprints/S999.test.md"),
+            readme_status: Some("active".to_string()),
+            stories_by_status,
+            blocked_work: vec![kanban_core::BlockedWorkItem {
+                story_id: "US-F1-999".to_string(),
+                story_title: "Improve current sprint terminal rendering so blocked work also wraps responsively".to_string(),
+                task_id: Some("T-001".to_string()),
+                task_title: Some("Verify narrow but supported terminal widths do not overflow".to_string()),
+            }],
+            warnings: Vec::new(),
+        };
+
+        let output = render_sprint_overview(&theme, OutputLayout { width: 80 }, &sprint);
+
+        assert!(output.contains("S999 · Terminal Wrapping"));
+        assert!(output.contains("Sprint Goal:"));
+        assert!(!output.contains("README:"));
+        assert!(output.contains("US-F1-999"));
+        assert!(!output.contains('|'));
+        for line in output.lines() {
+            assert!(
+                display_width(line) <= 80,
+                "line exceeded 80 columns: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn header_band_fills_terminal_width() {
+        let theme = Theme::plain();
+        let sprint = SprintOverview {
+            sprint_name: "S001.foundation".to_string(),
+            headline: "foundation".to_string(),
+            sprint_goal: None,
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("delivery/sprints/S001.foundation.md"),
+            readme_status: Some("active".to_string()),
+            stories_by_status: BTreeMap::new(),
+            blocked_work: vec![],
+            warnings: vec![],
+        };
+
+        for width in [80, 100, 120] {
+            let mut output = String::new();
+            push_sprint_header_band(&mut output, &theme, OutputLayout { width }, &sprint);
+            let non_empty: Vec<&str> = output.lines().filter(|l| !l.is_empty()).collect();
+            // First line = top separator, last line = bottom separator — both full-width.
+            assert_eq!(
+                display_width(non_empty[0]),
+                width,
+                "top separator at width {width}"
+            );
+            assert_eq!(
+                display_width(non_empty[non_empty.len() - 1]),
+                width,
+                "bottom separator at width {width}"
+            );
+        }
+    }
+
+    #[test]
+    fn sprint_progress_uses_story_points() {
+        let theme = Theme::plain();
+        let mut stories_by_status = BTreeMap::new();
+        stories_by_status.insert(
+            "done".to_string(),
+            vec![StoryOverview {
+                id: "US-F1-001".to_string(),
+                title: "Completed high-value story".to_string(),
+                status: "done".to_string(),
+                epic_id: Some("EP-F1-01".to_string()),
+                epic_title: Some("Test Epic".to_string()),
+                assignee: "TBD".to_string(),
+                story_points: "8".to_string(),
+                sprint: Some("S001.test".to_string()),
+                relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-001.md"),
+                task_summary: None,
+                task_count: 0,
+            }],
+        );
+        stories_by_status.insert(
+            "todo".to_string(),
+            vec![StoryOverview {
+                id: "US-F1-002".to_string(),
+                title: "Remaining smaller story".to_string(),
+                status: "todo".to_string(),
+                epic_id: Some("EP-F1-01".to_string()),
+                epic_title: Some("Test Epic".to_string()),
+                assignee: "TBD".to_string(),
+                story_points: "2".to_string(),
+                sprint: Some("S001.test".to_string()),
+                relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-002.md"),
+                task_summary: None,
+                task_count: 0,
+            }],
+        );
+        let sprint = SprintOverview {
+            sprint_name: "S001.test".to_string(),
+            headline: "test".to_string(),
+            sprint_goal: None,
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("README.md"),
+            readme_status: None,
+            stories_by_status,
+            blocked_work: vec![],
+            warnings: vec![],
+        };
+
+        let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
+
+        assert!(
+            output.contains("◈8 / 10"),
+            "progress line should use story points: {output}"
+        );
+        assert!(
+            output.contains("80%"),
+            "progress percentage should use story points: {output}"
+        );
+    }
+
+    #[test]
+    fn task_symbols_replace_old_format() {
+        let summary = TaskSummary {
+            todo: 2,
+            in_progress: 1,
+            blocked: 0,
+            done: 4,
+        };
+        let plain = format_compact_task_summary(Some(&summary));
+        assert!(plain.contains("✓4"), "done symbol missing: {plain}");
+        assert!(plain.contains("▶1"), "active symbol missing: {plain}");
+        assert!(plain.contains("·2"), "todo symbol missing: {plain}");
+        assert!(plain.contains("✗0"), "blocked symbol missing: {plain}");
+        assert!(!plain.contains("T:"), "old T: format present: {plain}");
+        assert!(!plain.contains("IP:"), "old IP: format present: {plain}");
+    }
+
+    #[test]
+    fn story_status_rows_include_story_points() {
+        let theme = Theme::plain();
+        let mut stories_by_status = BTreeMap::new();
+        stories_by_status.insert(
+            "todo".to_string(),
+            vec![StoryOverview {
+                id: "US-F1-062".to_string(),
+                title: "A larger story".to_string(),
+                status: "todo".to_string(),
+                epic_id: Some("EP-F1-06".to_string()),
+                epic_title: Some("CLI".to_string()),
+                assignee: "Someone <s@example.com>".to_string(),
+                story_points: "13".to_string(),
+                sprint: Some("S001.test".to_string()),
+                relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-062.md"),
+                task_summary: None,
+                task_count: 0,
+            }],
+        );
+        stories_by_status.insert(
+            "in-progress".to_string(),
+            vec![StoryOverview {
+                id: "US-F3-001".to_string(),
+                title: "A smaller story".to_string(),
+                status: "in-progress".to_string(),
+                epic_id: Some("EP-F3-01".to_string()),
+                epic_title: Some("CLI".to_string()),
+                assignee: "Someone <s@example.com>".to_string(),
+                story_points: "5".to_string(),
+                sprint: Some("S001.test".to_string()),
+                relative_path: PathBuf::from("delivery/backlog/phase-3/US-F3-001.md"),
+                task_summary: None,
+                task_count: 0,
+            }],
+        );
+        let sprint = SprintOverview {
+            sprint_name: "S001.test".to_string(),
+            headline: "test".to_string(),
+            sprint_goal: None,
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("README.md"),
+            readme_status: None,
+            stories_by_status,
+            blocked_work: vec![],
+            warnings: vec![],
+        };
+
+        let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
+
+        assert!(
+            output.contains("US-F1-062 ◈13"),
+            "story row should include story points: {output}"
+        );
+        assert!(
+            output.contains("    · US-F1-062 ◈13"),
+            "story row should be indented below the status header and prefixed with a bullet: {output}"
+        );
+        assert!(
+            output.contains("○ todo   1 story   ◈13"),
+            "todo header should include story point total: {output}"
+        );
+        assert!(
+            output.contains("→ in-progress   1 story   ◈5"),
+            "in-progress header should include story point total: {output}"
+        );
+        assert!(
+            output.contains("US-F3-001  ◈5"),
+            "single-digit story points should be right-aligned: {output}"
+        );
+    }
+
+    #[test]
+    fn story_status_rows_highlight_story_points() {
+        let theme = Theme::color();
+        let story = StoryOverview {
+            id: "US-F1-002".to_string(),
+            title: "A story in progress".to_string(),
+            status: "in-progress".to_string(),
+            epic_id: Some("EP-F1-01".to_string()),
+            epic_title: Some("CLI".to_string()),
+            assignee: "Someone <s@example.com>".to_string(),
+            story_points: "3".to_string(),
+            sprint: Some("S001.test".to_string()),
+            relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-002.md"),
+            task_summary: None,
+            task_count: 0,
+        };
+
+        let label = format_colored_story_status_label(&theme, &story, 3);
+
+        assert!(label.contains("\x1b[1;36mUS-F1-002\x1b[0m"));
+        assert!(label.contains(" \x1b[1;33m◈3\x1b[0m"));
+    }
+
+    #[test]
+    fn done_section_expands_in_overview() {
+        let theme = Theme::plain();
+        let mut stories_by_status = BTreeMap::new();
+        stories_by_status.insert(
+            "done".to_string(),
+            vec![StoryOverview {
+                id: "US-F1-001".to_string(),
+                title: "A completed story".to_string(),
+                status: "done".to_string(),
+                epic_id: Some("EP-F1-01".to_string()),
+                epic_title: Some("CLI".to_string()),
+                assignee: "Someone <s@example.com>".to_string(),
+                story_points: "2".to_string(),
+                sprint: Some("S001.test".to_string()),
+                relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-001.md"),
+                task_summary: None,
+                task_count: 0,
+            }],
+        );
+        let sprint = SprintOverview {
+            sprint_name: "S001.test".to_string(),
+            headline: "test".to_string(),
+            sprint_goal: None,
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("README.md"),
+            readme_status: None,
+            stories_by_status,
+            blocked_work: vec![],
+            warnings: vec![],
+        };
+        let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
+        assert!(
+            output.contains("✓ done   1 story   ◈2"),
+            "done section header missing story points"
+        );
+        assert!(
+            output.contains("A completed story"),
+            "done story should be listed individually"
+        );
+    }
+
+    #[test]
+    fn zero_count_section_shows_single_muted_line() {
+        let theme = Theme::plain();
+        let sprint = SprintOverview {
+            sprint_name: "S001.test".to_string(),
+            headline: "test".to_string(),
+            sprint_goal: None,
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("README.md"),
+            readme_status: None,
+            stories_by_status: BTreeMap::new(),
+            blocked_work: vec![],
+            warnings: vec![],
+        };
+        let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
+        assert!(output.contains("○ todo"), "todo section header missing");
+        assert!(
+            output
+                .lines()
+                .any(|line| line == "  ○ todo   0 stories   ◈0   · none"),
+            "todo section should be inset by two spaces"
+        );
+        assert!(
+            output.contains("none"),
+            "none placeholder missing for empty section"
+        );
+    }
+
+    #[test]
+    fn sprint_sections_are_divided_and_inset() {
+        let theme = Theme::plain();
+        let mut stories_by_status = BTreeMap::new();
+        stories_by_status.insert(
+            "in-progress".to_string(),
+            vec![StoryOverview {
+                id: "US-F1-002".to_string(),
+                title: "A story in progress".to_string(),
+                status: "in-progress".to_string(),
+                epic_id: Some("EP-F1-01".to_string()),
+                epic_title: Some("CLI".to_string()),
+                assignee: "Someone <s@example.com>".to_string(),
+                story_points: "3".to_string(),
+                sprint: Some("S001.test".to_string()),
+                relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-002.md"),
+                task_summary: None,
+                task_count: 0,
+            }],
+        );
+        let sprint = SprintOverview {
+            sprint_name: "S001.test".to_string(),
+            headline: "test".to_string(),
+            sprint_goal: Some("Keep the overview readable.".to_string()),
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("README.md"),
+            readme_status: None,
+            stories_by_status,
+            blocked_work: vec![],
+            warnings: vec!["A warning line".to_string()],
+        };
+
+        let output = render_sprint_overview(&theme, OutputLayout { width: 100 }, &sprint);
+        let divider = "─".repeat(100);
+
+        assert!(
+            output.lines().any(|line| line == divider),
+            "section divider should span the full width without indentation"
+        );
+        assert!(
+            output.lines().any(|line| line == "  A warning line"),
+            "warning should be inset by two spaces"
+        );
+        assert!(
+            output
+                .lines()
+                .any(|line| line == "  → in-progress   1 story   ◈3"),
+            "status header should be inset by two spaces"
+        );
+    }
+
+    #[test]
+    fn sprint_header_title_uses_bright_color() {
+        let theme = Theme::color();
+        let sprint = SprintOverview {
+            sprint_name: "S001.scaffolding".to_string(),
+            headline: "scaffolding".to_string(),
+            sprint_goal: None,
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("README.md"),
+            readme_status: None,
+            stories_by_status: BTreeMap::new(),
+            blocked_work: vec![],
+            warnings: vec![],
+        };
+
+        let output = render_sprint_overview_short(&theme, OutputLayout { width: 100 }, &sprint);
+
+        assert!(
+            output.contains("\x1b[1;36mS001 · Scaffolding\x1b[0m"),
+            "sprint title should be highlighted with bright cyan: {output:?}"
+        );
+    }
+
+    #[test]
+    fn sprint_header_band_has_blank_lines_around_status_rows() {
+        let theme = Theme::plain();
+        let sprint = SprintOverview {
+            sprint_name: "S001.test".to_string(),
+            headline: "test".to_string(),
+            sprint_goal: None,
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("README.md"),
+            readme_status: None,
+            stories_by_status: BTreeMap::new(),
+            blocked_work: vec![],
+            warnings: vec![],
+        };
+
+        let output = render_sprint_overview_short(&theme, OutputLayout { width: 100 }, &sprint);
+        let lines: Vec<&str> = output.lines().collect();
+
+        assert_eq!(lines.len(), 6, "header should only contain the header band");
+        assert!(
+            lines[1].is_empty(),
+            "blank line should appear above the status rows"
+        );
+        assert!(
+            lines[4].is_empty(),
+            "blank line should appear below the status rows"
+        );
+    }
+}
