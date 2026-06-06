@@ -26,7 +26,6 @@ pub(crate) fn render_sprint_overview(
     sprint: &SprintOverview,
 ) -> String {
     let mut output = String::new();
-    let content_width = sprint_content_width(layout.width);
     let story_table_width = sprint_story_table_width(layout.width);
     let blocked_table_width = sprint_table_width(layout.width);
     let mut has_content_section = false;
@@ -42,7 +41,8 @@ pub(crate) fn render_sprint_overview(
             layout.width,
             &mut has_content_section,
         );
-        push_wrapped_label_value_inset(&mut output, theme, "Sprint Goal:", goal, content_width);
+        push_inset_line(&mut output, &theme.heading("Sprint Goal:"));
+        push_terminal_markdown_indented(&mut output, theme, layout.width, goal, 0);
     }
 
     // Warnings
@@ -54,7 +54,7 @@ pub(crate) fn render_sprint_overview(
             &mut has_content_section,
         );
         for warning in &sprint.warnings {
-            push_wrapped_hanging_line_inset(&mut output, "", warning, content_width, |v| {
+            push_wrapped_hanging_line_inset(&mut output, "", warning, layout.width, |v| {
                 theme.warning(v)
             });
         }
@@ -199,10 +199,6 @@ pub(crate) fn push_inset_line(output: &mut String, line: &str) {
     );
 }
 
-pub(crate) fn sprint_content_width(width: usize) -> usize {
-    width.saturating_sub(SPRINT_CONTENT_INSET * 2).max(1)
-}
-
 pub(crate) fn sprint_table_width(width: usize) -> usize {
     width.saturating_sub(SPRINT_CONTENT_INSET).max(1)
 }
@@ -227,25 +223,6 @@ pub(crate) fn push_sprint_section_divider_before_next(
         push_sprint_section_divider(output, theme, width);
     }
     *has_content_section = true;
-}
-
-pub(crate) fn push_wrapped_label_value_inset(
-    output: &mut String,
-    theme: &Theme,
-    label: &str,
-    value: &str,
-    width: usize,
-) {
-    let prefix_width = display_width(label) + 1;
-    let value_width = width.saturating_sub(prefix_width).max(1);
-    let wrapped = wrap_text(value, value_width);
-    for (index, line) in wrapped.iter().enumerate() {
-        if index == 0 {
-            push_inset_line(output, &format!("{} {line}", theme.label(label)));
-        } else {
-            push_inset_line(output, &format!("{}{line}", " ".repeat(prefix_width)));
-        }
-    }
 }
 
 pub(crate) fn push_wrapped_hanging_line_inset(
@@ -479,7 +456,7 @@ mod tests {
             sprint_name: "S999.test".to_string(),
             headline: "terminal-wrapping".to_string(),
             sprint_goal: Some(
-                "Keep sprint output useful without repeating implementation file paths.".to_string(),
+                "Keep sprint output useful without repeating implementation file paths.\n\n- Highlight **important** work\n- Keep lines short".to_string(),
             ),
             start_date: "2026-05-29".to_string(),
             end_date: "2026-06-12".to_string(),
@@ -499,6 +476,7 @@ mod tests {
 
         assert!(output.contains("S999 · Terminal Wrapping"));
         assert!(output.contains("Sprint Goal:"));
+        assert!(output.contains("important"));
         assert!(!output.contains("README:"));
         assert!(output.contains("US-F1-999"));
         assert!(!output.contains('|'));
@@ -508,6 +486,34 @@ mod tests {
                 "line exceeded 80 columns: {line}"
             );
         }
+    }
+
+    #[test]
+    fn sprint_goal_renders_markdown_with_colors() {
+        let theme = Theme::color();
+        let sprint = SprintOverview {
+            sprint_name: "S100.goal".to_string(),
+            headline: "goal".to_string(),
+            sprint_goal: Some(
+                "Build **visible** progress\n\n## Focus\n- Deliver value\n- Keep the team aligned"
+                    .to_string(),
+            ),
+            start_date: "2026-06-01".to_string(),
+            end_date: "2026-06-30".to_string(),
+            readme_path: PathBuf::from("delivery/sprints/S100.goal.md"),
+            readme_status: Some("active".to_string()),
+            stories_by_status: BTreeMap::new(),
+            blocked_work: vec![],
+            warnings: vec![],
+        };
+
+        let output = render_sprint_overview(&theme, OutputLayout { width: 80 }, &sprint);
+
+        assert!(output.contains("\x1b[1;36mSprint Goal:\x1b[0m"));
+        assert!(output.contains("\x1b[1;35mvisible\x1b[0m"));
+        assert!(output.contains("\x1b[1;36mFocus\x1b[0m"));
+        assert!(output.contains("• Deliver value"));
+        assert!(output.contains("• Keep the team aligned"));
     }
 
     #[test]

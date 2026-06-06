@@ -6,6 +6,7 @@ use crate::model::*;
 use crate::prelude::*;
 use crate::repository::*;
 use crate::sprint::*;
+use crate::story::*;
 use crate::util::*;
 use crate::validate::*;
 
@@ -262,7 +263,7 @@ pub fn apply_doctor_fix(
                 .ok_or_else(|| anyhow!("Roster drift issue is missing sprint name."))?;
             regenerate_sprint_roster(&config, sprint_name)?;
             Ok(DoctorFixResult {
-                message: format!("Regenerated roster for {sprint_name}."),
+                message: format!("Regenerated selected-user-story section for {sprint_name}."),
                 touched_paths: vec![file_path.clone()],
             })
         }
@@ -611,7 +612,7 @@ pub(crate) fn doctor_suggestion_for_validation(
             },
         ),
         "roster-drift" => (
-            "Regenerate the sprint roster from story frontmatter.".to_string(),
+            "Regenerate the selected-user-story section from story frontmatter.".to_string(),
             DoctorFixKind::Automatic,
             DoctorPrompt::None,
         ),
@@ -665,11 +666,14 @@ pub(crate) fn doctor_findings_for_sprint(
         .filter(|story| {
             story.frontmatter.get("sprint").map(String::as_str) == Some(spec.sprint_name.as_str())
         })
-        .filter_map(|story| {
-            Some((
-                story.frontmatter.get("id")?.clone(),
-                story.frontmatter.get("status").cloned().unwrap_or_default(),
-            ))
+        .map(|story| {
+            let overview = story_overview(repo_root, story);
+            let link_path =
+                sprint_story_link_path(repo_root, &spec.readme_path, &overview.relative_path);
+            SprintRosterEntry {
+                story: overview,
+                link_path,
+            }
         })
         .collect::<Vec<_>>();
     let expected_roster = render_sprint_roster(&expected_rows);
