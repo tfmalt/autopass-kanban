@@ -510,7 +510,11 @@ mod tests {
         assert!(output.contains("Mitigation"));
         assert!(output.contains("1 Scaffolding"));
         assert!(output.contains("EP-F1-01 Plattforminfrastruktur"));
-        assert!(output.contains("phase-1-scaffolding/01.plattforminfrastruktur/US-F1-010.md"));
+        assert!(
+            output
+                .replace('\\', "/")
+                .contains("phase-1-scaffolding/01.plattforminfrastruktur/US-F1-010.md")
+        );
         assert!(output.contains("2026-05-21T00:00:00+0200"));
         assert!(output.contains("TASK-US-F1-010-001"));
         assert!(output.contains("→ in-progress"));

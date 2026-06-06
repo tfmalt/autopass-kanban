@@ -330,7 +330,30 @@ pub(crate) fn process_exists(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub(crate) fn process_exists(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+
+    let handle = unsafe {
+        windows_sys::Win32::System::Threading::OpenProcess(
+            windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
+            0,
+            pid,
+        )
+    };
+    if handle.is_null() {
+        return false;
+    }
+
+    unsafe {
+        let _ = windows_sys::Win32::Foundation::CloseHandle(handle);
+    }
+    true
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn process_exists(_pid: u32) -> bool {
     false
 }
@@ -771,13 +794,17 @@ mod tests {
         let production = build_web_start_command_spec(repo_root, false);
         assert_eq!(production.program, "node");
         assert_eq!(production.cwd, PathBuf::from("/tmp/repo"));
-        assert!(production.args[0].ends_with("tools/kanban-web/dist/server/index.js"));
+        assert!(
+            production.args[0]
+                .replace('\\', "/")
+                .ends_with("tools/kanban-web/dist/server/index.js")
+        );
 
         let dev = build_web_start_command_spec(repo_root, true);
         assert_eq!(dev.program, "npm");
         assert_eq!(dev.cwd, PathBuf::from("/tmp/repo"));
         assert_eq!(dev.args[0], "--prefix");
-        assert!(dev.args[1].ends_with("tools/kanban-web"));
+        assert!(dev.args[1].replace('\\', "/").ends_with("tools/kanban-web"));
         assert_eq!(&dev.args[2..], ["run", "dev:server"]);
     }
 }

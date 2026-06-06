@@ -25,6 +25,7 @@ pub(crate) mod prelude {
     pub(crate) use std::io::{ErrorKind, IsTerminal, Read, Seek, SeekFrom, Write};
     #[allow(unused_imports)]
     pub(crate) use std::net::TcpListener;
+    #[cfg(unix)]
     #[allow(unused_imports)]
     pub(crate) use std::os::unix::process::CommandExt;
     #[allow(unused_imports)]
