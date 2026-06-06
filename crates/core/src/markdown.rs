@@ -118,14 +118,14 @@ pub fn create_task_summary(tasks: &[Task]) -> TaskSummary {
 }
 
 pub(crate) fn frontmatter_region(markdown: &str) -> Result<&str> {
-    let normalized = markdown.replace("\r\n", "\n");
-    if !normalized.starts_with("---\n") {
-        bail!("Markdown file is missing YAML frontmatter.");
-    }
     let mut offset = 0;
-    for (index, line) in normalized.split_inclusive('\n').enumerate() {
+    for (index, line) in markdown.split_inclusive('\n').enumerate() {
         offset += line.len();
-        if index > 0 && line.trim_end() == "---" {
+        let marker = line.trim_end_matches(['\r', '\n']);
+        if index == 0 && marker != "---" {
+            bail!("Markdown file is missing YAML frontmatter.");
+        }
+        if index > 0 && marker == "---" {
             return Ok(&markdown[..offset]);
         }
     }
@@ -478,6 +478,18 @@ pub(crate) fn capture_description(block: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frontmatter_region_preserves_crlf_closing_delimiter() {
+        let markdown = "---\r\nsprint: S001\r\nheadline: foundation\r\nwip_limit: null\r\n---\r\n\r\n# S001: foundation\r\n";
+
+        let region = frontmatter_region(markdown).unwrap();
+
+        assert_eq!(
+            region,
+            "---\r\nsprint: S001\r\nheadline: foundation\r\nwip_limit: null\r\n---\r\n"
+        );
+    }
 
     #[test]
     fn task_update_preserves_other_task_headings() {

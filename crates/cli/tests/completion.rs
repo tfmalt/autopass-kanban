@@ -38,6 +38,20 @@ fn zsh_completion_covers_current_command_tree() {
 }
 
 #[test]
+fn powershell_completion_covers_current_command_tree() {
+    let output = kanban(&["completion", "powershell"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Register-ArgumentCompleter"));
+    assert!(stdout.contains("kanban"));
+    assert!(stdout.contains("sprint"));
+    assert!(stdout.contains("story"));
+    assert!(stdout.contains("task"));
+    assert!(stdout.contains("web"));
+}
+
+#[test]
 fn zsh_completion_includes_web_subcommands_and_flags() {
     let output = kanban(&["completion", "zsh"]);
 
@@ -393,7 +407,7 @@ fn bash_completion_does_not_treat_web_log_lines_as_files() {
 }
 
 #[test]
-fn completion_help_explains_bash_and_zsh_setup() {
+fn completion_help_explains_bash_zsh_and_powershell_setup() {
     for args in [["completion", "help"], ["completion", "--help"]] {
         let output = kanban(&args);
 
@@ -403,7 +417,10 @@ fn completion_help_explains_bash_and_zsh_setup() {
         assert!(stdout.contains("kanban completion bash"));
         assert!(stdout.contains("Install zsh completion"));
         assert!(stdout.contains("kanban completion zsh"));
-        assert!(stdout.contains("Supported shells: bash, zsh"));
+        assert!(stdout.contains("Install PowerShell completion"));
+        assert!(stdout.contains("$PROFILE"));
+        assert!(stdout.contains("kanban completion powershell"));
+        assert!(stdout.contains("Supported shells: bash, zsh, powershell"));
     }
 }
 
@@ -453,6 +470,7 @@ fn unsupported_completion_shell_fails_clearly() {
     assert!(stderr.contains("invalid value 'fish'"));
     assert!(stderr.contains("bash"));
     assert!(stderr.contains("zsh"));
+    assert!(stderr.contains("powershell"));
 }
 
 #[test]

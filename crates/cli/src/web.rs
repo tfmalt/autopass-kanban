@@ -238,42 +238,71 @@ pub(crate) fn web_production_entry(repo_root: &Path) -> PathBuf {
 }
 
 pub(crate) fn build_web_start_command_spec(repo_root: &Path, dev: bool) -> WebStartCommandSpec {
-    let web_dir = web_app_dir(repo_root);
+    let web_dir = child_process_path(&web_app_dir(repo_root));
+    let cwd = child_process_path(repo_root);
     if dev {
         WebStartCommandSpec {
-            program: "npm".to_string(),
+            program: npm_program(),
             args: vec![
                 "--prefix".to_string(),
                 web_dir.to_string_lossy().into_owned(),
                 "run".to_string(),
                 "dev:server".to_string(),
             ],
-            cwd: repo_root.to_path_buf(),
+            cwd,
         }
     } else {
         WebStartCommandSpec {
             program: "node".to_string(),
             args: vec![
-                web_production_entry(repo_root)
+                child_process_path(&web_production_entry(repo_root))
                     .to_string_lossy()
                     .into_owned(),
             ],
-            cwd: repo_root.to_path_buf(),
+            cwd,
         }
     }
 }
 
 pub(crate) fn build_web_build_command_spec(repo_root: &Path) -> WebStartCommandSpec {
+    let web_dir = child_process_path(&web_app_dir(repo_root));
     WebStartCommandSpec {
-        program: "npm".to_string(),
+        program: npm_program(),
         args: vec![
             "--prefix".to_string(),
-            web_app_dir(repo_root).to_string_lossy().into_owned(),
+            web_dir.to_string_lossy().into_owned(),
             "run".to_string(),
             "build".to_string(),
         ],
-        cwd: repo_root.to_path_buf(),
+        cwd: child_process_path(repo_root),
     }
+}
+
+#[cfg(windows)]
+fn child_process_path(path: &Path) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if let Some(rest) = raw.strip_prefix("\\\\?\\") {
+        if let Some(unc) = rest.strip_prefix("UNC\\") {
+            return PathBuf::from(format!("\\\\{unc}"));
+        }
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
+#[cfg(not(windows))]
+fn child_process_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
+#[cfg(windows)]
+fn npm_program() -> String {
+    "npm.cmd".to_string()
+}
+
+#[cfg(not(windows))]
+fn npm_program() -> String {
+    "npm".to_string()
 }
 
 pub(crate) fn process_from_spec(spec: &WebStartCommandSpec) -> ProcessCommand {
@@ -347,10 +376,15 @@ pub(crate) fn process_exists(pid: u32) -> bool {
         return false;
     }
 
+    let mut exit_code = 0;
+    let is_running = unsafe {
+        windows_sys::Win32::System::Threading::GetExitCodeProcess(handle, &mut exit_code) != 0
+            && exit_code == windows_sys::Win32::Foundation::STILL_ACTIVE as u32
+    };
     unsafe {
         let _ = windows_sys::Win32::Foundation::CloseHandle(handle);
     }
-    true
+    is_running
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -369,8 +403,38 @@ pub(crate) fn terminate_process(pid: u32) -> Result<()> {
 }
 
 #[cfg(not(unix))]
+#[cfg(not(windows))]
 pub(crate) fn terminate_process(_pid: u32) -> Result<()> {
-    bail!("kanban web stop is only implemented on Unix-like systems.")
+    bail!("kanban web stop is not implemented on this platform.")
+}
+
+#[cfg(windows)]
+pub(crate) fn terminate_process(pid: u32) -> Result<()> {
+    if !process_exists(pid) {
+        return Ok(());
+    }
+
+    let handle = unsafe {
+        windows_sys::Win32::System::Threading::OpenProcess(
+            windows_sys::Win32::System::Threading::PROCESS_TERMINATE,
+            0,
+            pid,
+        )
+    };
+    if handle.is_null() {
+        bail!("failed to open web process {pid} for termination");
+    }
+
+    let terminated =
+        unsafe { windows_sys::Win32::System::Threading::TerminateProcess(handle, 0) != 0 };
+    unsafe {
+        let _ = windows_sys::Win32::Foundation::CloseHandle(handle);
+    }
+    if terminated || !process_exists(pid) {
+        Ok(())
+    } else {
+        bail!("failed to stop web process {pid}")
+    }
 }
 
 pub(crate) fn remove_pid_file(paths: &WebRuntimePaths) -> Result<()> {
@@ -801,10 +865,32 @@ mod tests {
         );
 
         let dev = build_web_start_command_spec(repo_root, true);
+        #[cfg(windows)]
+        assert_eq!(dev.program, "npm.cmd");
+        #[cfg(not(windows))]
         assert_eq!(dev.program, "npm");
         assert_eq!(dev.cwd, PathBuf::from("/tmp/repo"));
         assert_eq!(dev.args[0], "--prefix");
         assert!(dev.args[1].replace('\\', "/").ends_with("tools/kanban-web"));
         assert_eq!(&dev.args[2..], ["run", "dev:server"]);
+
+        let build = build_web_build_command_spec(repo_root);
+        #[cfg(windows)]
+        assert_eq!(build.program, "npm.cmd");
+        #[cfg(not(windows))]
+        assert_eq!(build.program, "npm");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn child_process_path_removes_extended_windows_prefix() {
+        assert_eq!(
+            child_process_path(Path::new(r"\\?\C:\repo\tools\kanban-web")),
+            PathBuf::from(r"C:\repo\tools\kanban-web")
+        );
+        assert_eq!(
+            child_process_path(Path::new(r"\\?\UNC\server\share\repo")),
+            PathBuf::from(r"\\server\share\repo")
+        );
     }
 }

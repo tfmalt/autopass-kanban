@@ -42,6 +42,7 @@ Implemented commands:
 - `kanban task update <story_id> <task_id> [--title <title>] [--description <text>] [--status <status>] [--tags <a,b>] [repo_root]`
 - `kanban completion bash`
 - `kanban completion zsh`
+- `kanban completion powershell`
 - `kanban completion help`
 - `kanban validate [repo_root]`
 - `kanban doctor [repo_root]`
@@ -73,6 +74,14 @@ Add to `~/.bashrc` or `~/.bash_profile`:
 
 ```bash
 eval "$(kanban completion bash)"
+```
+
+### PowerShell
+
+Add to `$PROFILE`:
+
+```powershell
+kanban completion powershell | Out-String | Invoke-Expression
 ```
 
 ### Note on direnv

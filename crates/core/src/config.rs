@@ -90,6 +90,7 @@ impl StoryPointsConfig {
             .iter()
             .cloned()
             .chain(self.aliases.keys().cloned())
+            .chain(self.aliases.values().cloned())
             .collect()
     }
 
@@ -113,7 +114,6 @@ impl StoryPointsConfig {
             bail!("story_points.allowed_values must contain at least one value.");
         }
 
-        let allowed = self.allowed_values.iter().cloned().collect::<BTreeSet<_>>();
         let mut normalized_aliases = BTreeMap::new();
         for (raw_key, raw_value) in self.aliases {
             let key = raw_key.trim().to_string();
@@ -123,9 +123,6 @@ impl StoryPointsConfig {
             }
             if value.is_empty() {
                 bail!("story_points.aliases values must not be empty.");
-            }
-            if !allowed.contains(&value) {
-                bail!("story_points.aliases.{key} must map to one of story_points.allowed_values.");
             }
             normalized_aliases.insert(key, value);
         }
@@ -557,14 +554,16 @@ mod tests {
         let temp_root = tempdir().unwrap();
         init_config(temp_root.path()).unwrap();
 
-        let result = set_config_value(temp_root.path(), "story_points.aliases.XS", "3").unwrap();
+        let result = set_config_value(temp_root.path(), "story_points.aliases.XXL", "21").unwrap();
         let config = load_kanban_config(temp_root.path()).unwrap();
 
         assert_eq!(result.file_path, PathBuf::from(".kanban/story-points.json"));
         assert_eq!(
-            config.story_points.aliases.get("XS").map(String::as_str),
-            Some("3")
+            config.story_points.aliases.get("XXL").map(String::as_str),
+            Some("21")
         );
+        assert!(config.story_points.accepted_values().contains("XXL"));
+        assert!(config.story_points.accepted_values().contains("21"));
     }
 
     #[test]

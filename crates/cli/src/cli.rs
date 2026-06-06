@@ -360,7 +360,7 @@ pub(crate) enum TaskCommand {
     },
 }
 
-pub(crate) const COMPLETION_HELP: &str = "Generate a shell completion script from the current kanban command tree.\n\nInstall zsh completion — add to ~/.zshrc:\n  eval \"$(kanban completion zsh)\"\n\nInstall bash completion — add to ~/.bashrc or ~/.bash_profile:\n  eval \"$(kanban completion bash)\"\n\nNote on direnv: .envrc is evaluated as bash, so eval \"$(kanban completion zsh)\" cannot\nbe placed there. Add the eval line to ~/.zshrc instead; it runs once per shell.\n\nSupported shells: bash, zsh. The command only prints completion scripts and never edits shell config files.";
+pub(crate) const COMPLETION_HELP: &str = "Generate a shell completion script from the current kanban command tree.\n\nInstall zsh completion — add to ~/.zshrc:\n  eval \"$(kanban completion zsh)\"\n\nInstall bash completion — add to ~/.bashrc or ~/.bash_profile:\n  eval \"$(kanban completion bash)\"\n\nInstall PowerShell completion — add to $PROFILE:\n  kanban completion powershell | Out-String | Invoke-Expression\n\nNote on direnv: .envrc is evaluated as bash, so eval \"$(kanban completion zsh)\" cannot\nbe placed there. Add the eval line to ~/.zshrc instead; it runs once per shell.\n\nSupported shells: bash, zsh, powershell. The command only prints completion scripts and never edits shell config files.";
 pub(crate) const DOCTOR_HELP: &str = "Diagnose and optionally fix repository workflow issues.\n\nUsage shortcuts:\n  kanban doctor [REPO_ROOT]        Same as `kanban doctor show [REPO_ROOT]`\n  kanban doctor help               Print this help text\n\nEffects depend on subcommand; `show` is read-only while `fix` rewrites only the affected markdown files.";
 pub(crate) const BASH_DATE_PLACEHOLDER: &str = "YYYY-MM-DD";
 
@@ -368,6 +368,8 @@ pub(crate) const BASH_DATE_PLACEHOLDER: &str = "YYYY-MM-DD";
 pub(crate) enum CompletionTarget {
     Bash,
     Zsh,
+    #[value(name = "powershell")]
+    PowerShell,
     Help,
 }
 
@@ -376,6 +378,7 @@ impl CompletionTarget {
         match self {
             CompletionTarget::Bash => Some(clap_complete::Shell::Bash),
             CompletionTarget::Zsh => Some(clap_complete::Shell::Zsh),
+            CompletionTarget::PowerShell => Some(clap_complete::Shell::PowerShell),
             CompletionTarget::Help => None,
         }
     }
@@ -589,7 +592,7 @@ pub(crate) enum Command {
     )]
     Completion {
         #[arg(
-            help = "Shell to generate completion for, or help for setup instructions. Supported values: bash, zsh, help."
+            help = "Shell to generate completion for, or help for setup instructions. Supported values: bash, zsh, powershell, help."
         )]
         target: CompletionTarget,
     },
@@ -687,6 +690,7 @@ pub(crate) fn completion_target_label(target: CompletionTarget) -> &'static str 
     match target {
         CompletionTarget::Bash => "bash",
         CompletionTarget::Zsh => "zsh",
+        CompletionTarget::PowerShell => "powershell",
         CompletionTarget::Help => "help",
     }
 }

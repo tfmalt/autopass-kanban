@@ -1081,6 +1081,35 @@ mod tests {
     }
 
     #[test]
+    fn regenerate_sprint_roster_preserves_crlf_frontmatter_closing_delimiter() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let sprint_file = temp_root.path().join("delivery/sprints/S001.foundation.md");
+        fs::create_dir_all(sprint_file.parent().unwrap()).unwrap();
+        fs::write(
+            &sprint_file,
+            "---\r\nsprint: S001\r\nheadline: foundation\r\nstart_date: 2026-05-18\r\nend_date: 2026-05-29\r\nstatus: active\r\nwip_limit: null\r\n---\r\n\r\n# S001: foundation\r\n\r\n## Sprint Goal\r\n\r\nKeep the team aligned.\r\n\r\n## Stories (generated — do not edit)\r\n\r\nOld roster.\r\n",
+        )
+        .unwrap();
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-001-kubernetes-cluster-for-development-environment.md",
+            "id: US-F1-001\ntype: user-story\nstatus: todo\nepic: EP-F1-01\nsprint: S001.foundation\nassignee: Test User <test@example.com>\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let config = load_kanban_config(temp_root.path()).unwrap();
+        let changed = regenerate_sprint_roster(&config, "S001.foundation").unwrap();
+        let markdown = fs::read_to_string(&sprint_file).unwrap();
+
+        assert!(changed);
+        assert!(markdown.starts_with("---\r\nsprint: S001\r\n"));
+        assert!(markdown.contains("wip_limit: null\r\n---\r\n"));
+        assert!(markdown.contains("# S001: foundation"));
+        assert!(!markdown.contains("wip_limit: nul\r\n# S001"));
+        assert!(markdown.contains(ROSTER_HEADING));
+    }
+
+    #[test]
     fn create_sprint_uses_configured_sprints_path() {
         let temp_root = tempdir().unwrap();
         init_temp_repo(temp_root.path());
