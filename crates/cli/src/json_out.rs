@@ -752,5 +752,31 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
                 )),
             }
         }
+        Command::ListTaskIds {
+            story_id,
+            repo_root,
+        } => {
+            let items_result = find_story(repo_root, story_id).map(|details| {
+                details
+                    .map(|details| {
+                        details
+                            .tasks
+                            .into_iter()
+                            .map(|task| ListIdItemDto::value(task.id))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            });
+            match items_result {
+                Ok(items) => print_envelope(&JsonEnvelope::ok(
+                    "list-task-ids",
+                    ListIdsDto::new("tasks", items),
+                )),
+                Err(error) => print_envelope(&JsonEnvelope::<ListIdsDto>::error(
+                    "list-task-ids",
+                    KanbanErrorBody::from_anyhow(&error),
+                )),
+            }
+        }
     }
 }

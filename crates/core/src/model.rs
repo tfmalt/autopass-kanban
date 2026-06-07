@@ -83,6 +83,8 @@ pub struct StoryOverview {
     pub relative_path: PathBuf,
     pub task_summary: Option<TaskSummary>,
     pub task_count: usize,
+    pub work_started: Option<String>,
+    pub work_done: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

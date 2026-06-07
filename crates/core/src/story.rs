@@ -555,6 +555,16 @@ pub(crate) fn story_overview(repo_root: &Path, story: &Story) -> StoryOverview {
             .as_ref()
             .map(|task_file| task_file.tasks.len())
             .unwrap_or(0),
+        work_started: story
+            .frontmatter
+            .get("work_started")
+            .filter(|v| !v.trim().is_empty())
+            .cloned(),
+        work_done: story
+            .frontmatter
+            .get("work_done")
+            .filter(|v| !v.trim().is_empty())
+            .cloned(),
     }
 }
 

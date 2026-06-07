@@ -362,6 +362,68 @@ pub(crate) enum TaskCommand {
 
 pub(crate) const COMPLETION_HELP: &str = "Generate a shell completion script from the current kanban command tree.\n\nInstall zsh completion — add to ~/.zshrc:\n  eval \"$(kanban completion zsh)\"\n\nInstall bash completion — add to ~/.bashrc or ~/.bash_profile:\n  eval \"$(kanban completion bash)\"\n\nInstall PowerShell completion — add to $PROFILE:\n  kanban completion powershell | Out-String | Invoke-Expression\n\nNote on direnv: .envrc is evaluated as bash, so eval \"$(kanban completion zsh)\" cannot\nbe placed there. Add the eval line to ~/.zshrc instead; it runs once per shell.\n\nSupported shells: bash, zsh, powershell. The command only prints completion scripts and never edits shell config files.";
 pub(crate) const DOCTOR_HELP: &str = "Diagnose and optionally fix repository workflow issues.\n\nUsage shortcuts:\n  kanban doctor [REPO_ROOT]        Same as `kanban doctor show [REPO_ROOT]`\n  kanban doctor help               Print this help text\n\nEffects depend on subcommand; `show` is read-only while `fix` rewrites only the affected markdown files.";
+pub(crate) const WBS_REPORT_HELP: &str = "\
+Emit full WBS report data as JSON for piping into the Python xlsx generator.
+
+The command itself is read-only (no files are written). The xlsx file is produced
+by the separate Python script that reads the JSON from stdin.
+
+GENERATE THE EXCEL REPORT
+  kanban --format json report wbs \\
+    | python3 tools/kanban/scripts/wbs_report.py \\
+        --template delivery/backlog/2026-03-31.autopass_ip_2.0_wbs.xlsx \\
+        --output   delivery/backlog/wbs_report.xlsx
+
+REQUIRED DEPENDENCIES
+  Python 3.9+  and  openpyxl:
+    pip3 install openpyxl
+
+ARGUMENTS
+  --template PATH   Existing WBS Excel file used as layout/style reference and
+                    as the source of Milestone, Period, Priority, and Notes values
+                    for rows that appear in the template.
+  --output   PATH   Destination .xlsx file (parent directory is created if needed).
+
+OUTPUT WORKBOOK — four sheets:
+
+  WBS – AutoPASS IP 2.0
+    Hierarchically numbered (1 / 1.1 / 1.1.1) WBS rebuilt from live backlog data.
+    All stories are placed in their correct Phase → Epic position — new or renumbered
+    stories are never appended to the end.
+    Columns:
+      A  WBS No       Hierarchical number (phase.epic.story)
+      B  ID           Phase code, EP-*, or US-* identifier
+      C  Title        Story / epic / phase title
+      D  Milestone    Milestone tag (from template or phase metadata)
+      E  Period       Target quarter (from template or phase metadata)
+      F  Priority     Priority (from template or phase metadata)
+      G  Status       Current workflow status
+      H  Story Pts    Story points; SUM formula on epic and phase rows
+      I  Est Hours    Estimated hours (story points × hours/point from velocity);
+                      shown for all stories including done and in-progress
+      J  Start Date   Actual work_started for done/in-progress stories;
+                      velocity-based estimate for not-yet-started stories
+      K  End Date     Actual work_done for done stories; estimated completion
+                      for in-progress and not-yet-started stories
+      L  Notes        Carried over from the template for rows that exist there
+
+    Hours per point = (sprint_weeks × 5 days × 7 h/day) ÷ avg_pts_per_sprint
+    Date estimates are sequenced in planning order (F1 → F5, then by epic and
+    story ID within each phase) starting from today.
+
+  Phase Summary
+    One row per phase: story count, epic count, and point totals split by status.
+
+  Sprint Burndown
+    Historical sprint velocity and a projected completion prognosis based on
+    current average points per sprint.
+
+  Legend & Guide
+    Copied verbatim from the template if that sheet exists.
+
+EFFECT
+  kanban report wbs   — read-only; no backlog or sprint files are modified.
+  wbs_report.py       — writes only the --output file; the template is never modified.";
 pub(crate) const BASH_DATE_PLACEHOLDER: &str = "YYYY-MM-DD";
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -537,8 +599,8 @@ pub(crate) enum WebCommand {
 #[derive(Subcommand)]
 pub(crate) enum ReportCommand {
     #[command(
-        about = "Emit full WBS report data as JSON for use with the Python xlsx generator. Effect: read-only aggregation of all stories, sprints, and phases. Side effects: none.",
-        long_about = "Emit full WBS report data as JSON.\n\nTo generate an Excel report:\n  kanban report wbs --format json | python3 tools/kanban/scripts/wbs_report.py \\\n    --template delivery/backlog/2026-03-31.autopass_ip_2.0_wbs.xlsx \\\n    --output delivery/backlog/report.xlsx"
+        about = "Emit WBS report data as JSON for piping into the Python xlsx generator. Effect: read-only. Side effects: none.",
+        long_about = WBS_REPORT_HELP
     )]
     Wbs {
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
@@ -627,7 +689,8 @@ pub(crate) enum Command {
         command: DoctorCommand,
     },
     #[command(
-        about = "Generate a WBS report. Effect: read-only aggregation of all stories and sprints. Side effects: none for --format json; the xlsx subcommand invokes a Python script."
+        about = "Generate reports. Effect: read-only aggregation of stories and sprints. Side effects: none.",
+        long_about = "Generate reports from backlog and sprint data.\n\nAvailable reports:\n  wbs   Full WBS data as JSON, piped into the Python xlsx generator.\n        Run `kanban report wbs --help` for the complete xlsx generation guide."
     )]
     Report {
         #[command(subcommand)]
@@ -644,13 +707,25 @@ pub(crate) enum Command {
         #[arg(default_value = ".")]
         repo_root: PathBuf,
     },
+    #[command(
+        hide = true,
+        about = "List task IDs for shell completion. Effect: read-only listing of task IDs for one story. Side effects: none."
+    )]
+    ListTaskIds {
+        #[arg(help = "Story id whose task IDs should be listed, for example US-F1-053.")]
+        story_id: String,
+        #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
 }
 
 pub(crate) fn command_repo_root(command: &Command) -> Option<&PathBuf> {
     match command {
         Command::Init { repo_root }
         | Command::Validate { repo_root }
-        | Command::ListIds { repo_root, .. } => Some(repo_root),
+        | Command::ListIds { repo_root, .. }
+        | Command::ListTaskIds { repo_root, .. } => Some(repo_root),
         Command::Config { command } => match command {
             ConfigCommand::Show { repo_root }
             | ConfigCommand::Get { repo_root, .. }

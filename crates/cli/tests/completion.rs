@@ -501,6 +501,35 @@ fn hidden_story_completion_listing_includes_ids_and_titles() {
 }
 
 #[test]
+fn hidden_task_completion_listing_includes_task_ids_for_story() {
+    let temp_root = tempdir().expect("temp repo should be created");
+    let backlog_dir = temp_root
+        .path()
+        .join("delivery/backlog/phase-1-test/01.demo");
+    std::fs::create_dir_all(&backlog_dir).expect("backlog dir should exist");
+    std::fs::write(
+        backlog_dir.join("US-F1-010-ci-pipeline-build-and-unit-tests.md"),
+        "---\nid: US-F1-010\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story: CI pipeline with build and unit tests\n",
+    )
+    .expect("story fixture should be written");
+    std::fs::write(
+        backlog_dir.join("US-F1-010-ci-pipeline-build-and-unit-tests.tasks.md"),
+        "# Tasks for US-F1-010\n\n---\n\n## TASK-US-F1-010-001 - First task\n\nStatus: To Do\nTags: cli\n\nDescription:\nFirst.\n",
+    )
+    .expect("task fixture should be written");
+
+    let repo_root = temp_root.path().display().to_string();
+    let init_output = kanban(&["init", &repo_root]);
+    assert!(init_output.status.success());
+
+    let output = kanban(&["list-task-ids", "US-F1-010", &repo_root]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("TASK-US-F1-010-001"));
+}
+
+#[test]
 fn bare_kanban_with_missing_config_prints_only_init_guidance() {
     let temp_root = tempdir().expect("temp repo should be created");
     let output = Command::new(env!("CARGO_BIN_EXE_kanban"))
@@ -634,6 +663,44 @@ fn zsh_completion_replaces_story_move_status_with_helper() {
 }
 
 #[test]
+fn zsh_completion_replaces_remaining_domain_arguments() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains(
+        "':phase -- Phase identifier to inspect, for example 1 or F1.:_kanban_phase_ids'"
+    ));
+    assert!(stdout.contains("'--sprint=[List stories assigned to the specified sprint, for example S001.foundation.]:ID:_kanban_sprint_names'"));
+    assert!(stdout.contains("':id -- Story id to move, for example US-F1-053.:_kanban_story_ids'"));
+    assert!(
+        stdout.contains(
+            "':id -- Backlog story id to plan, for example US-F2-001.:_kanban_story_ids'"
+        )
+    );
+    assert!(stdout.contains("'--sprint=[Target sprint name or Snnn prefix, for example S001.planning or S001.]:SPRINT:_kanban_sprint_names'"));
+    assert!(stdout.contains("':task_id -- Task id to update, for example TASK-US-F1-053-001.:_kanban_task_ids_for_story'"));
+    assert!(stdout.contains("':story_id -- Story id whose task IDs should be listed, for example US-F1-053.:_kanban_story_ids'"));
+}
+
+#[test]
+fn zsh_completion_does_not_use_default_for_free_text_values() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("'--title=[Task title to append to the sibling task log.]:TITLE:'"));
+    assert!(
+        stdout
+            .contains("'--description=[Task description to write in the task log.]:DESCRIPTION:'")
+    );
+    assert!(stdout.contains("'--work-started=[Update frontmatter work_started. Omit VALUE to prompt with the current value.]::TIMESTAMP:'"));
+    assert!(!stdout.contains("Story id to move, for example US-F1-053.:_default"));
+    assert!(!stdout.contains("Backlog story id to plan, for example US-F2-001.:_default"));
+    assert!(!stdout.contains("Task id to update, for example TASK-US-F1-053-001.:_default"));
+}
+
+#[test]
 fn zsh_completion_replaces_task_status_with_helper() {
     let output = kanban(&["completion", "zsh"]);
 
@@ -730,6 +797,24 @@ fn bash_completion_includes_story_plan_completion() {
         stdout.contains("list-ids sprints"),
         "bash story plan --sprint should complete with sprints"
     );
+}
+
+#[test]
+fn bash_completion_replaces_remaining_domain_arguments() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("kanban__subcmd__phase__subcmd__show"));
+    assert!(stdout.contains("phases=\"F1 F2 F3 F4 F5 1 2 3 4 5\""));
+    assert!(stdout.contains("kanban__subcmd__story__subcmd__list"));
+    assert!(stdout.contains("--sprint)\n                    COMPREPLY=( $(compgen -W \"$(kanban list-ids sprints 2>/dev/null)\" -- \"${cur}\") )"));
+    assert!(stdout.contains(
+        "story_statuses=\"draft ready todo in-progress ready-for-qa blocked done dropped\""
+    ));
+    assert!(stdout.contains("kanban list-task-ids \"${prev}\" 2>/dev/null"));
+    assert!(stdout.contains("kanban__subcmd__list__subcmd__task__subcmd__ids"));
+    assert!(!stdout.contains("kanban__subcmd__story__subcmd__plan)\n            opts=\"-h --sprint --format --help <ID> [REPO_ROOT]\"\n            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]]"));
 }
 
 #[test]

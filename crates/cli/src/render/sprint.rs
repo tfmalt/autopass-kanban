@@ -450,6 +450,8 @@ mod tests {
                     done: 4,
                 }),
                 task_count: 10,
+                work_started: None,
+                work_done: None,
             }],
         );
         let sprint = SprintOverview {
@@ -568,6 +570,8 @@ mod tests {
                 relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-001.md"),
                 task_summary: None,
                 task_count: 0,
+                work_started: None,
+                work_done: None,
             }],
         );
         stories_by_status.insert(
@@ -584,6 +588,8 @@ mod tests {
                 relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-002.md"),
                 task_summary: None,
                 task_count: 0,
+                work_started: None,
+                work_done: None,
             }],
         );
         let sprint = SprintOverview {
@@ -646,6 +652,8 @@ mod tests {
                 relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-062.md"),
                 task_summary: None,
                 task_count: 0,
+                work_started: None,
+                work_done: None,
             }],
         );
         stories_by_status.insert(
@@ -662,6 +670,8 @@ mod tests {
                 relative_path: PathBuf::from("delivery/backlog/phase-3/US-F3-001.md"),
                 task_summary: None,
                 task_count: 0,
+                work_started: None,
+                work_done: None,
             }],
         );
         let sprint = SprintOverview {
@@ -716,6 +726,8 @@ mod tests {
             relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-002.md"),
             task_summary: None,
             task_count: 0,
+            work_started: None,
+            work_done: None,
         };
 
         let label = format_colored_story_status_label(&theme, &story, 3);
@@ -742,6 +754,8 @@ mod tests {
                 relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-001.md"),
                 task_summary: None,
                 task_count: 0,
+                work_started: None,
+                work_done: None,
             }],
         );
         let sprint = SprintOverview {
@@ -814,6 +828,8 @@ mod tests {
                 relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-002.md"),
                 task_summary: None,
                 task_count: 0,
+                work_started: None,
+                work_done: None,
             }],
         );
         let sprint = SprintOverview {

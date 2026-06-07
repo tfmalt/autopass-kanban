@@ -667,6 +667,16 @@ fn main() -> Result<()> {
                 }
             }
         },
+        Command::ListTaskIds {
+            story_id,
+            repo_root,
+        } => {
+            if let Some(details) = find_story(repo_root, &story_id)? {
+                for task in details.tasks {
+                    println!("{}", task.id);
+                }
+            }
+        }
     }
 
     Ok(())

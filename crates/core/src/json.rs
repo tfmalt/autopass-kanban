@@ -827,6 +827,8 @@ pub struct ReportStoryDto {
     pub epic_title: Option<String>,
     pub phase: String,
     pub path: String,
+    pub work_started: Option<String>,
+    pub work_done: Option<String>,
 }
 
 impl ReportStoryDto {
@@ -841,6 +843,8 @@ impl ReportStoryDto {
             epic_id: o.epic_id.clone(),
             epic_title: o.epic_title.clone(),
             path: path_string(&o.relative_path),
+            work_started: o.work_started.clone(),
+            work_done: o.work_done.clone(),
         }
     }
 }
@@ -907,7 +911,7 @@ impl ReportWbsDto {
                 let pts = parse_points(&story.story_points).unwrap_or(0);
                 let entry = sprint_stats.entry(sprint.clone()).or_default();
                 entry.0 += pts;
-                if story.status.to_ascii_lowercase() == "done" {
+                if story.status.eq_ignore_ascii_case("done") {
                     entry.1 += pts;
                 }
                 entry.2.push(story.id.clone());
@@ -983,7 +987,7 @@ impl ReportWbsDto {
 
         let remaining: i64 = stories
             .iter()
-            .filter(|s| s.status.to_ascii_lowercase() != "done")
+            .filter(|s| !s.status.eq_ignore_ascii_case("done"))
             .map(|s| parse_points(&s.story_points).unwrap_or(0))
             .sum();
 
@@ -1067,6 +1071,8 @@ mod tests {
                 done: 0,
             }),
             task_count: 1,
+            work_started: None,
+            work_done: None,
         };
         let dto = StoryOverviewDto::from_overview(&overview);
         let json = serde_json::to_value(&dto).expect("serialization should succeed");
@@ -1092,6 +1098,8 @@ mod tests {
             relative_path: PathBuf::from("delivery/backlog/x/US-F1-002-test.md"),
             task_summary: None,
             task_count: 0,
+            work_started: None,
+            work_done: None,
         };
         let dto = StoryOverviewDto::from_overview(&overview);
         let json = serde_json::to_value(&dto).expect("serialization should succeed");
@@ -1183,6 +1191,8 @@ mod tests {
             relative_path: PathBuf::from("delivery/backlog/x/US-F1-001.md"),
             task_summary: None,
             task_count: 1,
+            work_started: None,
+            work_done: None,
         };
         let details = crate::StoryDetails {
             story: overview,
@@ -1235,6 +1245,8 @@ mod tests {
             relative_path: PathBuf::from("delivery/backlog/x/US-F1-001.md"),
             task_summary: None,
             task_count: 0,
+            work_started: None,
+            work_done: None,
         };
         let details = crate::StoryDetails {
             story: overview,
@@ -1305,6 +1317,8 @@ mod tests {
             )),
             task_summary: None,
             task_count: 0,
+            work_started: None,
+            work_done: None,
         };
 
         let mut stories_by_status = BTreeMap::new();
@@ -1382,6 +1396,8 @@ mod tests {
             )),
             task_summary: None,
             task_count: 0,
+            work_started: None,
+            work_done: None,
         };
 
         // Two source keys that slugify to the same slug "in-progress"

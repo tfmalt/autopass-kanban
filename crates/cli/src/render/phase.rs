@@ -286,6 +286,8 @@ mod tests {
                         done: 1,
                     }),
                     task_count: 3,
+                    work_started: None,
+                    work_done: None,
                 },
                 StoryOverview {
                     id: "US-F1-011".to_string(),
@@ -306,6 +308,8 @@ mod tests {
                         done: 0,
                     }),
                     task_count: 3,
+                    work_started: None,
+                    work_done: None,
                 },
                 StoryOverview {
                     id: "US-F1-020".to_string(),
@@ -321,6 +325,8 @@ mod tests {
                     ),
                     task_summary: None,
                     task_count: 0,
+                    work_started: None,
+                    work_done: None,
                 },
             ],
         };
