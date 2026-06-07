@@ -535,6 +535,19 @@ pub(crate) enum WebCommand {
 }
 
 #[derive(Subcommand)]
+pub(crate) enum ReportCommand {
+    #[command(
+        about = "Emit full WBS report data as JSON for use with the Python xlsx generator. Effect: read-only aggregation of all stories, sprints, and phases. Side effects: none.",
+        long_about = "Emit full WBS report data as JSON.\n\nTo generate an Excel report:\n  kanban report wbs --format json | python3 tools/kanban/scripts/wbs_report.py \\\n    --template delivery/backlog/2026-03-31.autopass_ip_2.0_wbs.xlsx \\\n    --output delivery/backlog/report.xlsx"
+    )]
+    Wbs {
+        #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 pub(crate) enum Command {
     #[command(
         about = "Initialize `.kanban` in the repository root. Effect: creates default JSON config files in `.kanban/`. Side effects: no backlog files are modified."
@@ -614,6 +627,13 @@ pub(crate) enum Command {
         command: DoctorCommand,
     },
     #[command(
+        about = "Generate a WBS report. Effect: read-only aggregation of all stories and sprints. Side effects: none for --format json; the xlsx subcommand invokes a Python script."
+    )]
+    Report {
+        #[command(subcommand)]
+        command: ReportCommand,
+    },
+    #[command(
         hide = true,
         about = "List IDs for shell completion. Effect: read-only listing of sprint names, story IDs, or epic IDs from the repository. Side effects: none."
     )]
@@ -670,6 +690,9 @@ pub(crate) fn command_repo_root(command: &Command) -> Option<&PathBuf> {
             DoctorCommand::Show { repo_root } | DoctorCommand::Fix { repo_root, .. } => {
                 Some(repo_root)
             }
+        },
+        Command::Report { command } => match command {
+            ReportCommand::Wbs { repo_root } => Some(repo_root),
         },
         Command::Completion { .. } => None,
     }

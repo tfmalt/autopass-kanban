@@ -704,6 +704,25 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
         Command::Completion { target } => {
             print_envelope(&JsonEnvelope::ok("completion", completion_output(*target)))
         }
+        Command::Report {
+            command: ReportCommand::Wbs { repo_root },
+        } => {
+            let stories_result = list_all_stories(repo_root);
+            let sprints_result = summarize_sprints(repo_root);
+            let current = summarize_current_sprint(repo_root)
+                .ok()
+                .map(|s| s.sprint_name);
+            match (stories_result, sprints_result) {
+                (Ok(stories), Ok(sprints)) => {
+                    let dto = ReportWbsDto::build(&stories, &sprints, current.as_deref());
+                    print_envelope(&JsonEnvelope::ok("report.wbs", dto))
+                }
+                (Err(e), _) | (_, Err(e)) => print_envelope(&JsonEnvelope::<ReportWbsDto>::error(
+                    "report.wbs",
+                    KanbanErrorBody::from_anyhow(&e),
+                )),
+            }
+        }
         Command::ListIds { kind, repo_root } => {
             let kind_label = list_ids_kind_label(*kind);
             let items_result = match kind {

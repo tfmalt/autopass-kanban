@@ -808,6 +808,217 @@ fn rel_to_root(repo_root: &Path, path: &Path) -> String {
     }
 }
 
+// ── Report DTOs ───────────────────────────────────────────────────────────────
+
+fn phase_from_story_id(id: &str) -> String {
+    // US-F1-001 → "F1", US-F2-010 → "F2"
+    id.split('-').nth(1).unwrap_or("unknown").to_string()
+}
+
+/// Per-story row in the WBS report.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportStoryDto {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub story_points: Option<i64>,
+    pub sprint: Option<String>,
+    pub epic_id: Option<String>,
+    pub epic_title: Option<String>,
+    pub phase: String,
+    pub path: String,
+}
+
+impl ReportStoryDto {
+    pub fn from_overview(o: &StoryOverview) -> Self {
+        Self {
+            phase: phase_from_story_id(&o.id),
+            id: o.id.clone(),
+            title: o.title.clone(),
+            status: o.status.clone(),
+            story_points: parse_points(&o.story_points),
+            sprint: o.sprint.clone(),
+            epic_id: o.epic_id.clone(),
+            epic_title: o.epic_title.clone(),
+            path: path_string(&o.relative_path),
+        }
+    }
+}
+
+/// Per-sprint burndown row in the WBS report.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportSprintDto {
+    pub sprint_name: String,
+    pub start_date: String,
+    pub end_date: String,
+    pub is_current: bool,
+    pub is_past: bool,
+    pub planned_points: i64,
+    pub delivered_points: i64,
+    pub story_ids: Vec<String>,
+}
+
+/// Per-phase summary row.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportPhaseDto {
+    pub phase: String,
+    pub story_count: usize,
+    pub points_total: i64,
+    pub points_done: i64,
+    pub points_in_progress: i64,
+    pub points_remaining: i64,
+}
+
+/// Velocity and prognosis summary.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportVelocityDto {
+    pub completed_sprint_count: usize,
+    pub avg_points_per_sprint: f64,
+    pub remaining_points: i64,
+    pub estimated_sprints_remaining: Option<f64>,
+    pub sprint_duration_weeks: u32,
+}
+
+/// Top-level payload for `kanban report wbs --format json`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportWbsDto {
+    pub generated_at: String,
+    pub stories: Vec<ReportStoryDto>,
+    pub sprints: Vec<ReportSprintDto>,
+    pub phases: Vec<ReportPhaseDto>,
+    pub velocity: ReportVelocityDto,
+}
+
+impl ReportWbsDto {
+    pub fn build(
+        stories: &[StoryOverview],
+        sprints: &[SprintOverview],
+        current_sprint_name: Option<&str>,
+    ) -> Self {
+        use chrono::Local;
+
+        let today = Local::now().date_naive();
+        let generated_at = Local::now().to_rfc3339();
+
+        // Build story lookup: sprint_name → (planned_pts, done_pts, ids)
+        let mut sprint_stats: BTreeMap<String, (i64, i64, Vec<String>)> = BTreeMap::new();
+        for story in stories {
+            if let Some(ref sprint) = story.sprint {
+                let pts = parse_points(&story.story_points).unwrap_or(0);
+                let entry = sprint_stats.entry(sprint.clone()).or_default();
+                entry.0 += pts;
+                if story.status.to_ascii_lowercase() == "done" {
+                    entry.1 += pts;
+                }
+                entry.2.push(story.id.clone());
+            }
+        }
+
+        // Build sprint DTOs with computed stats
+        let sprint_dtos: Vec<ReportSprintDto> = sprints
+            .iter()
+            .map(|s| {
+                let end =
+                    chrono::NaiveDate::parse_from_str(&s.end_date, "%Y-%m-%d").unwrap_or(today);
+                let is_past = end < today;
+                let is_current = Some(s.sprint_name.as_str()) == current_sprint_name;
+                let (planned, done, ids) = sprint_stats
+                    .get(&s.sprint_name)
+                    .cloned()
+                    .unwrap_or_default();
+                ReportSprintDto {
+                    sprint_name: s.sprint_name.clone(),
+                    start_date: s.start_date.clone(),
+                    end_date: s.end_date.clone(),
+                    is_current,
+                    is_past,
+                    planned_points: planned,
+                    delivered_points: done,
+                    story_ids: ids,
+                }
+            })
+            .collect();
+
+        // Phase summaries
+        let mut phase_map: BTreeMap<String, (usize, i64, i64, i64, i64)> = BTreeMap::new();
+        for story in stories {
+            let phase = phase_from_story_id(&story.id);
+            let pts = parse_points(&story.story_points).unwrap_or(0);
+            let e = phase_map.entry(phase).or_default();
+            e.0 += 1;
+            e.1 += pts;
+            let status = story.status.to_ascii_lowercase();
+            if status == "done" {
+                e.2 += pts;
+            } else if status == "in-progress" || status == "ready-for-qa" {
+                e.3 += pts;
+            } else {
+                e.4 += pts;
+            }
+        }
+        let phase_dtos: Vec<ReportPhaseDto> = phase_map
+            .into_iter()
+            .map(|(phase, (count, total, done, wip, rem))| ReportPhaseDto {
+                phase,
+                story_count: count,
+                points_total: total,
+                points_done: done,
+                points_in_progress: wip,
+                points_remaining: rem,
+            })
+            .collect();
+
+        // Velocity: use past sprints that had stories
+        let past_with_stories: Vec<&ReportSprintDto> = sprint_dtos
+            .iter()
+            .filter(|s| s.is_past && s.planned_points > 0)
+            .collect();
+        let completed_count = past_with_stories.len();
+        let total_delivered: i64 = past_with_stories.iter().map(|s| s.delivered_points).sum();
+        let avg_velocity = if completed_count > 0 {
+            total_delivered as f64 / completed_count as f64
+        } else {
+            0.0
+        };
+
+        let remaining: i64 = stories
+            .iter()
+            .filter(|s| s.status.to_ascii_lowercase() != "done")
+            .map(|s| parse_points(&s.story_points).unwrap_or(0))
+            .sum();
+
+        let est_sprints = if avg_velocity > 0.0 {
+            Some(remaining as f64 / avg_velocity)
+        } else {
+            None
+        };
+
+        // Infer typical sprint duration from sprint history
+        let sprint_duration_weeks = sprint_dtos
+            .first()
+            .and_then(|s| {
+                let start = chrono::NaiveDate::parse_from_str(&s.start_date, "%Y-%m-%d").ok()?;
+                let end = chrono::NaiveDate::parse_from_str(&s.end_date, "%Y-%m-%d").ok()?;
+                Some(((end - start).num_days() as f64 / 7.0).round() as u32)
+            })
+            .unwrap_or(2);
+
+        ReportWbsDto {
+            generated_at,
+            stories: stories.iter().map(ReportStoryDto::from_overview).collect(),
+            sprints: sprint_dtos,
+            phases: phase_dtos,
+            velocity: ReportVelocityDto {
+                completed_sprint_count: completed_count,
+                avg_points_per_sprint: avg_velocity,
+                remaining_points: remaining,
+                estimated_sprints_remaining: est_sprints,
+                sprint_duration_weeks,
+            },
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

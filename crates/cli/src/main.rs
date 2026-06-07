@@ -581,6 +581,69 @@ fn main() -> Result<()> {
                 run_doctor_fix_wizard(&theme, &repo_root, target.as_deref())?;
             }
         },
+        Command::Report { command } => match command {
+            ReportCommand::Wbs { repo_root } => {
+                let stories = list_all_stories(&repo_root)?;
+                let sprints = summarize_sprints(&repo_root)?;
+                let current = summarize_current_sprint(&repo_root)
+                    .ok()
+                    .map(|s| s.sprint_name);
+                let dto = ReportWbsDto::build(&stories, &sprints, current.as_deref());
+
+                println!(
+                    "{}  {}",
+                    theme.heading("WBS Report"),
+                    theme.paint(Style::Muted, &dto.generated_at),
+                );
+                println!(
+                    "  {}  {}",
+                    theme.label("Stories:"),
+                    theme.count(format!("{}", dto.stories.len()))
+                );
+                println!(
+                    "  {}  {}",
+                    theme.label("Sprints:"),
+                    theme.count(format!("{}", dto.sprints.len()))
+                );
+                println!(
+                    "  {}  {}",
+                    theme.label("Remaining points:"),
+                    theme.story_points(format_story_points(dto.velocity.remaining_points as usize))
+                );
+                if let Some(est) = dto.velocity.estimated_sprints_remaining {
+                    println!(
+                        "  {}  {:.1} sprints  (avg {:.1} pts/sprint over {} completed sprints)",
+                        theme.label("Estimated remaining:"),
+                        est,
+                        dto.velocity.avg_points_per_sprint,
+                        dto.velocity.completed_sprint_count,
+                    );
+                } else {
+                    println!(
+                        "  {}  {}",
+                        theme.label("Estimated remaining:"),
+                        theme.paint(Style::Muted, "no velocity data yet")
+                    );
+                }
+                println!();
+                println!(
+                    "{}",
+                    theme.paint(Style::Muted, "To generate an Excel report, run:")
+                );
+                println!(
+                    "  {} --format json | python3 tools/kanban/scripts/wbs_report.py \\",
+                    theme.id("kanban report wbs")
+                );
+                println!(
+                    "    {} delivery/backlog/2026-03-31.autopass_ip_2.0_wbs.xlsx \\",
+                    theme.id("--template")
+                );
+                println!(
+                    "    {} delivery/backlog/wbs_report.xlsx",
+                    theme.id("--output")
+                );
+            }
+        },
         Command::ListIds { kind, repo_root } => match kind {
             ListIdsKind::Sprints => {
                 for id in list_sprint_names(repo_root)? {
