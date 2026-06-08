@@ -61,7 +61,10 @@ pub fn move_story_to_status_with_assignee(
     let assignee_update = if normalized_status == "in-progress" {
         Some(match assignee_override {
             Some(assignee) => assignee,
-            None => current_git_assignee(&repository.repo_root)?,
+            None => match story.frontmatter.get("assignee") {
+                Some(existing) if !parse_assignee_list(existing).is_empty() => existing.clone(),
+                _ => current_git_assignee(&repository.repo_root)?,
+            },
         })
     } else {
         story.frontmatter.get("assignee").cloned()
@@ -690,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    fn move_story_to_status_updates_single_story_and_roster() {
+    fn move_story_to_status_preserves_existing_assignee_and_updates_roster() {
         let temp_root = tempdir().unwrap();
         init_temp_repo(temp_root.path());
         write_git_config(temp_root.path(), "Test User", "test@example.com");
@@ -713,7 +716,7 @@ mod tests {
         assert_eq!(result.to_status, "in-progress");
         let moved_story = fs::read_to_string(&story_path).unwrap();
         assert!(moved_story.contains("status: in-progress"));
-        assert!(moved_story.contains("assignee: Test User <test@example.com>"));
+        assert!(moved_story.contains("assignee: Old Owner <old@example.com>"));
         assert!(moved_story.contains("work_started: 20"));
         let sprint_markdown =
             fs::read_to_string(temp_root.path().join("delivery/sprints/S001.foundation.md"))
@@ -721,7 +724,7 @@ mod tests {
         assert!(sprint_markdown.contains("| Metric | Stories | Points |"));
         assert!(sprint_markdown.contains("| Story | Points | Assignee | Tasks |"));
         assert!(sprint_markdown.contains("### in-progress"));
-        assert!(sprint_markdown.contains("mailto:test@example.com"));
+        assert!(sprint_markdown.contains("mailto:old@example.com"));
         assert_eq!(
             result.task_path,
             Some(relative_path(
@@ -758,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn move_story_to_in_progress_refreshes_assignee_when_already_in_progress() {
+    fn move_story_to_in_progress_preserves_existing_assignee_when_already_in_progress() {
         let temp_root = tempdir().unwrap();
         init_temp_repo(temp_root.path());
         write_git_config(temp_root.path(), "Test User", "test@example.com");
@@ -774,6 +777,33 @@ mod tests {
             temp_root.path(),
             "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md",
             "id: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: Old Owner <old@example.com>\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let result = move_story_to_status(temp_root.path(), "US-F1-053", "in-progress").unwrap();
+
+        assert_eq!(result.to_status, "in-progress");
+        assert_eq!(temp_root.path().join(result.story_path), story_path);
+        let backlog_story = fs::read_to_string(&story_path).unwrap();
+        assert!(backlog_story.contains("assignee: Old Owner <old@example.com>"));
+    }
+
+    #[test]
+    fn move_story_to_in_progress_sets_git_assignee_when_assignee_is_tbd() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_git_config(temp_root.path(), "Test User", "test@example.com");
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "planned",
+        );
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md",
+            "id: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 8\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
         );
 
         let result = move_story_to_status(temp_root.path(), "US-F1-053", "in-progress").unwrap();

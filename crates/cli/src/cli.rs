@@ -223,7 +223,7 @@ pub(crate) enum StoryCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Move a story to another status. Effect: updates the canonical story frontmatter and regenerates the sprint story table. Side effects: in-progress sets assignee/work_started; done refreshes work_done."
+        about = "Move a story to another status. Effect: updates the canonical story frontmatter and regenerates the sprint story table. Side effects: in-progress preserves an existing assignee or sets one if missing, and sets work_started; done refreshes work_done."
     )]
     Move {
         #[arg(help = "Story id to move, for example US-F1-053.")]
