@@ -28,15 +28,41 @@ pub(crate) fn current_git_assignee(repo_root: &Path) -> Result<String> {
     Ok(format!("{name} <{email}>"))
 }
 
+pub(crate) fn parse_assignee_list(assignee: &str) -> Vec<String> {
+    assignee
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .filter(|entry| *entry != "~")
+        .filter(|entry| !entry.eq_ignore_ascii_case("tbd"))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 pub(crate) fn validate_assignee_override(assignee: &str) -> Result<String> {
-    let trimmed = assignee.trim();
     let pattern =
         Regex::new(r"^[^<>\s].*\s<[^<>\s@]+@[^<>\s@]+>$").expect("valid assignee validation regex");
-    if pattern.is_match(trimmed) {
-        Ok(trimmed.to_string())
-    } else {
+    let assignees = parse_assignee_list(assignee);
+    if assignees.is_empty() {
         bail!("Assignee must use the format `Name <email>`.");
     }
+
+    for assignee in &assignees {
+        if !pattern.is_match(assignee) {
+            bail!("Assignee must use the format `Name <email>`.");
+        }
+    }
+
+    Ok(assignees.join(", "))
+}
+
+pub(crate) fn normalize_story_assignee_value(assignee: &str) -> Result<String> {
+    let trimmed = assignee.trim();
+    if trimmed.is_empty() || trimmed == "~" || trimmed.eq_ignore_ascii_case("tbd") {
+        return Ok(trimmed.to_string());
+    }
+
+    validate_assignee_override(trimmed)
 }
 
 pub(crate) fn git_config_value(repo_root: &Path, key: &str) -> Result<String> {

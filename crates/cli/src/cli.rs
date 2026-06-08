@@ -236,7 +236,7 @@ pub(crate) enum StoryCommand {
             short,
             long,
             value_name = "NAME <EMAIL>",
-            help = "Override assignee when moving to in-progress. Must use the exact structure `Name <email>`; invalid values fail before files are moved."
+            help = "Override assignee when moving to in-progress. Use `Name <email>` or a comma-separated list of assignees; invalid values fail before files are moved."
         )]
         assignee: Option<String>,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
@@ -277,7 +277,7 @@ pub(crate) enum StoryCommand {
         sprint: Option<Option<String>>,
         #[arg(long, num_args = 0..=1, value_name = "POINTS", help = "Update frontmatter story_points. Omit VALUE to prompt with the current value.")]
         story_points: Option<Option<String>>,
-        #[arg(long, num_args = 0..=1, value_name = "ASSIGNEE", help = "Update frontmatter assignee. Omit VALUE to prompt with the current value.")]
+        #[arg(long, num_args = 0..=1, value_name = "ASSIGNEE", help = "Update frontmatter assignee. Use `Name <email>` or a comma-separated list. Omit VALUE to prompt with the current value.")]
         assignee: Option<Option<String>>,
         #[arg(long, num_args = 0..=1, value_name = "TIMESTAMP", help = "Update frontmatter activated. Omit VALUE to prompt with the current value.")]
         activated: Option<Option<String>>,

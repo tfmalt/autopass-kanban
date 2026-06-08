@@ -9,6 +9,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use crate::util::parse_assignee_list;
 use crate::{
     BlockedWorkItem, CompletionItem, ConfigInitResult, ConfigSetResult, CreateSprintResult,
     DoctorFinding, MoveStoryResult, PhaseOverview, PlanStoryResult, RolloverResult, SprintOverview,
@@ -280,6 +281,7 @@ pub struct StoryOverviewDto {
     pub status: String,
     pub status_normalized: String,
     pub assignee: Option<String>,
+    pub assignees: Vec<String>,
     pub story_points: Option<i64>,
     pub sprint: Option<String>,
     pub path: String,
@@ -295,6 +297,7 @@ impl StoryOverviewDto {
             status: o.status.clone(),
             status_normalized: slugify_status(&o.status),
             assignee: non_empty(&o.assignee),
+            assignees: parse_assignee_list(&o.assignee),
             story_points: parse_points(&o.story_points),
             sprint: o.sprint.clone(),
             path: path_string(&o.relative_path),
@@ -345,6 +348,7 @@ pub struct StoryShowDto {
     pub status: String,
     pub status_normalized: String,
     pub assignee: Option<String>,
+    pub assignees: Vec<String>,
     pub story_points: Option<i64>,
     pub sprint: Option<String>,
     pub path: String,
@@ -368,6 +372,7 @@ impl StoryShowDto {
             status: o.status.clone(),
             status_normalized: slugify_status(&o.status),
             assignee: non_empty(&o.assignee),
+            assignees: parse_assignee_list(&o.assignee),
             story_points: parse_points(&o.story_points),
             sprint: o.sprint.clone(),
             path: path_string(&o.relative_path),

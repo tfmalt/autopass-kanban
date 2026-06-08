@@ -283,16 +283,16 @@ pub(crate) fn enhance_zsh_completion(script: &str) -> String {
             "':status -- Target status, for example todo, in-progress, ready-for-qa, done, or blocked.:_kanban_story_statuses'",
         )
         .replace(
-            r#"'-a+[Override assignee when moving to in-progress. Must use the exact structure \`Name <email>\`; invalid values fail before files are moved.]:NAME <EMAIL>:_default'"#,
-            r#"'-a+[Override assignee when moving to in-progress. Must use the exact structure \`Name <email>\`; invalid values fail before files are moved.]:NAME <EMAIL>:'"#,
+            r#"'-a+[Override assignee when moving to in-progress. Use \`Name <email>\` or a comma-separated list of assignees; invalid values fail before files are moved.]:NAME <EMAIL>:_default'"#,
+            r#"'-a+[Override assignee when moving to in-progress. Use \`Name <email>\` or a comma-separated list of assignees; invalid values fail before files are moved.]:NAME <EMAIL>:'"#,
         )
         .replace(
-            r#"'--assignee=[Override assignee when moving to in-progress. Must use the exact structure \`Name <email>\`; invalid values fail before files are moved.]:NAME <EMAIL>:_default'"#,
-            r#"'--assignee=[Override assignee when moving to in-progress. Must use the exact structure \`Name <email>\`; invalid values fail before files are moved.]:NAME <EMAIL>:'"#,
+            r#"'--assignee=[Override assignee when moving to in-progress. Use \`Name <email>\` or a comma-separated list of assignees; invalid values fail before files are moved.]:NAME <EMAIL>:_default'"#,
+            r#"'--assignee=[Override assignee when moving to in-progress. Use \`Name <email>\` or a comma-separated list of assignees; invalid values fail before files are moved.]:NAME <EMAIL>:'"#,
         )
         .replace(
-            "'--assignee=[Update frontmatter assignee. Omit VALUE to prompt with the current value.]::ASSIGNEE:_default'",
-            "'--assignee=[Update frontmatter assignee. Omit VALUE to prompt with the current value.]::ASSIGNEE:'",
+            "'--assignee=[Update frontmatter assignee. Use `Name <email>` or a comma-separated list. Omit VALUE to prompt with the current value.]::ASSIGNEE:_default'",
+            "'--assignee=[Update frontmatter assignee. Use `Name <email>` or a comma-separated list. Omit VALUE to prompt with the current value.]::ASSIGNEE:'",
         )
         // Task add/update status argument and option
         .replace(

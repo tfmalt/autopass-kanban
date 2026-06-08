@@ -320,7 +320,19 @@ pub fn update_story_frontmatter(
         bail!("No story frontmatter fields were provided.");
     }
 
-    let update_refs = updates
+    let normalized_updates = updates
+        .iter()
+        .map(|(field, value)| {
+            let value = if field == "assignee" {
+                normalize_story_assignee_value(value)?
+            } else {
+                value.clone()
+            };
+            Ok((field.clone(), value))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let update_refs = normalized_updates
         .iter()
         .map(|(field, value)| (field.as_str(), Some(value.clone())))
         .collect::<Vec<_>>();
@@ -335,7 +347,9 @@ pub fn update_story_frontmatter(
     {
         affected_sprints.insert(sprint.clone());
     }
-    if let Some((_, sprint)) = updates.iter().find(|(field, _)| field == "sprint")
+    if let Some((_, sprint)) = normalized_updates
+        .iter()
+        .find(|(field, _)| field == "sprint")
         && !sprint.trim().is_empty()
         && sprint.as_str() != "~"
     {
@@ -348,7 +362,10 @@ pub fn update_story_frontmatter(
     Ok(StoryUpdateResult {
         story_id: story.frontmatter.get("id").cloned().unwrap_or_default(),
         story_path: story.relative_path.clone(),
-        updated_fields: updates.iter().map(|(field, _)| field.clone()).collect(),
+        updated_fields: normalized_updates
+            .iter()
+            .map(|(field, _)| field.clone())
+            .collect(),
     })
 }
 
@@ -607,6 +624,34 @@ mod tests {
     }
 
     #[test]
+    fn update_story_frontmatter_normalizes_multiple_assignees() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-098-test-story.md",
+            "id: US-F1-098\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint:\nstory_points: 3\nassignee: TBD\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        update_story_frontmatter(
+            temp_root.path(),
+            "US-F1-098",
+            &[(
+                "assignee".to_string(),
+                " Alice Example <alice@example.com> , Bob Berg <bob@example.com> ".to_string(),
+            )],
+        )
+        .unwrap();
+
+        let markdown = fs::read_to_string(story_path).unwrap();
+        assert!(
+            markdown.contains(
+                "assignee: Alice Example <alice@example.com>, Bob Berg <bob@example.com>"
+            )
+        );
+    }
+
+    #[test]
     fn list_all_stories_returns_single_story_entry() {
         let repo_root = repo_root();
 
@@ -768,6 +813,38 @@ mod tests {
         assert_eq!(temp_root.path().join(result.story_path), story_path);
         let backlog_story = fs::read_to_string(&story_path).unwrap();
         assert!(backlog_story.contains("assignee: Override User <override@example.com>"));
+    }
+
+    #[test]
+    fn move_story_to_in_progress_accepts_multiple_assignees_override() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "planned",
+        );
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md",
+            "id: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 8\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        move_story_to_status_with_assignee(
+            temp_root.path(),
+            "US-F1-053",
+            "in-progress",
+            Some("Override User <override@example.com>, Pair User <pair@example.com>"),
+        )
+        .unwrap();
+
+        let backlog_story = fs::read_to_string(&story_path).unwrap();
+        assert!(backlog_story.contains(
+            "assignee: Override User <override@example.com>, Pair User <pair@example.com>"
+        ));
     }
 
     #[test]
