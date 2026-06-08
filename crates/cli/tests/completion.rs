@@ -120,8 +120,22 @@ fn zsh_completion_includes_dynamic_story_id_helper() {
         "zsh story helper should call `kanban list-ids stories-with-titles`"
     );
     assert!(
-        stdout.contains("compadd -d descriptions -a ids"),
-        "zsh story helper should insert only IDs while displaying descriptions"
+        stdout.contains("compadd -U -d descriptions -a ids"),
+        "zsh story helper should insert substring-filtered IDs while displaying descriptions"
+    );
+}
+
+#[test]
+fn zsh_story_completion_accepts_numeric_id_fragments() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains(r#"local needle="$PREFIX""#)
+            && stdout.contains(r#""$id" == *"$needle"*"#)
+            && stdout.contains("compadd -U -d descriptions -a ids"),
+        "zsh story completion should filter by substring and force-add non-prefix matches like 011 -> US-F*-011"
     );
 }
 
@@ -815,6 +829,21 @@ fn bash_completion_replaces_remaining_domain_arguments() {
     assert!(stdout.contains("kanban list-task-ids \"${prev}\" 2>/dev/null"));
     assert!(stdout.contains("kanban__subcmd__list__subcmd__task__subcmd__ids"));
     assert!(!stdout.contains("kanban__subcmd__story__subcmd__plan)\n            opts=\"-h --sprint --format --help <ID> [REPO_ROOT]\"\n            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]]"));
+}
+
+#[test]
+fn bash_story_completion_accepts_numeric_id_fragments() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("kanban__subcmd__story__subcmd__plan")
+            && stdout.contains("while IFS= read -r id; do")
+            && stdout.contains(r#""$id" == *"${cur}"*"#)
+            && stdout.contains(r#"COMPREPLY=( "${matches[@]}" )"#),
+        "bash story completion should use substring matching instead of compgen prefix matching"
+    );
 }
 
 #[test]

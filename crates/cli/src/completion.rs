@@ -63,7 +63,7 @@ _kanban_story_ids() {
             fi
         fi
     done < <(kanban list-ids stories-with-titles 2>/dev/null)
-    compadd -d descriptions -a ids
+    compadd -U -d descriptions -a ids
 }
 _kanban_story_or_epic_ids() {
     local -a ids
@@ -74,7 +74,7 @@ _kanban_story_or_epic_ids() {
     while IFS= read -r id; do
         [[ -n "$id" && ( -z "$needle" || "$id" == *"$needle"* ) ]] && ids+=( "$id" )
     done < <(kanban list-ids epics 2>/dev/null)
-    compadd -a ids
+    compadd -U -a ids
 }
 _kanban_story_types() {
     compadd user-story epic
@@ -126,7 +126,7 @@ _kanban_doctor_fix_targets() {
             descriptions+=( "$id" )
         fi
     done < <(kanban list-ids stories-with-titles 2>/dev/null)
-    compadd -d descriptions -a ids
+    compadd -U -d descriptions -a ids
 }
 _kanban_doctor_command_or_repo_root() {
     _alternative \
@@ -140,7 +140,7 @@ _kanban_epic_ids() {
     while IFS= read -r id; do
         [[ -n "$id" && ( -z "$needle" || "$id" == *"$needle"* ) ]] && ids+=( "$id" )
     done < <(kanban list-ids epics 2>/dev/null)
-    compadd -a ids
+    compadd -U -a ids
 }
 _kanban_task_statuses() {
     local -a statuses
@@ -495,7 +495,12 @@ pub(crate) fn inject_bash_list_task_ids(script: &str) -> String {
     let replacement = r#"        kanban__subcmd__list__subcmd__task__subcmd__ids)
             opts="-h --format --help <STORY_ID> [REPO_ROOT]"
             if [[ ${COMP_CWORD} -eq 2 && ${cur} != -* ]] ; then
-                COMPREPLY=( $(compgen -W "$(kanban list-ids stories 2>/dev/null)" -- "${cur}") )
+                local -a matches=()
+                local id
+                while IFS= read -r id; do
+                    [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                done < <(kanban list-ids stories 2>/dev/null)
+                COMPREPLY=( "${matches[@]}" )
                 return 0
             fi
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
@@ -841,10 +846,15 @@ pub(crate) fn inject_bash_web_log(script: &str) -> String {
 pub(crate) fn inject_bash_story_plan(script: &str) -> String {
     let replacement = r#"        kanban__subcmd__story__subcmd__plan)
              opts="-h --sprint --format --help <ID> [REPO_ROOT]"
-             if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                 COMPREPLY=( $(compgen -W "$(kanban list-ids stories 2>/dev/null)" -- "${cur}") )
-                 return 0
-             fi
+              if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
+                  local -a matches=()
+                  local id
+                  while IFS= read -r id; do
+                      [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                  done < <(kanban list-ids stories 2>/dev/null)
+                  COMPREPLY=( "${matches[@]}" )
+                  return 0
+              fi
              case "${prev}" in
                  --sprint)
                      COMPREPLY=( $(compgen -W "$(kanban list-ids sprints 2>/dev/null)" -- "${cur}") )
@@ -869,10 +879,15 @@ pub(crate) fn inject_bash_story_move_status(script: &str) -> String {
     let replacement = r#"        kanban__subcmd__story__subcmd__move)
              opts="-a -h --assignee --format --help <ID> <STATUS> [REPO_ROOT]"
              story_statuses="draft ready todo in-progress ready-for-qa blocked done dropped"
-             if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                 COMPREPLY=( $(compgen -W "$(kanban list-ids stories 2>/dev/null)" -- "${cur}") )
-                 return 0
-             fi
+              if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
+                  local -a matches=()
+                  local id
+                  while IFS= read -r id; do
+                      [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                  done < <(kanban list-ids stories 2>/dev/null)
+                  COMPREPLY=( "${matches[@]}" )
+                  return 0
+              fi
              if [[ ${COMP_CWORD} -eq 4 && ${cur} != -* ]] ; then
                  COMPREPLY=( $(compgen -W "${story_statuses}" -- "${cur}") )
                  return 0
@@ -905,10 +920,15 @@ pub(crate) fn inject_bash_task_add_status(script: &str) -> String {
     let replacement = r#"        kanban__subcmd__task__subcmd__add)
              opts="-h --title --status --tags --description --format --help <STORY_ID> [REPO_ROOT]"
              task_statuses="todo in-progress blocked done"
-             if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                 COMPREPLY=( $(compgen -W "$(kanban list-ids stories 2>/dev/null)" -- "${cur}") )
-                 return 0
-             fi
+              if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
+                  local -a matches=()
+                  local id
+                  while IFS= read -r id; do
+                      [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                  done < <(kanban list-ids stories 2>/dev/null)
+                  COMPREPLY=( "${matches[@]}" )
+                  return 0
+              fi
              case "${prev}" in
                  --title)
                      COMPREPLY=()
@@ -945,14 +965,24 @@ pub(crate) fn inject_bash_task_update_status(script: &str) -> String {
     let replacement = r#"        kanban__subcmd__task__subcmd__update)
              opts="-h --title --status --tags --description --format --help <STORY_ID> <TASK_ID> [REPO_ROOT]"
              task_statuses="todo in-progress blocked done"
-             if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                 COMPREPLY=( $(compgen -W "$(kanban list-ids stories 2>/dev/null)" -- "${cur}") )
-                 return 0
-             fi
-             if [[ ${COMP_CWORD} -eq 4 && ${cur} != -* ]] ; then
-                 COMPREPLY=( $(compgen -W "$(kanban list-task-ids "${prev}" 2>/dev/null)" -- "${cur}") )
-                 return 0
-             fi
+              if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
+                  local -a matches=()
+                  local id
+                  while IFS= read -r id; do
+                      [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                  done < <(kanban list-ids stories 2>/dev/null)
+                  COMPREPLY=( "${matches[@]}" )
+                  return 0
+              fi
+              if [[ ${COMP_CWORD} -eq 4 && ${cur} != -* ]] ; then
+                  local -a matches=()
+                  local id
+                  while IFS= read -r id; do
+                      [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                  done < <(kanban list-task-ids "${prev}" 2>/dev/null)
+                  COMPREPLY=( "${matches[@]}" )
+                  return 0
+              fi
              case "${prev}" in
                  --title)
                      COMPREPLY=()
