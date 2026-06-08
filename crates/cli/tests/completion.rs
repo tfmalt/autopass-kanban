@@ -133,9 +133,9 @@ fn zsh_story_completion_accepts_numeric_id_fragments() {
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     assert!(
         stdout.contains(r#"local needle="$PREFIX""#)
-            && stdout.contains(r#""$id" == *"$needle"*"#)
+            && stdout.contains(r#""${(L)id}" == *"${(L)needle}"*"#)
             && stdout.contains("compadd -U -d descriptions -a ids"),
-        "zsh story completion should filter by substring and force-add non-prefix matches like 011 -> US-F*-011"
+        "zsh story completion should filter by case-insensitive substring and force-add non-prefix matches like 011 -> US-F*-011"
     );
 }
 
@@ -792,8 +792,8 @@ fn zsh_completion_replaces_story_update_id_epic_and_options() {
         "story update story_points option should use _kanban_story_point_values"
     );
     assert!(
-        stdout.contains("== *\"$needle\"*"),
-        "partial matching should use substring checks"
+        stdout.contains("== *\"${(L)needle}\"*"),
+        "partial matching should use case-insensitive substring checks"
     );
 }
 
@@ -840,9 +840,9 @@ fn bash_story_completion_accepts_numeric_id_fragments() {
     assert!(
         stdout.contains("kanban__subcmd__story__subcmd__plan")
             && stdout.contains("while IFS= read -r id; do")
-            && stdout.contains(r#""$id" == *"${cur}"*"#)
+            && stdout.contains(r#"_kanban_ci_match "$id" "${cur}""#)
             && stdout.contains(r#"COMPREPLY=( "${matches[@]}" )"#),
-        "bash story completion should use substring matching instead of compgen prefix matching"
+        "bash story completion should use case-insensitive substring matching instead of compgen prefix matching"
     );
 }
 
@@ -857,8 +857,45 @@ fn bash_completion_replaces_story_update_id_with_helper() {
             && stdout.contains("local -a matches=()")
             && stdout.contains("kanban list-ids stories 2>/dev/null")
             && stdout.contains("kanban list-ids epics 2>/dev/null")
-            && stdout.contains("== *\"${cur}\"*")
+            && stdout.contains(r#"_kanban_ci_match "$id" "${cur}""#)
             && stdout.contains("COMPREPLY=( \"${matches[@]}\" )"),
         "story update positional id should complete with substring matching against stories and epics"
+    );
+}
+
+#[test]
+fn bash_completion_defines_case_insensitive_match_helper() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("_kanban_ci_match() {") && stdout.contains("tr '[:upper:]' '[:lower:]'"),
+        "bash completion should define a case-insensitive substring match helper"
+    );
+}
+
+#[test]
+fn bash_completion_registers_kb_alias() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("complete -F _kanban -o nosort -o bashdefault -o default kb")
+            && stdout.contains("complete -F _kanban -o bashdefault -o default kb"),
+        "bash completion should register the kb alias for both bash 4+ and older bash"
+    );
+}
+
+#[test]
+fn zsh_completion_registers_kb_alias() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("compdef _kanban kb"),
+        "zsh completion should register the kb alias via compdef"
     );
 }

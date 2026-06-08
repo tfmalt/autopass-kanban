@@ -54,7 +54,7 @@ _kanban_story_ids() {
     local needle="$PREFIX"
     while IFS=$'\t' read -r id title; do
         [[ -z "$id" ]] && continue
-        if [[ -z "$needle" || "$id" == *"$needle"* ]]; then
+        if [[ -z "$needle" || "${(L)id}" == *"${(L)needle}"* ]]; then
             ids+=( "$id" )
             if [[ -n "$title" ]]; then
                 descriptions+=( "$id -- $title" )
@@ -69,10 +69,10 @@ _kanban_story_or_epic_ids() {
     local -a ids
     local id needle="$PREFIX"
     while IFS= read -r id; do
-        [[ -n "$id" && ( -z "$needle" || "$id" == *"$needle"* ) ]] && ids+=( "$id" )
+        [[ -n "$id" && ( -z "$needle" || "${(L)id}" == *"${(L)needle}"* ) ]] && ids+=( "$id" )
     done < <(kanban list-ids stories 2>/dev/null)
     while IFS= read -r id; do
-        [[ -n "$id" && ( -z "$needle" || "$id" == *"$needle"* ) ]] && ids+=( "$id" )
+        [[ -n "$id" && ( -z "$needle" || "${(L)id}" == *"${(L)needle}"* ) ]] && ids+=( "$id" )
     done < <(kanban list-ids epics 2>/dev/null)
     compadd -U -a ids
 }
@@ -138,7 +138,7 @@ _kanban_epic_ids() {
     local id
     local needle="$PREFIX"
     while IFS= read -r id; do
-        [[ -n "$id" && ( -z "$needle" || "$id" == *"$needle"* ) ]] && ids+=( "$id" )
+        [[ -n "$id" && ( -z "$needle" || "${(L)id}" == *"${(L)needle}"* ) ]] && ids+=( "$id" )
     done < <(kanban list-ids epics 2>/dev/null)
     compadd -U -a ids
 }
@@ -390,8 +390,16 @@ pub(crate) fn enhance_zsh_completion(script: &str) -> String {
             "'--lines=[Only print the last N log lines.]:N:_default'",
             "'--lines=[Only print the last N log lines.]:N:'",
         );
-    format!("{enhanced}{ZSH_DYNAMIC_HELPERS}")
+    format!("{enhanced}{ZSH_DYNAMIC_HELPERS}{ZSH_KB_ALIAS_REGISTRATION}")
 }
+
+/// Register the documented `kb` alias for the same completion function as `kanban`.
+/// Appended after the clap_complete-generated `compdef _kanban kanban` registration.
+pub(crate) const ZSH_KB_ALIAS_REGISTRATION: &str = r#"
+if [ "$funcstack[1]" != "_kanban" ]; then
+    compdef _kanban kb
+fi
+"#;
 
 /// Inject dynamic completion into a single bash case block identified by its label and opts string.
 /// Inserts a story/sprint lookup BEFORE the standard opts fallback at the given word position.
@@ -1066,7 +1074,53 @@ pub(crate) fn enhance_bash_completion(script: &str) -> String {
     let script = inject_bash_doctor_fix_target(&script);
     let script = inject_bash_config_get(&script);
     let script = inject_bash_config_set(&script);
-    inject_bash_web_log(&script)
+    let script = inject_bash_web_log(&script);
+    let script = make_bash_id_matches_case_insensitive(&script);
+    let script = append_bash_ci_helper(&script);
+    append_bash_kb_alias(&script)
+}
+
+/// Shared bash helper appended to the completion script. Returns success when
+/// `$1` contains `$2` as a case-insensitive substring (empty needle matches all).
+/// Uses `tr` so it works on bash 3.2 (the macOS system bash) as well as bash 4+.
+pub(crate) const BASH_CI_MATCH_HELPER: &str = r#"
+# Case-insensitive substring match used by kanban dynamic ID completions.
+_kanban_ci_match() {
+    local hay needle
+    needle="$2"
+    [[ -z "$needle" ]] && return 0
+    hay=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    needle=$(printf '%s' "$needle" | tr '[:upper:]' '[:lower:]')
+    [[ "$hay" == *"$needle"* ]]
+}
+"#;
+
+/// Rewrite the prefix/substring ID match used by the injected dynamic loops so
+/// it matches case-insensitively. The matched idiom is identical across every
+/// injected story/epic/task lookup, so a single replacement covers them all.
+pub(crate) fn make_bash_id_matches_case_insensitive(script: &str) -> String {
+    script.replace(
+        r#"[[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )"#,
+        r#"{ [[ -n "$id" ]] && _kanban_ci_match "$id" "${cur}"; } && matches+=( "$id" )"#,
+    )
+}
+
+/// Append the shared case-insensitive match helper to the bash script.
+pub(crate) fn append_bash_ci_helper(script: &str) -> String {
+    format!("{script}{BASH_CI_MATCH_HELPER}")
+}
+
+/// Register the documented `kb` alias for the same completion function as
+/// `kanban`, mirroring clap_complete's bash-version-aware `complete` call.
+pub(crate) fn append_bash_kb_alias(script: &str) -> String {
+    let registration = r#"
+if [[ "${BASH_VERSINFO[0]}" -eq 4 && "${BASH_VERSINFO[1]}" -ge 4 || "${BASH_VERSINFO[0]}" -gt 4 ]]; then
+    complete -F _kanban -o nosort -o bashdefault -o default kb
+else
+    complete -F _kanban -o bashdefault -o default kb
+fi
+"#;
+    format!("{script}{registration}")
 }
 
 #[allow(dead_code)]
