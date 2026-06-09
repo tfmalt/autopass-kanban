@@ -417,6 +417,40 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
         }
         Command::Task {
             command:
+                TaskCommand::Show {
+                    story_id,
+                    repo_root,
+                },
+        } => {
+            let root = match load_kanban_config(repo_root) {
+                Ok(c) => c.repo_root,
+                Err(e) => {
+                    return print_envelope(&JsonEnvelope::<TaskShowDto>::error(
+                        "task.show",
+                        KanbanErrorBody::new(KanbanErrorCode::NotInitialized, e.to_string()),
+                    ));
+                }
+            };
+            match list_tasks_for_story(&root, story_id) {
+                Ok(Some(result)) => print_envelope(&JsonEnvelope::ok(
+                    "task.show",
+                    TaskShowDto::from_result(&result, &root),
+                )),
+                Ok(None) => print_envelope(&JsonEnvelope::<TaskShowDto>::error(
+                    "task.show",
+                    KanbanErrorBody::new(
+                        KanbanErrorCode::StoryNotFound,
+                        format!("Story not found: {story_id}"),
+                    ),
+                )),
+                Err(e) => print_envelope(&JsonEnvelope::<TaskShowDto>::error(
+                    "task.show",
+                    KanbanErrorBody::from_anyhow(&e),
+                )),
+            }
+        }
+        Command::Task {
+            command:
                 TaskCommand::Add {
                     story_id,
                     title,
@@ -482,6 +516,34 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
                 )),
                 Err(e) => print_envelope(&JsonEnvelope::<TaskMutationDto>::error(
                     "task.update",
+                    KanbanErrorBody::from_anyhow(&e),
+                )),
+            }
+        }
+        Command::Task {
+            command:
+                TaskCommand::Delete {
+                    story_id,
+                    task_id,
+                    repo_root,
+                },
+        } => {
+            let root = match load_kanban_config(repo_root) {
+                Ok(c) => c.repo_root,
+                Err(e) => {
+                    return print_envelope(&JsonEnvelope::<TaskMutationDto>::error(
+                        "task.delete",
+                        KanbanErrorBody::new(KanbanErrorCode::NotInitialized, e.to_string()),
+                    ));
+                }
+            };
+            match delete_task_from_story(&root, story_id, task_id) {
+                Ok(result) => print_envelope(&JsonEnvelope::ok(
+                    "task.delete",
+                    TaskMutationDto::from_result(&result, &root),
+                )),
+                Err(e) => print_envelope(&JsonEnvelope::<TaskMutationDto>::error(
+                    "task.delete",
                     KanbanErrorBody::from_anyhow(&e),
                 )),
             }
@@ -704,23 +766,39 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
         Command::Completion { target } => {
             print_envelope(&JsonEnvelope::ok("completion", completion_output(*target)))
         }
-        Command::Report {
-            command: ReportCommand::Wbs { repo_root },
-        } => {
+        Command::Report { command } => {
+            let repo_root = match command {
+                ReportCommand::Wbs { repo_root } | ReportCommand::Forecast { repo_root } => {
+                    repo_root
+                }
+            };
             let stories_result = list_all_stories(repo_root);
             let sprints_result = summarize_sprints(repo_root);
             let current = summarize_current_sprint(repo_root)
                 .ok()
                 .map(|s| s.sprint_name);
-            match (stories_result, sprints_result) {
-                (Ok(stories), Ok(sprints)) => {
+            match (stories_result, sprints_result, command) {
+                (Ok(stories), Ok(sprints), ReportCommand::Wbs { .. }) => {
                     let dto = ReportWbsDto::build(&stories, &sprints, current.as_deref());
                     print_envelope(&JsonEnvelope::ok("report.wbs", dto))
                 }
-                (Err(e), _) | (_, Err(e)) => print_envelope(&JsonEnvelope::<ReportWbsDto>::error(
-                    "report.wbs",
-                    KanbanErrorBody::from_anyhow(&e),
-                )),
+                (Ok(stories), Ok(sprints), ReportCommand::Forecast { .. }) => {
+                    let dto = ReportForecastDto::build(&stories, &sprints, current.as_deref());
+                    print_envelope(&JsonEnvelope::ok("report.forecast", dto))
+                }
+                (Err(e), _, ReportCommand::Wbs { .. }) | (_, Err(e), ReportCommand::Wbs { .. }) => {
+                    print_envelope(&JsonEnvelope::<ReportWbsDto>::error(
+                        "report.wbs",
+                        KanbanErrorBody::from_anyhow(&e),
+                    ))
+                }
+                (Err(e), _, ReportCommand::Forecast { .. })
+                | (_, Err(e), ReportCommand::Forecast { .. }) => {
+                    print_envelope(&JsonEnvelope::<ReportForecastDto>::error(
+                        "report.forecast",
+                        KanbanErrorBody::from_anyhow(&e),
+                    ))
+                }
             }
         }
         Command::ListIds { kind, repo_root } => {

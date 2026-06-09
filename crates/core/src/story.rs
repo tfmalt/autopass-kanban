@@ -165,7 +165,10 @@ pub fn plan_story_into_sprint(
         .get("status")
         .map(String::as_str)
         .unwrap_or_default();
-    let new_status = if matches!(current_status, "" | "draft" | "ready") {
+    let current_status_normalized = normalize_status_alias(current_status);
+    let new_status = if current_status.is_empty()
+        || matches!(current_status_normalized.as_str(), "draft" | "ready")
+    {
         "todo"
     } else {
         current_status
@@ -203,7 +206,7 @@ pub fn add_task_to_story(
     description: &str,
 ) -> Result<TaskMutationResult> {
     let repository = read_repository(repo_root)?;
-    let story = find_sprint_story_for_write(&repository, story_id)?;
+    let story = find_story_for_write(&repository, story_id)?;
     let empty_task_file;
     let task_file = if let Some(task_file) = story.task_file.as_ref() {
         task_file
@@ -223,7 +226,25 @@ pub fn add_task_to_story(
     };
     let task_id = next_task_id(story, task_file);
     let normalized_status = normalize_task_status_for_write(status)?;
-    let markdown = task_file.markdown.as_deref().unwrap_or_default();
+    let initial_markdown;
+    let markdown = if let Some(markdown) = task_file.markdown.as_deref() {
+        markdown
+    } else {
+        initial_markdown = render_empty_task_file(
+            story
+                .frontmatter
+                .get("id")
+                .map(String::as_str)
+                .unwrap_or(story_id),
+            story
+                .frontmatter
+                .get("sprint")
+                .filter(|sprint| !sprint.trim().is_empty())
+                .map(String::as_str)
+                .unwrap_or("~"),
+        );
+        initial_markdown.as_str()
+    };
     let updated = append_task_markdown(
         markdown,
         &task_id,
@@ -263,11 +284,11 @@ pub fn update_task_in_story(
     description: Option<&str>,
 ) -> Result<TaskMutationResult> {
     let repository = read_repository(repo_root)?;
-    let story = find_sprint_story_for_write(&repository, story_id)?;
+    let story = find_story_for_write(&repository, story_id)?;
     let task_file = story
         .task_file
         .as_ref()
-        .ok_or_else(|| anyhow!("Sprint story is missing task_file frontmatter."))?;
+        .ok_or_else(|| anyhow!("Task file does not exist for story {}.", story_id))?;
     let markdown = task_file
         .markdown
         .as_deref()
@@ -299,6 +320,66 @@ pub fn update_task_in_story(
         task_file_path: relative_path(&repository.repo_root, &task_file_path),
         task,
     })
+}
+
+pub fn delete_task_from_story(
+    repo_root: impl AsRef<Path>,
+    story_id: &str,
+    task_id: &str,
+) -> Result<TaskMutationResult> {
+    let repository = read_repository(repo_root)?;
+    let story = find_story_for_write(&repository, story_id)?;
+    let task_file = story
+        .task_file
+        .as_ref()
+        .ok_or_else(|| anyhow!("Task file does not exist for story {}.", story_id))?;
+    let markdown = task_file
+        .markdown
+        .as_deref()
+        .ok_or_else(|| anyhow!("Task file does not exist for story {}.", story_id))?;
+    let normalized_task_id = task_id.trim().to_ascii_uppercase();
+    let tasks = parse_task_markdown(markdown);
+    let removed = tasks
+        .iter()
+        .find(|task| task.id.eq_ignore_ascii_case(&normalized_task_id))
+        .cloned()
+        .ok_or_else(|| anyhow!("Task not found: {normalized_task_id}"))?;
+    let remaining = tasks
+        .into_iter()
+        .filter(|task| !task.id.eq_ignore_ascii_case(&normalized_task_id))
+        .collect::<Vec<_>>();
+    let story_id_value = story.frontmatter.get("id").cloned().unwrap_or_default();
+    let sprint_name = story
+        .frontmatter
+        .get("sprint")
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "~".to_string());
+    let updated = render_task_file(&story_id_value, &sprint_name, &remaining);
+    let task_file_path = task_file.file_path.clone();
+    fs::write(&task_file_path, updated)
+        .with_context(|| format!("write task file {}", task_file_path.display()))?;
+
+    Ok(TaskMutationResult {
+        story_id: story_id_value,
+        task_id: normalized_task_id,
+        task_file_path: relative_path(&repository.repo_root, &task_file_path),
+        task: removed,
+    })
+}
+
+pub fn list_tasks_for_story(
+    repo_root: impl AsRef<Path>,
+    story_id: &str,
+) -> Result<Option<TaskListResult>> {
+    let repo_root = repo_root.as_ref();
+    let details = find_story(repo_root, story_id)?;
+    Ok(details.map(|details| TaskListResult {
+        story_id: details.story.id,
+        task_file_path: details.task_file_path,
+        task_summary: details.story.task_summary,
+        tasks: details.tasks,
+    }))
 }
 
 pub fn story_markdown_file(repo_root: impl AsRef<Path>, story_id: &str) -> Result<StoryFileResult> {
@@ -502,28 +583,6 @@ pub(crate) fn normalize_task_status_for_write(status: &str) -> Result<String> {
     }
 }
 
-pub(crate) fn find_sprint_story_for_write<'a>(
-    repository: &'a Repository,
-    story_id: &str,
-) -> Result<&'a Story> {
-    let normalized_story_id = story_id.trim().to_ascii_uppercase();
-    repository
-        .stories
-        .iter()
-        .find(|story| {
-            story
-                .frontmatter
-                .get("id")
-                .map(|id| id.eq_ignore_ascii_case(&normalized_story_id))
-                .unwrap_or(false)
-                && story
-                    .frontmatter
-                    .get("sprint")
-                    .is_some_and(|sprint| !sprint.trim().is_empty() && sprint.as_str() != "~")
-        })
-        .ok_or_else(|| anyhow!("Sprint story not found: {normalized_story_id}"))
-}
-
 pub(crate) fn find_story_for_write<'a>(
     repository: &'a Repository,
     story_id: &str,
@@ -624,6 +683,12 @@ mod tests {
         assert!(markdown.contains("status: ready"));
         assert!(markdown.contains("story_points: 5"));
         assert!(markdown.contains("assignee: TBD"));
+    }
+
+    #[test]
+    fn normalize_story_status_input_treats_backlog_as_ready() {
+        assert_eq!(normalize_story_status_input("backlog").unwrap(), "ready");
+        assert_eq!(normalize_story_status_input("Backlog").unwrap(), "ready");
     }
 
     #[test]
@@ -1035,8 +1100,9 @@ mod tests {
         );
         fs::write(
             story_path.with_extension("tasks.md"),
-            "# Tasks for US-F1-053\n\nParent User Story: US-F1-053\nSprint: S001.foundation\n\n---\n",
-        ).unwrap();
+            "# Tasks for US-F1-053\n\nParent User Story: US-F1-053\nSprint: S001.foundation\n",
+        )
+        .unwrap();
 
         let add_result = add_task_to_story(
             temp_root.path(),
@@ -1064,7 +1130,113 @@ mod tests {
         .unwrap();
         let updated_markdown =
             fs::read_to_string(temp_root.path().join(add_result.task_file_path)).unwrap();
-        assert!(updated_markdown.contains("Status: Done"));
+        assert!(updated_markdown.contains("Status: done"));
         assert!(updated_markdown.contains("Completed command coverage."));
+    }
+
+    #[test]
+    fn task_add_does_not_duplicate_separator_when_appending() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-057-complete-kanban-cli-task-crud-for-story-task-logs.md",
+            "id: US-F1-057\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nassignee: TBD\nstory_points: 1\nwork_started:\nwork_done:\ncreated: 2026-06-09T10:18:05+0200\nupdated: 2026-06-09T10:18:05+0200\n",
+        );
+
+        add_task_to_story(
+            temp_root.path(),
+            "US-F1-057",
+            "First task",
+            "todo",
+            &[],
+            "First.",
+        )
+        .unwrap();
+
+        add_task_to_story(
+            temp_root.path(),
+            "US-F1-057",
+            "Second task",
+            "todo",
+            &[],
+            "Second.",
+        )
+        .unwrap();
+
+        let task_markdown = fs::read_to_string(story_path.with_extension("tasks.md")).unwrap();
+        assert!(!task_markdown.contains("\n\n---\n\n---\n\n"));
+        assert!(task_markdown.contains("## TASK-US-F1-057-001 - First task"));
+        assert!(task_markdown.contains("## TASK-US-F1-057-002 - Second task"));
+    }
+
+    #[test]
+    fn task_add_creates_sibling_task_file_for_backlog_story() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-057-complete-kanban-cli-task-crud-for-story-task-logs.md",
+            "id: US-F1-057\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nassignee: TBD\nstory_points: 1\nwork_started:\nwork_done:\ncreated: 2026-06-09T10:18:05+0200\nupdated: 2026-06-09T10:18:05+0200\n",
+        );
+
+        let add_result = add_task_to_story(
+            temp_root.path(),
+            "US-F1-057",
+            "Plan taskable backlog stories",
+            "todo",
+            &["cli".to_string()],
+            "Add task planning before sprint assignment.",
+        )
+        .unwrap();
+
+        assert_eq!(add_result.story_id, "US-F1-057");
+        assert_eq!(add_result.task_id, "TASK-US-F1-057-001");
+        assert_eq!(
+            temp_root.path().join(&add_result.task_file_path),
+            story_path.with_extension("tasks.md")
+        );
+        let task_markdown = fs::read_to_string(story_path.with_extension("tasks.md")).unwrap();
+        assert!(task_markdown.contains("# Tasks for US-F1-057"));
+        assert!(task_markdown.contains("Sprint: ~"));
+        assert!(task_markdown.contains("## TASK-US-F1-057-001 - Plan taskable backlog stories"));
+    }
+
+    #[test]
+    fn task_delete_removes_matching_task_and_keeps_remaining_tasks() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-057-complete-kanban-cli-task-crud-for-story-task-logs.md",
+            "id: US-F1-057\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nassignee: TBD\nstory_points: 1\nwork_started:\nwork_done:\ncreated: 2026-06-09T10:18:05+0200\nupdated: 2026-06-09T10:18:05+0200\n",
+        );
+
+        add_task_to_story(
+            temp_root.path(),
+            "US-F1-057",
+            "First task",
+            "todo",
+            &[],
+            "First.",
+        )
+        .unwrap();
+        add_task_to_story(
+            temp_root.path(),
+            "US-F1-057",
+            "Second task",
+            "todo",
+            &[],
+            "Second.",
+        )
+        .unwrap();
+
+        let removed =
+            delete_task_from_story(temp_root.path(), "US-F1-057", "TASK-US-F1-057-001").unwrap();
+        let task_markdown = fs::read_to_string(story_path.with_extension("tasks.md")).unwrap();
+
+        assert_eq!(removed.task_id, "TASK-US-F1-057-001");
+        assert!(!task_markdown.contains("## TASK-US-F1-057-001 - First task"));
+        assert!(task_markdown.contains("## TASK-US-F1-057-002 - Second task"));
     }
 }

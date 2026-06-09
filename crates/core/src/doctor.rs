@@ -119,18 +119,32 @@ pub fn apply_doctor_fix(
         }
         rule if rule.starts_with("invalid-timestamp:") => {
             let field_name = rule.trim_start_matches("invalid-timestamp:");
-            let date_only_timestamp =
-                date_only_timestamp_from_issue_or_file(issue, input, &absolute_path, field_name)?;
-            let corrected_date_only = date_only_timestamp.is_some();
-            let timestamp = date_only_timestamp.unwrap_or(doctor_timestamp_input(input)?);
+            let automatic_fix = automatic_timestamp_fix_from_issue_or_file(
+                issue,
+                input,
+                &absolute_path,
+                field_name,
+            )?;
+            let corrected_kind = automatic_fix.as_ref().map(|fix| fix.kind());
+            let corrected_zulu_input = input
+                .value
+                .as_deref()
+                .is_some_and(|value| zulu_timestamp(value).is_some());
+            let timestamp = automatic_fix
+                .map(|fix| fix.timestamp().to_string())
+                .unwrap_or(doctor_timestamp_input(input)?);
             upsert_story_frontmatter_file(
                 &absolute_path,
                 &[(field_name, Some(timestamp.clone()))],
             )?;
             Ok(DoctorFixResult {
-                message: if corrected_date_only {
+                message: if corrected_kind == Some("date-only") {
                     format!(
                         "INFO: Corrected {field_name} to date-only midnight timestamp {timestamp}."
+                    )
+                } else if corrected_kind == Some("Zulu") || corrected_zulu_input {
+                    format!(
+                        "INFO: Corrected {field_name} from Zulu timestamp to local timestamp {timestamp}."
                     )
                 } else {
                     format!("Set {field_name} to {timestamp}.")
@@ -160,6 +174,37 @@ pub fn apply_doctor_fix(
                     file_path.clone(),
                     relative_path(&repo_root, &task_file_path),
                 ],
+            })
+        }
+        "legacy-task-file-format" => {
+            let story_file_name = absolute_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(|value| format!("{}.md", value.trim_end_matches(TASK_FILE_SUFFIX)))
+                .ok_or_else(|| {
+                    anyhow!("Cannot determine story file for {}", file_path.display())
+                })?;
+            let story_path = absolute_path.with_file_name(story_file_name);
+            let story = read_story_file(&story_path, &repo_root)?;
+            let task_file = story
+                .task_file
+                .as_ref()
+                .ok_or_else(|| anyhow!("Story is missing task file metadata."))?;
+            let story_id = story.frontmatter.get("id").cloned().unwrap_or_default();
+            let sprint_name = story
+                .frontmatter
+                .get("sprint")
+                .cloned()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "~".to_string());
+            fs::write(
+                &task_file.file_path,
+                render_task_file(&story_id, &sprint_name, &task_file.tasks),
+            )
+            .with_context(|| format!("write task file {}", task_file.file_path.display()))?;
+            Ok(DoctorFixResult {
+                message: "Rewrote task file to canonical heading-delimited format.".to_string(),
+                touched_paths: vec![file_path.clone()],
             })
         }
         rule if rule.starts_with("missing-sprint-readme-field:") => {
@@ -308,6 +353,32 @@ pub(crate) fn collect_doctor_issues_at_date(
         ));
     }
 
+    for story in &repository.stories {
+        let Some(task_file) = &story.task_file else {
+            continue;
+        };
+        let Some(markdown) = task_file.markdown.as_deref() else {
+            continue;
+        };
+        if !task_file_uses_legacy_separators(markdown) {
+            continue;
+        }
+
+        findings.push(DoctorIssue {
+            severity: "info".to_string(),
+            scope: task_file.relative_path.display().to_string(),
+            file_path: Some(task_file.relative_path.clone()),
+            story_id: story.frontmatter.get("id").cloned(),
+            sprint_name: story.sprint_name.clone(),
+            rule: "legacy-task-file-format".to_string(),
+            message: "Task file uses legacy `---` separators that can be mistaken for Markdown/YAML frontmatter fences by generic tooling.".to_string(),
+            suggestion: "Run doctor fix to rewrite the task file to the canonical heading-delimited format.".to_string(),
+            fix_preview: None,
+            fix_kind: DoctorFixKind::Automatic,
+            prompt: DoctorPrompt::None,
+        });
+    }
+
     let sprint_names = sprint_specs
         .iter()
         .map(|spec| spec.sprint_name.clone())
@@ -439,7 +510,7 @@ pub(crate) fn doctor_issue_from_validation(
 ) -> DoctorIssue {
     let (suggestion, fix_kind, prompt) = doctor_suggestion_for_validation(repo_root, story, issue);
     let fix_preview = doctor_fix_preview_for_validation(repo_root, story, issue);
-    let severity = if date_only_timestamp_issue(story, issue) {
+    let severity = if automatic_timestamp_issue(story, issue) {
         "info"
     } else {
         "error"
@@ -478,7 +549,9 @@ pub(crate) fn doctor_fix_preview_for_validation(
         rule if rule.starts_with("invalid-timestamp:") => {
             let field_name = rule.trim_start_matches("invalid-timestamp:");
             let old_value = story.frontmatter.get(field_name)?;
-            let new_value = date_only_timestamp(old_value).unwrap_or_else(current_timestamp_string);
+            let new_value = automatic_timestamp_fix(old_value)
+                .map(|fix| fix.timestamp().to_string())
+                .unwrap_or_else(current_timestamp_string);
             frontmatter_fix_preview(story, field_name, new_value)
         }
         "sprint-name-mismatch" => {
@@ -504,13 +577,13 @@ pub(crate) fn frontmatter_fix_preview(
     })
 }
 
-pub(crate) fn date_only_timestamp_issue(story: Option<&Story>, issue: &ValidationIssue) -> bool {
+pub(crate) fn automatic_timestamp_issue(story: Option<&Story>, issue: &ValidationIssue) -> bool {
     let Some(field_name) = issue.rule.strip_prefix("invalid-timestamp:") else {
         return false;
     };
     story
         .and_then(|story| story.frontmatter.get(field_name))
-        .and_then(|value| date_only_timestamp(value))
+        .and_then(|value| automatic_timestamp_fix(value))
         .is_some()
 }
 
@@ -540,15 +613,16 @@ pub(crate) fn doctor_suggestion_for_validation(
         ),
         rule if rule.starts_with("invalid-timestamp:") => {
             let field_name = rule.trim_start_matches("invalid-timestamp:");
-            if story
+            if let Some(fix) = story
                 .and_then(|story| story.frontmatter.get(field_name))
-                .and_then(|value| date_only_timestamp(value))
-                .is_some()
+                .and_then(|value| automatic_timestamp_fix(value))
             {
+                let source = match fix {
+                    DoctorTimestampFix::DateOnly(_) => "`YYYY-MM-DD` to local midnight timestamp",
+                    DoctorTimestampFix::Zulu(_) => "Zulu timestamp to local timestamp",
+                };
                 (
-                    format!(
-                        "Normalize `{field_name}` from `YYYY-MM-DD` to local midnight timestamp."
-                    ),
+                    format!("Normalize `{field_name}` from {source}."),
                     DoctorFixKind::Automatic,
                     DoctorPrompt::None,
                 )
@@ -565,6 +639,12 @@ pub(crate) fn doctor_suggestion_for_validation(
         }
         "missing-task-file" => (
             "Create the referenced sibling `.tasks.md` file with the standard task log header."
+                .to_string(),
+            DoctorFixKind::Automatic,
+            DoctorPrompt::None,
+        ),
+        "legacy-task-file-format" => (
+            "Rewrite the task file to the canonical heading-delimited format with no `---` separators."
                 .to_string(),
             DoctorFixKind::Automatic,
             DoctorPrompt::None,
@@ -761,6 +841,9 @@ pub(crate) fn doctor_findings_for_sprint(
 
 pub(crate) fn doctor_timestamp_input(input: &DoctorFixInput) -> Result<String> {
     let timestamp = input.value.clone().unwrap_or_else(current_timestamp_string);
+    if let Some(normalized) = zulu_timestamp(&timestamp) {
+        return Ok(normalized);
+    }
     validate_doctor_timestamp(&timestamp)?;
     Ok(timestamp)
 }
@@ -779,6 +862,9 @@ pub(crate) fn doctor_timestamp_input_with_preview(
                 .map(|preview| preview.new_value.clone())
         })
         .unwrap_or_else(current_timestamp_string);
+    if let Some(normalized) = zulu_timestamp(&timestamp) {
+        return Ok(normalized);
+    }
     validate_doctor_timestamp(&timestamp)?;
     Ok(timestamp)
 }
@@ -792,24 +878,64 @@ pub(crate) fn validate_doctor_timestamp(timestamp: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn date_only_timestamp_from_issue_or_file(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DoctorTimestampFix {
+    DateOnly(String),
+    Zulu(String),
+}
+
+impl DoctorTimestampFix {
+    pub(crate) fn timestamp(&self) -> &str {
+        match self {
+            DoctorTimestampFix::DateOnly(timestamp) | DoctorTimestampFix::Zulu(timestamp) => {
+                timestamp
+            }
+        }
+    }
+
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            DoctorTimestampFix::DateOnly(_) => "date-only",
+            DoctorTimestampFix::Zulu(_) => "Zulu",
+        }
+    }
+}
+
+pub(crate) fn automatic_timestamp_fix(value: &str) -> Option<DoctorTimestampFix> {
+    date_only_timestamp(value)
+        .map(DoctorTimestampFix::DateOnly)
+        .or_else(|| zulu_timestamp(value).map(DoctorTimestampFix::Zulu))
+}
+
+pub(crate) fn automatic_timestamp_fix_from_issue_or_file(
     issue: &DoctorIssue,
     input: &DoctorFixInput,
     file_path: &Path,
     field_name: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<DoctorTimestampFix>> {
     if input.value.is_some() {
         return Ok(None);
     }
 
     if let Some(preview) = &issue.fix_preview
         && preview.field_name == field_name
-        && date_only_timestamp(&preview.old_value).is_some()
+        && let Some(fix) = automatic_timestamp_fix(&preview.old_value)
     {
-        return Ok(Some(preview.new_value.clone()));
+        return Ok(Some(match fix {
+            DoctorTimestampFix::DateOnly(_) => {
+                DoctorTimestampFix::DateOnly(preview.new_value.clone())
+            }
+            DoctorTimestampFix::Zulu(_) => DoctorTimestampFix::Zulu(preview.new_value.clone()),
+        }));
     }
 
-    date_only_timestamp_from_file(file_path, field_name)
+    let markdown = fs::read_to_string(file_path)
+        .with_context(|| format!("read story file {}", file_path.display()))?;
+    let parsed = parse_frontmatter(&markdown);
+    Ok(parsed
+        .frontmatter
+        .get(field_name)
+        .and_then(|value| automatic_timestamp_fix(value)))
 }
 
 pub(crate) fn doctor_prompt_for_readme_field(
@@ -939,6 +1065,58 @@ mod tests {
     }
 
     #[test]
+    fn doctor_fix_normalizes_zulu_timestamp_to_local_timestamp() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let zulu = "2026-05-28T12:05:54.123Z";
+        let expected = zulu_timestamp(zulu).unwrap();
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-054-zulu-work-started.md",
+            &format!(
+                "id: US-F1-054\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: Test User <test@example.com>\nstory_points: 5\nwork_started: {zulu}\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n"
+            ),
+        );
+
+        let issue = collect_doctor_issues_for_story(temp_root.path(), "US-F1-054")
+            .unwrap()
+            .into_iter()
+            .find(|issue| issue.rule == "invalid-timestamp:work_started")
+            .unwrap();
+        let result =
+            apply_doctor_fix(temp_root.path(), &issue, &DoctorFixInput::default()).unwrap();
+        let updated = fs::read_to_string(&story_path).unwrap();
+
+        assert_eq!(issue.severity, "info");
+        assert!(matches!(issue.fix_kind, DoctorFixKind::Automatic));
+        assert!(
+            result
+                .message
+                .contains("INFO: Corrected work_started from Zulu timestamp")
+        );
+        assert!(updated.contains(&format!("work_started: {expected}")));
+    }
+
+    #[test]
+    fn doctor_does_not_report_null_work_done_for_unfinished_story() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-055-null-work-done.md",
+            "id: US-F1-055\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: ~\nstory_points: 5\nwork_started:\nwork_done: null\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let issues = collect_doctor_issues_for_story(temp_root.path(), "US-F1-055").unwrap();
+
+        assert!(
+            issues
+                .iter()
+                .all(|issue| issue.rule != "invalid-timestamp:work_done")
+        );
+    }
+
+    #[test]
     fn doctor_reports_sprint_status_disagreement_with_current_dates() {
         let temp_root = tempdir().unwrap();
         init_temp_repo(temp_root.path());
@@ -1021,5 +1199,58 @@ mod tests {
 
         assert!(result.message.contains("Set assignee"));
         assert!(updated.contains("assignee: Test User <test@example.com>"));
+    }
+
+    #[test]
+    fn doctor_reports_and_fixes_legacy_task_file_format() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-057-task-file-format.md",
+            "id: US-F1-057\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nassignee: TBD\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-06-09T10:18:05+0200\nupdated: 2026-06-09T10:18:05+0200\n",
+        );
+        let task_path = story_path.with_extension("tasks.md");
+        fs::write(
+            &task_path,
+            "# Tasks for US-F1-057\n\nParent User Story: US-F1-057\nSprint: ~\n\n---\n\n## TASK-US-F1-057-001 - First task\n\nStatus: To Do\nTags: cli\n\nDescription:\nFirst.\n\n---\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(&story_path, temp_root.path()).unwrap();
+        let task_file = story.task_file.as_ref().expect("task file should be read");
+        assert!(
+            task_file_uses_legacy_separators(task_file.markdown.as_deref().unwrap()),
+            "task file should be detected as legacy format"
+        );
+
+        let issues = collect_doctor_issues(temp_root.path()).unwrap();
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.rule == "legacy-task-file-format"),
+            "expected legacy task file issue, got: {:?}",
+            issues
+                .iter()
+                .map(|issue| issue.rule.as_str())
+                .collect::<Vec<_>>()
+        );
+        let issue = issues
+            .into_iter()
+            .find(|issue| issue.rule == "legacy-task-file-format")
+            .unwrap();
+
+        let result =
+            apply_doctor_fix(temp_root.path(), &issue, &DoctorFixInput::default()).unwrap();
+        let updated = fs::read_to_string(&task_path).unwrap();
+
+        assert!(
+            result
+                .message
+                .contains("canonical heading-delimited format")
+        );
+        assert!(updated.starts_with("# Tasks for US-F1-057\n\nParent User Story: US-F1-057\nSprint: ~\n\n## TASK-US-F1-057-001 - First task"));
+        assert!(!updated.contains("\n---\n"));
+        assert!(updated.contains("Status: todo"));
     }
 }

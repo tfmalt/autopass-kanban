@@ -14,8 +14,9 @@ pub(crate) const REQUIRED_STORY_FIELDS: [&str; 10] = [
     "updated",
 ];
 
-pub(crate) const CANONICAL_STORY_STATUSES: [&str; 8] = [
+pub(crate) const CANONICAL_STORY_STATUSES: [&str; 9] = [
     "draft",
+    "backlog",
     "ready",
     "todo",
     "in-progress",

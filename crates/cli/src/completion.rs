@@ -83,6 +83,7 @@ _kanban_story_update_statuses() {
     local -a statuses
     statuses=(
         draft
+        backlog
         ready
         todo
         in-progress
@@ -156,6 +157,7 @@ _kanban_story_statuses() {
     local -a statuses
     statuses=(
         draft
+        backlog
         ready
         todo
         in-progress
@@ -279,8 +281,8 @@ pub(crate) fn enhance_zsh_completion(script: &str) -> String {
         )
         // Story move status argument
         .replace(
-            "':status -- Target status, for example todo, in-progress, ready-for-qa, done, or blocked.:_default'",
-            "':status -- Target status, for example todo, in-progress, ready-for-qa, done, or blocked.:_kanban_story_statuses'",
+            "':status -- Target status, for example backlog, ready, todo, in-progress, ready-for-qa, done, or blocked.:_default'",
+            "':status -- Target status, for example backlog, ready, todo, in-progress, ready-for-qa, done, or blocked.:_kanban_story_statuses'",
         )
         .replace(
             r#"'-a+[Override assignee when moving to in-progress. Use \`Name <email>\` or a comma-separated list of assignees; invalid values fail before files are moved.]:NAME <EMAIL>:_default'"#,
@@ -886,7 +888,7 @@ pub(crate) fn inject_bash_story_plan(script: &str) -> String {
 pub(crate) fn inject_bash_story_move_status(script: &str) -> String {
     let replacement = r#"        kanban__subcmd__story__subcmd__move)
              opts="-a -h --assignee --format --help <ID> <STATUS> [REPO_ROOT]"
-             story_statuses="draft ready todo in-progress ready-for-qa blocked done dropped"
+             story_statuses="draft backlog ready todo in-progress ready-for-qa blocked done dropped"
               if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
                   local -a matches=()
                   local id
@@ -1230,7 +1232,7 @@ pub(crate) fn inject_bash_story_update(script: &str) -> String {
                     return 0
                     ;;
                 --status)
-                    COMPREPLY=( $(compgen -W "draft ready todo in-progress ready-for-qa blocked done dropped" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "draft backlog ready todo in-progress ready-for-qa blocked done dropped" -- "${cur}") )
                     return 0
                     ;;
                 --epic)
@@ -1344,7 +1346,7 @@ pub(crate) fn inject_bash_story_update_dynamic(script: &str) -> String {
                     return 0
                     ;;
                 --status)
-                    COMPREPLY=( $(compgen -W "draft ready todo in-progress ready-for-qa blocked done dropped" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "draft backlog ready todo in-progress ready-for-qa blocked done dropped" -- "${cur}") )
                     return 0
                     ;;
                 --epic)

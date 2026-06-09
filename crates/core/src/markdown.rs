@@ -103,6 +103,29 @@ pub fn parse_task_markdown(markdown: &str) -> Vec<Task> {
     tasks
 }
 
+pub(crate) fn task_file_uses_legacy_separators(markdown: &str) -> bool {
+    markdown.lines().any(|line| line.trim() == "---")
+}
+
+pub(crate) fn render_task_file(story_id: &str, sprint_name: &str, tasks: &[Task]) -> String {
+    let mut output =
+        format!("# Tasks for {story_id}\n\nParent User Story: {story_id}\nSprint: {sprint_name}");
+
+    for task in tasks {
+        output.push_str("\n\n");
+        output.push_str(&render_task_block(
+            &task.id,
+            &task.title,
+            &task.normalized_status,
+            &task.tags,
+            &task.description,
+        ));
+    }
+
+    output.push('\n');
+    output
+}
+
 pub fn create_task_summary(tasks: &[Task]) -> TaskSummary {
     let mut summary = TaskSummary::default();
     for task in tasks {
@@ -239,9 +262,7 @@ pub(crate) fn upsert_story_frontmatter_file(
 }
 
 pub(crate) fn render_empty_task_file(story_id: &str, sprint_name: &str) -> String {
-    format!(
-        "# Tasks for {story_id}\n\nParent User Story: {story_id}\nSprint: {sprint_name}\n\n---\n"
-    )
+    render_task_file(story_id, sprint_name, &[])
 }
 
 pub(crate) fn next_task_id(story: &Story, task_file: &TaskFile) -> String {
@@ -264,20 +285,21 @@ pub(crate) fn append_task_markdown(
     tags: &[String],
     description: &str,
 ) -> String {
-    let mut output = markdown.trim_end().to_string();
-    if !output.is_empty() {
-        output.push_str("\n\n");
-    }
-    output.push_str("---\n\n");
-    output.push_str(&render_task_block(
-        task_id,
-        title,
-        status,
-        tags,
-        description,
-    ));
-    output.push_str("\n\n---\n");
-    output
+    let mut tasks = parse_task_markdown(markdown);
+    let story_id = task_id
+        .strip_prefix("TASK-")
+        .and_then(|value| value.rsplit_once('-').map(|(prefix, _)| prefix))
+        .unwrap_or_default();
+    let sprint_name = capture_line_value(markdown, "Sprint").unwrap_or_else(|| "~".to_string());
+    tasks.push(Task {
+        id: task_id.to_string(),
+        title: title.trim().to_string(),
+        status: display_task_status(status).to_string(),
+        normalized_status: normalize_task_status(status),
+        tags: tags.to_vec(),
+        description: description.trim().to_string(),
+    });
+    render_task_file(story_id, &sprint_name, &tasks)
 }
 
 pub(crate) fn rewrite_task_markdown(
@@ -301,44 +323,57 @@ pub(crate) fn rewrite_task_markdown(
         .collect();
 
     let normalized_task_id = task_id.trim().to_ascii_uppercase();
-    let mut rewritten = String::new();
-    let mut cursor = 0;
     let mut found = false;
+    let file_story_id = capture_line_value(&normalized, "Parent User Story").unwrap_or_default();
+    let sprint_name = capture_line_value(&normalized, "Sprint").unwrap_or_else(|| "~".to_string());
+    let mut rewritten_tasks = Vec::new();
 
-    for (index, (start, block_start, id, existing_title)) in matches.iter().enumerate() {
+    for (index, (_start, block_start, id, existing_title)) in matches.iter().enumerate() {
         let block_end = matches
             .get(index + 1)
             .map(|next| next.0)
             .unwrap_or(normalized.len());
-        rewritten.push_str(&normalized[cursor..*start]);
         let block = &normalized[*block_start..block_end];
+        let existing_status = capture_line_value(block, "Status").unwrap_or_default();
+        let existing_tags = capture_line_value(block, "Tags")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|tag| !tag.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        let existing_description = capture_description(block);
         if id.eq_ignore_ascii_case(&normalized_task_id) {
-            let existing_status = capture_line_value(block, "Status").unwrap_or_default();
-            let existing_tags = capture_line_value(block, "Tags")
-                .unwrap_or_default()
-                .split(',')
-                .map(str::trim)
-                .filter(|tag| !tag.is_empty())
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>();
-            let existing_description = capture_description(block);
-            rewritten.push_str(&render_task_block(
-                id,
-                title.unwrap_or(existing_title),
-                status.unwrap_or(existing_status.trim()),
-                tags.unwrap_or(existing_tags.as_slice()),
-                description.unwrap_or(existing_description.as_str()),
-            ));
+            rewritten_tasks.push(Task {
+                id: id.clone(),
+                title: title.unwrap_or(existing_title).trim().to_string(),
+                status: display_task_status(status.unwrap_or(existing_status.trim())).to_string(),
+                normalized_status: normalize_task_status(status.unwrap_or(existing_status.trim())),
+                tags: tags.unwrap_or(existing_tags.as_slice()).to_vec(),
+                description: description
+                    .unwrap_or(existing_description.as_str())
+                    .trim()
+                    .to_string(),
+            });
             found = true;
         } else {
-            rewritten.push_str(&normalized[*start..block_end]);
+            rewritten_tasks.push(Task {
+                id: id.clone(),
+                title: existing_title.clone(),
+                status: display_task_status(existing_status.trim()).to_string(),
+                normalized_status: normalize_task_status(existing_status.trim()),
+                tags: existing_tags,
+                description: existing_description,
+            });
         }
-        cursor = block_end;
     }
 
-    rewritten.push_str(&normalized[cursor..]);
     if found {
-        Ok(rewritten)
+        Ok(render_task_file(
+            &file_story_id,
+            &sprint_name,
+            &rewritten_tasks,
+        ))
     } else {
         bail!("Task not found: {normalized_task_id}");
     }
@@ -361,12 +396,12 @@ pub(crate) fn render_task_block(
 }
 
 pub(crate) fn display_task_status(status: &str) -> &'static str {
-    match status {
-        "todo" => "To Do",
-        "in-progress" => "In Progress",
-        "blocked" => "Blocked",
-        "done" => "Done",
-        _ => "To Do",
+    match normalize_task_status(status).as_str() {
+        "todo" => "todo",
+        "in-progress" => "in-progress",
+        "blocked" => "blocked",
+        "done" => "done",
+        _ => "todo",
     }
 }
 
@@ -508,6 +543,14 @@ mod tests {
         assert!(updated.contains("## TASK-US-F1-053-001 - First task"));
         assert!(updated.contains("## TASK-US-F1-053-002 - Second task"));
         assert!(updated.contains("## TASK-US-F1-053-003 - Third task"));
-        assert!(updated.contains("Status: Done"));
+        assert!(updated.contains("Status: done"));
+        assert!(updated.contains("Description:\nSecond.\n\n## TASK-US-F1-053-003 - Third task"));
+    }
+
+    #[test]
+    fn display_task_status_normalizes_legacy_labels_to_canonical_keywords() {
+        assert_eq!(display_task_status("To Do"), "todo");
+        assert_eq!(display_task_status("In Progress"), "in-progress");
+        assert_eq!(display_task_status("Done"), "done");
     }
 }

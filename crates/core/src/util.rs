@@ -1,4 +1,3 @@
-use crate::markdown::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 
@@ -7,10 +6,11 @@ pub(crate) fn current_timestamp_string() -> String {
 }
 
 /// Normalize a status string by trimming, lowercasing, and mapping the
-/// spaced human aliases (`to do`, `in progress`) to their canonical
-/// hyphenated forms. Unknown values pass through unchanged.
+/// spaced human aliases (`to do`, `in progress`) and legacy synonyms to their
+/// canonical forms. Unknown values pass through unchanged.
 pub(crate) fn normalize_status_alias(status: &str) -> String {
     match status.trim().to_ascii_lowercase().as_str() {
+        "backlog" => "ready".to_string(),
         "to do" => "todo".to_string(),
         "in progress" => "in-progress".to_string(),
         other => other.to_string(),
@@ -122,17 +122,19 @@ pub(crate) fn date_only_timestamp(value: &str) -> Option<String> {
     Some(local_midnight.format("%Y-%m-%dT%H:%M:%S%z").to_string())
 }
 
-pub(crate) fn date_only_timestamp_from_file(
-    file_path: &Path,
-    field_name: &str,
-) -> Result<Option<String>> {
-    let markdown = fs::read_to_string(file_path)
-        .with_context(|| format!("read story file {}", file_path.display()))?;
-    let parsed = parse_frontmatter(&markdown);
-    Ok(parsed
-        .frontmatter
-        .get(field_name)
-        .and_then(|value| date_only_timestamp(value)))
+pub(crate) fn zulu_timestamp(value: &str) -> Option<String> {
+    let timestamp = value.trim_matches('`').trim();
+    if !timestamp.ends_with('Z') {
+        return None;
+    }
+
+    let parsed = chrono::DateTime::parse_from_rfc3339(timestamp).ok()?;
+    Some(
+        parsed
+            .with_timezone(&Local)
+            .format("%Y-%m-%dT%H:%M:%S%z")
+            .to_string(),
+    )
 }
 
 pub(crate) fn date_in_range(today: NaiveDate, start_date: NaiveDate, end_date: NaiveDate) -> bool {

@@ -360,6 +360,74 @@ pub(crate) fn push_story_tasks_section(
     push_wrapped_table(output, theme, &columns, &rows);
 }
 
+pub(crate) fn render_task_list(
+    theme: &Theme,
+    layout: OutputLayout,
+    story_id: &str,
+    task_file_path: Option<&Path>,
+    tasks: &[kanban_core::Task],
+) -> String {
+    let mut output = String::new();
+    push_line(
+        &mut output,
+        &format!("{} {}", theme.heading("Tasks for"), theme.id(story_id)),
+    );
+    push_line(
+        &mut output,
+        &theme.paint(Style::Muted, "─".repeat(layout.width)),
+    );
+    push_line(&mut output, "");
+    push_line(
+        &mut output,
+        &format!(
+            "{} {}",
+            theme.label("Task file:"),
+            task_file_path
+                .map(|path| theme.path(path.display()))
+                .unwrap_or_else(|| "-".to_string())
+        ),
+    );
+    if tasks.is_empty() {
+        push_line(&mut output, "");
+        push_line(&mut output, "  - none");
+        return output;
+    }
+
+    push_line(&mut output, "");
+    let columns = task_table_columns(layout.width, tasks);
+    let rows = tasks
+        .iter()
+        .map(|task| {
+            vec![
+                TableCell::styled(&task.id, CellStyle::Id),
+                TableCell::preformatted(
+                    theme.status_text(
+                        &task.normalized_status,
+                        format!(
+                            "{} {}",
+                            status_icon(&task.normalized_status),
+                            task.normalized_status
+                        ),
+                    ),
+                    CellStyle::Precolored,
+                ),
+                TableCell::new(if task.tags.is_empty() {
+                    "-".to_string()
+                } else {
+                    task.tags.join(", ")
+                }),
+                TableCell::new(if task.description.trim().is_empty() {
+                    task.title.clone()
+                } else {
+                    format!("{} - {}", task.title, task.description.trim())
+                }),
+            ]
+        })
+        .collect::<Vec<_>>();
+    push_wrapped_table(&mut output, theme, &columns, &rows);
+    output
+}
+
 pub(crate) fn task_table_columns(
     width: usize,
     tasks: &[kanban_core::Task],

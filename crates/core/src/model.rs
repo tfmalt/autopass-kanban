@@ -150,6 +150,14 @@ pub struct TaskMutationResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskListResult {
+    pub story_id: String,
+    pub task_file_path: Option<PathBuf>,
+    pub tasks: Vec<Task>,
+    pub task_summary: Option<TaskSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoryFileResult {
     pub story_id: String,
     pub story_path: PathBuf,

@@ -461,6 +461,23 @@ fn main() -> Result<()> {
             }
         },
         Command::Task { command } => match command {
+            TaskCommand::Show {
+                story_id,
+                repo_root,
+            } => {
+                let details = list_tasks_for_story(repo_root, &story_id)?
+                    .ok_or_else(|| anyhow::anyhow!("Story not found: {story_id}"))?;
+                print!(
+                    "{}",
+                    render_task_list(
+                        &theme,
+                        OutputLayout::for_stdout()?,
+                        &details.story_id,
+                        details.task_file_path.as_deref(),
+                        &details.tasks,
+                    )
+                );
+            }
             TaskCommand::Add {
                 story_id,
                 title,
@@ -504,6 +521,24 @@ fn main() -> Result<()> {
                 println!(
                     "{} {} in {}",
                     theme.success("Updated"),
+                    theme.id(&result.task_id),
+                    theme.id(&result.story_id)
+                );
+                println!(
+                    "{} {}",
+                    theme.label("Task file:"),
+                    theme.path(result.task_file_path.display())
+                );
+            }
+            TaskCommand::Delete {
+                story_id,
+                task_id,
+                repo_root,
+            } => {
+                let result = delete_task_from_story(repo_root, &story_id, &task_id)?;
+                println!(
+                    "{} {} from {}",
+                    theme.success("Deleted"),
                     theme.id(&result.task_id),
                     theme.id(&result.story_id)
                 );
@@ -642,6 +677,47 @@ fn main() -> Result<()> {
                     "    {} delivery/backlog/wbs_report.xlsx",
                     theme.id("--output")
                 );
+            }
+            ReportCommand::Forecast { repo_root } => {
+                let stories = list_all_stories(&repo_root)?;
+                let sprints = summarize_sprints(&repo_root)?;
+                let current = summarize_current_sprint(&repo_root)
+                    .ok()
+                    .map(|s| s.sprint_name);
+                let dto = ReportForecastDto::build(&stories, &sprints, current.as_deref());
+
+                println!(
+                    "{}  {}",
+                    theme.heading("Forecast"),
+                    theme.paint(Style::Muted, &dto.generated_at),
+                );
+                println!(
+                    "  {}  {}",
+                    theme.label("Remaining points:"),
+                    theme.story_points(format_story_points(dto.remaining_points as usize)),
+                );
+                println!(
+                    "  {}  {:.1} pts/sprint over {} completed sprints ({})",
+                    theme.label("Velocity:"),
+                    dto.velocity.average,
+                    dto.velocity.completed_sprint_count,
+                    dto.confidence,
+                );
+                if let Some(date) = dto.completion.p80_date.as_deref() {
+                    println!(
+                        "  {}  P50 {}  /  P80 {}  /  P90 {}",
+                        theme.label("Completion:"),
+                        dto.completion.p50_date.as_deref().unwrap_or("-"),
+                        date,
+                        dto.completion.p90_date.as_deref().unwrap_or("-"),
+                    );
+                } else {
+                    println!(
+                        "  {}  {}",
+                        theme.label("Completion:"),
+                        theme.paint(Style::Muted, "no velocity data yet"),
+                    );
+                }
             }
         },
         Command::ListIds { kind, repo_root } => match kind {

@@ -79,7 +79,7 @@ pub(crate) fn write_story_with_task_file(
     let path = write_story(temp_root, relative_path, frontmatter);
     fs::write(
         path.with_extension("tasks.md"),
-        "# Tasks for US-F1-001\n\nParent User Story: US-F1-001\nSprint: S001.foundation\n\n---\n\n## TASK-US-F1-001-001 - First task\n\nStatus: To Do\nTags: cli\n\nDescription:\nInitial work.\n",
+        "# Tasks for US-F1-001\n\nParent User Story: US-F1-001\nSprint: S001.foundation\n\n## TASK-US-F1-001-001 - First task\n\nStatus: todo\nTags: cli\n\nDescription:\nInitial work.\n",
     )
     .unwrap();
     path

@@ -527,7 +527,7 @@ def build_phase_summary_sheet(ws, phases: list, stories: list):
 
 # ── Sprint Burndown sheet ─────────────────────────────────────────────────────
 
-def build_sprint_burndown_sheet(ws, sprints: list, velocity: dict, generated_at: str):
+def build_sprint_burndown_sheet(ws, sprints: list, velocity: dict, forecast: dict, generated_at: str):
     for col, width in zip("ABCDEFGH", [28, 13, 13, 14, 14, 14, 16, 18]):
         ws.column_dimensions[col].width = width
 
@@ -535,18 +535,20 @@ def build_sprint_burndown_sheet(ws, sprints: list, velocity: dict, generated_at:
 
     avg       = velocity.get("avg_points_per_sprint", 0)
     remaining = velocity.get("remaining_points", 0)
-    est       = velocity.get("estimated_sprints_remaining")
     completed = velocity.get("completed_sprint_count", 0)
     dur       = velocity.get("sprint_duration_weeks", 2)
-    est_text  = f"{est:.1f} sprints" if est else "—"
-    est_weeks = f" ({est * dur:.0f} weeks)" if est else ""
+    completion = forecast.get("completion", {}) if forecast else {}
+    p50 = completion.get("p50_date")
+    p80 = completion.get("p80_date")
+    p90 = completion.get("p90_date")
+    est_text = f"P50 {p50} / P80 {p80} / P90 {p90}" if p80 else "-"
 
     ws.merge_cells("A2:H2")
     ws.row_dimensions[2].height = 16
     sc            = ws["A2"]
     sc.value      = (
         f"Velocity: {avg:.1f} pts/sprint (over {completed} completed sprint{'s' if completed != 1 else ''})  ·  "
-        f"Remaining: {remaining} pts  ·  Estimated to complete: {est_text}{est_weeks}  ·  Generated: {generated_at[:10]}"
+        f"Remaining: {remaining} pts  ·  Forecast completion: {est_text}  ·  Generated: {generated_at[:10]}"
     )
     sc.font       = Font(italic=True, color=COLOUR_WHITE_FG, size=9)
     sc.fill       = _fill(COLOUR_HEADER_BG)
@@ -592,7 +594,7 @@ def build_sprint_burndown_sheet(ws, sprints: list, velocity: dict, generated_at:
                 c.number_format = "0"
         row += 1
 
-    if est and avg > 0 and sprints:
+    if p80 and avg > 0 and sprints:
         last_end       = datetime.strptime(sprints[-1]["end_date"], "%Y-%m-%d").date()
         sprint_days    = dur * 7
         proj_remaining = cumulative_remaining
@@ -753,6 +755,7 @@ def main():
     sprints      = data["sprints"]
     phases       = data["phases"]
     velocity     = data["velocity"]
+    forecast     = data["forecast"]
     generated_at = data["generated_at"]
 
     hierarchy              = _build_hierarchy(stories)
@@ -770,7 +773,7 @@ def main():
     build_phase_summary_sheet(wb.create_sheet("Phase Summary"), phases, stories)
 
     print("Building Sprint Burndown sheet …", file=sys.stderr)
-    build_sprint_burndown_sheet(wb.create_sheet("Sprint Burndown"), sprints, velocity, generated_at)
+    build_sprint_burndown_sheet(wb.create_sheet("Sprint Burndown"), sprints, velocity, forecast, generated_at)
 
     print("Building Legend sheet …", file=sys.stderr)
     build_legend_sheet(wb.create_sheet("Legend & Guide"))
@@ -787,11 +790,12 @@ def main():
             f"(sprint={sprint_dur}w, velocity={velocity.get('avg_points_per_sprint', 0):.1f} pts/sprint)",
             file=sys.stderr,
         )
-    if velocity.get("estimated_sprints_remaining"):
-        est_s = velocity["estimated_sprints_remaining"]
+    completion = forecast.get("completion", {})
+    if completion.get("p80_date"):
         print(
-            f"  Prognosis: {est_s:.1f} sprints remaining "
-            f"(avg {velocity['avg_points_per_sprint']:.1f} pts/sprint)",
+            f"  Forecast: P50 {completion.get('p50_date')} / "
+            f"P80 {completion.get('p80_date')} / P90 {completion.get('p90_date')} "
+            f"({forecast.get('confidence', 'unknown')} confidence)",
             file=sys.stderr,
         )
 

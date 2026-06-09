@@ -9,12 +9,12 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::util::parse_assignee_list;
+use crate::util::{normalize_status_alias, parse_assignee_list};
 use crate::{
     BlockedWorkItem, CompletionItem, ConfigInitResult, ConfigSetResult, CreateSprintResult,
     DoctorFinding, MoveStoryResult, PhaseOverview, PlanStoryResult, RolloverResult, SprintOverview,
-    Story, StoryDetails, StoryOverview, StoryUpdateResult, Task, TaskMutationResult, TaskSummary,
-    ValidationReport,
+    Story, StoryDetails, StoryOverview, StoryUpdateResult, Task, TaskListResult,
+    TaskMutationResult, TaskSummary, ValidationReport,
 };
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -251,7 +251,7 @@ impl ListIdsDto {
 
 /// Lowercase, trim, and replace spaces/underscores with hyphens.
 pub fn slugify_status(status: &str) -> String {
-    status.trim().to_ascii_lowercase().replace([' ', '_'], "-")
+    normalize_status_alias(status).replace([' ', '_'], "-")
 }
 
 fn path_string(path: &Path) -> String {
@@ -744,6 +744,30 @@ impl TaskMutationDto {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskShowDto {
+    pub story_id: String,
+    pub task_path: Option<String>,
+    pub task_count: usize,
+    pub tasks: Vec<TaskDto>,
+    pub task_summary: Option<TaskSummary>,
+}
+
+impl TaskShowDto {
+    pub fn from_result(r: &TaskListResult, repo_root: &Path) -> Self {
+        Self {
+            story_id: r.story_id.clone(),
+            task_path: r
+                .task_file_path
+                .as_ref()
+                .map(|path| rel_to_root(repo_root, path)),
+            task_count: r.tasks.len(),
+            tasks: r.tasks.iter().map(TaskDto::from_task).collect(),
+            task_summary: r.task_summary.clone(),
+        }
+    }
+}
+
 /// DTO for `sprint create` responses.
 #[derive(Debug, Clone, Serialize)]
 pub struct SprintCreateDto {
@@ -888,6 +912,38 @@ pub struct ReportVelocityDto {
     pub sprint_duration_weeks: u32,
 }
 
+/// Velocity distribution used by the canonical forecast model.
+#[derive(Debug, Clone, Serialize)]
+pub struct ForecastVelocityDto {
+    pub samples: Vec<i64>,
+    pub average: f64,
+    pub median: f64,
+    pub completed_sprint_count: usize,
+}
+
+/// Probabilistic completion bands from deterministic Monte Carlo simulation.
+#[derive(Debug, Clone, Serialize)]
+pub struct ForecastCompletionDto {
+    pub p50_sprints: Option<u32>,
+    pub p80_sprints: Option<u32>,
+    pub p90_sprints: Option<u32>,
+    pub p50_date: Option<String>,
+    pub p80_date: Option<String>,
+    pub p90_date: Option<String>,
+}
+
+/// Canonical planning forecast shared by CLI, web, and generated reports.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportForecastDto {
+    pub generated_at: String,
+    pub remaining_points: i64,
+    pub sprint_duration_weeks: u32,
+    pub projection_start_date: String,
+    pub velocity: ForecastVelocityDto,
+    pub completion: ForecastCompletionDto,
+    pub confidence: String,
+}
+
 /// Top-level payload for `kanban report wbs --format json`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ReportWbsDto {
@@ -896,20 +952,178 @@ pub struct ReportWbsDto {
     pub sprints: Vec<ReportSprintDto>,
     pub phases: Vec<ReportPhaseDto>,
     pub velocity: ReportVelocityDto,
+    pub forecast: ReportForecastDto,
 }
 
-impl ReportWbsDto {
+struct ForecastInputs {
+    generated_at: String,
+    remaining_points: i64,
+    sprint_duration_weeks: u32,
+    projection_start_date: chrono::NaiveDate,
+    velocity_samples: Vec<i64>,
+}
+
+fn average(values: &[i64]) -> f64 {
+    if values.is_empty() {
+        0.0
+    } else {
+        values.iter().sum::<i64>() as f64 / values.len() as f64
+    }
+}
+
+fn median(values: &[i64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let mid = sorted.len() / 2;
+    if sorted.len().is_multiple_of(2) {
+        (sorted[mid - 1] + sorted[mid]) as f64 / 2.0
+    } else {
+        sorted[mid] as f64
+    }
+}
+
+fn next_random(seed: &mut u64) -> u64 {
+    *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+    *seed
+}
+
+fn percentile(sorted_values: &[u32], percentile: f64) -> Option<u32> {
+    if sorted_values.is_empty() {
+        return None;
+    }
+    let index = ((sorted_values.len() as f64 * percentile).ceil() as usize).saturating_sub(1);
+    sorted_values.get(index).copied()
+}
+
+fn completion_date(
+    start: chrono::NaiveDate,
+    sprint_duration_weeks: u32,
+    sprints: Option<u32>,
+) -> Option<String> {
+    let sprints = sprints?;
+    let days = i64::from(sprints) * i64::from(sprint_duration_weeks) * 7;
+    Some(
+        (start + chrono::Duration::days(days))
+            .format("%Y-%m-%d")
+            .to_string(),
+    )
+}
+
+fn simulate_completion_sprints(remaining_points: i64, samples: &[i64]) -> Vec<u32> {
+    if remaining_points <= 0 {
+        return vec![0];
+    }
+    if samples.is_empty() || samples.iter().all(|sample| *sample <= 0) {
+        return Vec::new();
+    }
+
+    const ITERATIONS: usize = 10_000;
+    const MAX_SPRINTS: u32 = 1_000;
+    let mut seed = 0xA17C_0DE5_u64;
+    let mut results = Vec::with_capacity(ITERATIONS);
+
+    for _ in 0..ITERATIONS {
+        let mut remaining = remaining_points;
+        let mut sprints = 0_u32;
+        while remaining > 0 && sprints < MAX_SPRINTS {
+            let idx = (next_random(&mut seed) as usize) % samples.len();
+            remaining -= samples[idx].max(0);
+            sprints += 1;
+        }
+        if remaining <= 0 {
+            results.push(sprints);
+        }
+    }
+
+    results.sort_unstable();
+    results
+}
+
+impl ReportForecastDto {
+    fn from_inputs(inputs: ForecastInputs) -> Self {
+        let samples = inputs.velocity_samples;
+        let completed_sprint_count = samples.len();
+        let simulations = simulate_completion_sprints(inputs.remaining_points, &samples);
+        let p50 = percentile(&simulations, 0.50);
+        let p80 = percentile(&simulations, 0.80);
+        let p90 = percentile(&simulations, 0.90);
+        let confidence = if completed_sprint_count == 0 || simulations.is_empty() {
+            "none"
+        } else if completed_sprint_count < 3 {
+            "low"
+        } else if completed_sprint_count < 6 {
+            "medium"
+        } else {
+            "high"
+        };
+
+        Self {
+            generated_at: inputs.generated_at,
+            remaining_points: inputs.remaining_points,
+            sprint_duration_weeks: inputs.sprint_duration_weeks,
+            projection_start_date: inputs.projection_start_date.format("%Y-%m-%d").to_string(),
+            velocity: ForecastVelocityDto {
+                average: average(&samples),
+                median: median(&samples),
+                completed_sprint_count,
+                samples,
+            },
+            completion: ForecastCompletionDto {
+                p50_sprints: p50,
+                p80_sprints: p80,
+                p90_sprints: p90,
+                p50_date: completion_date(
+                    inputs.projection_start_date,
+                    inputs.sprint_duration_weeks,
+                    p50,
+                ),
+                p80_date: completion_date(
+                    inputs.projection_start_date,
+                    inputs.sprint_duration_weeks,
+                    p80,
+                ),
+                p90_date: completion_date(
+                    inputs.projection_start_date,
+                    inputs.sprint_duration_weeks,
+                    p90,
+                ),
+            },
+            confidence: confidence.to_string(),
+        }
+    }
+
     pub fn build(
         stories: &[StoryOverview],
         sprints: &[SprintOverview],
         current_sprint_name: Option<&str>,
     ) -> Self {
-        use chrono::Local;
+        let generated_at = chrono::Local::now().to_rfc3339();
+        let today = chrono::Local::now().date_naive();
+        let prepared =
+            PreparedReport::build(stories, sprints, current_sprint_name, generated_at, today);
+        ReportForecastDto::from_inputs(prepared.forecast_inputs)
+    }
+}
 
-        let today = Local::now().date_naive();
-        let generated_at = Local::now().to_rfc3339();
+struct PreparedReport {
+    stories: Vec<ReportStoryDto>,
+    sprints: Vec<ReportSprintDto>,
+    phases: Vec<ReportPhaseDto>,
+    velocity: ReportVelocityDto,
+    forecast_inputs: ForecastInputs,
+}
 
-        // Build story lookup: sprint_name → (planned_pts, done_pts, ids)
+impl PreparedReport {
+    fn build(
+        stories: &[StoryOverview],
+        sprints: &[SprintOverview],
+        current_sprint_name: Option<&str>,
+        generated_at: String,
+        today: chrono::NaiveDate,
+    ) -> Self {
         let mut sprint_stats: BTreeMap<String, (i64, i64, Vec<String>)> = BTreeMap::new();
         for story in stories {
             if let Some(ref sprint) = story.sprint {
@@ -923,7 +1137,6 @@ impl ReportWbsDto {
             }
         }
 
-        // Build sprint DTOs with computed stats
         let sprint_dtos: Vec<ReportSprintDto> = sprints
             .iter()
             .map(|s| {
@@ -948,7 +1161,6 @@ impl ReportWbsDto {
             })
             .collect();
 
-        // Phase summaries
         let mut phase_map: BTreeMap<String, (usize, i64, i64, i64, i64)> = BTreeMap::new();
         for story in stories {
             let phase = phase_from_story_id(&story.id);
@@ -977,22 +1189,23 @@ impl ReportWbsDto {
             })
             .collect();
 
-        // Velocity: use past sprints that had stories
         let past_with_stories: Vec<&ReportSprintDto> = sprint_dtos
             .iter()
             .filter(|s| s.is_past && s.planned_points > 0)
             .collect();
-        let completed_count = past_with_stories.len();
-        let total_delivered: i64 = past_with_stories.iter().map(|s| s.delivered_points).sum();
-        let avg_velocity = if completed_count > 0 {
-            total_delivered as f64 / completed_count as f64
-        } else {
-            0.0
-        };
+        let velocity_samples: Vec<i64> = past_with_stories
+            .iter()
+            .map(|s| s.delivered_points)
+            .collect();
+        let completed_count = velocity_samples.len();
+        let avg_velocity = average(&velocity_samples);
 
         let remaining: i64 = stories
             .iter()
-            .filter(|s| !s.status.eq_ignore_ascii_case("done"))
+            .filter(|s| {
+                let status = s.status.to_ascii_lowercase();
+                status != "done" && status != "dropped"
+            })
             .map(|s| parse_points(&s.story_points).unwrap_or(0))
             .sum();
 
@@ -1002,7 +1215,6 @@ impl ReportWbsDto {
             None
         };
 
-        // Infer typical sprint duration from sprint history
         let sprint_duration_weeks = sprint_dtos
             .first()
             .and_then(|s| {
@@ -1010,20 +1222,60 @@ impl ReportWbsDto {
                 let end = chrono::NaiveDate::parse_from_str(&s.end_date, "%Y-%m-%d").ok()?;
                 Some(((end - start).num_days() as f64 / 7.0).round() as u32)
             })
-            .unwrap_or(2);
+            .unwrap_or(2)
+            .max(1);
 
-        ReportWbsDto {
+        let velocity = ReportVelocityDto {
+            completed_sprint_count: completed_count,
+            avg_points_per_sprint: avg_velocity,
+            remaining_points: remaining,
+            estimated_sprints_remaining: est_sprints,
+            sprint_duration_weeks,
+        };
+        let forecast_inputs = ForecastInputs {
             generated_at,
+            remaining_points: remaining,
+            sprint_duration_weeks,
+            projection_start_date: today,
+            velocity_samples,
+        };
+
+        Self {
             stories: stories.iter().map(ReportStoryDto::from_overview).collect(),
             sprints: sprint_dtos,
             phases: phase_dtos,
-            velocity: ReportVelocityDto {
-                completed_sprint_count: completed_count,
-                avg_points_per_sprint: avg_velocity,
-                remaining_points: remaining,
-                estimated_sprints_remaining: est_sprints,
-                sprint_duration_weeks,
-            },
+            velocity,
+            forecast_inputs,
+        }
+    }
+}
+
+impl ReportWbsDto {
+    pub fn build(
+        stories: &[StoryOverview],
+        sprints: &[SprintOverview],
+        current_sprint_name: Option<&str>,
+    ) -> Self {
+        use chrono::Local;
+
+        let today = Local::now().date_naive();
+        let generated_at = Local::now().to_rfc3339();
+        let prepared = PreparedReport::build(
+            stories,
+            sprints,
+            current_sprint_name,
+            generated_at.clone(),
+            today,
+        );
+        let forecast = ReportForecastDto::from_inputs(prepared.forecast_inputs);
+
+        ReportWbsDto {
+            generated_at,
+            stories: prepared.stories,
+            sprints: prepared.sprints,
+            phases: prepared.phases,
+            velocity: prepared.velocity,
+            forecast,
         }
     }
 }
@@ -1051,9 +1303,44 @@ mod tests {
     }
 
     #[test]
+    fn canonical_forecast_serializes_probability_bands() {
+        let forecast = ReportForecastDto::from_inputs(ForecastInputs {
+            generated_at: "2026-06-09T10:00:00+02:00".to_string(),
+            remaining_points: 20,
+            sprint_duration_weeks: 2,
+            projection_start_date: chrono::NaiveDate::from_ymd_opt(2026, 6, 9).unwrap(),
+            velocity_samples: vec![5, 10, 15],
+        });
+
+        let json = serde_json::to_value(&forecast).expect("serialization should succeed");
+        assert_eq!(json["remaining_points"], 20);
+        assert_eq!(json["velocity"]["average"], 10.0);
+        assert_eq!(json["velocity"]["median"], 10.0);
+        assert_eq!(json["confidence"], "medium");
+        assert!(json["completion"]["p50_sprints"].as_u64().unwrap() >= 2);
+        assert!(json["completion"]["p90_date"].is_string());
+    }
+
+    #[test]
+    fn canonical_forecast_has_no_completion_without_velocity() {
+        let forecast = ReportForecastDto::from_inputs(ForecastInputs {
+            generated_at: "2026-06-09T10:00:00+02:00".to_string(),
+            remaining_points: 20,
+            sprint_duration_weeks: 2,
+            projection_start_date: chrono::NaiveDate::from_ymd_opt(2026, 6, 9).unwrap(),
+            velocity_samples: vec![],
+        });
+
+        assert_eq!(forecast.confidence, "none");
+        assert_eq!(forecast.completion.p80_date, None);
+        assert_eq!(forecast.velocity.average, 0.0);
+    }
+
+    #[test]
     fn slugify_status_maps_spaces_to_hyphens() {
         assert_eq!(slugify_status("In Progress"), "in-progress");
         assert_eq!(slugify_status("Ready for QA"), "ready-for-qa");
+        assert_eq!(slugify_status("backlog"), "ready");
         assert_eq!(slugify_status("todo"), "todo");
     }
 
@@ -1161,14 +1448,14 @@ mod tests {
         let task = crate::Task {
             id: "TASK-US-F1-001-001".to_string(),
             title: "Do something".to_string(),
-            status: "To Do".to_string(),
+            status: "todo".to_string(),
             normalized_status: "todo".to_string(),
             tags: vec![],
             description: "desc".to_string(),
         };
         let dto = TaskDto::from_task(&task);
         let json = serde_json::to_value(&dto).expect("serialization should succeed");
-        assert_eq!(json["status"], "To Do");
+        assert_eq!(json["status"], "todo");
         assert_eq!(json["status_normalized"], "todo");
     }
 
@@ -1179,7 +1466,7 @@ mod tests {
         let task = crate::Task {
             id: "TASK-US-F1-001-001".to_string(),
             title: "Some task".to_string(),
-            status: "To Do".to_string(),
+            status: "todo".to_string(),
             normalized_status: "todo".to_string(),
             tags: vec![],
             description: "desc".to_string(),
@@ -1582,7 +1869,7 @@ mod tests {
         let task = crate::Task {
             id: "TASK-US-F1-001-001".to_string(),
             title: "Do something".to_string(),
-            status: "To Do".to_string(),
+            status: "todo".to_string(),
             normalized_status: "todo".to_string(),
             tags: vec!["cli".to_string()],
             description: "desc".to_string(),
@@ -1599,9 +1886,38 @@ mod tests {
         assert_eq!(dto.task.status_normalized, "todo");
 
         let json = serde_json::to_value(&dto).expect("serialization should succeed");
-        assert_eq!(json["task"]["status"], "To Do");
+        assert_eq!(json["task"]["status"], "todo");
         assert_eq!(json["task"]["status_normalized"], "todo");
         assert_eq!(json["task"]["tags"][0], "cli");
+    }
+
+    #[test]
+    fn task_show_dto_includes_task_list_and_summary() {
+        let result = crate::TaskListResult {
+            story_id: "US-F1-057".to_string(),
+            task_file_path: Some(PathBuf::from("/repo/delivery/backlog/x/US-F1-057.tasks.md")),
+            tasks: vec![crate::Task {
+                id: "TASK-US-F1-057-001".to_string(),
+                title: "First task".to_string(),
+                status: "todo".to_string(),
+                normalized_status: "todo".to_string(),
+                tags: vec!["cli".to_string()],
+                description: "desc".to_string(),
+            }],
+            task_summary: Some(crate::TaskSummary {
+                todo: 1,
+                in_progress: 0,
+                blocked: 0,
+                done: 0,
+            }),
+        };
+
+        let dto = TaskShowDto::from_result(&result, Path::new("/repo"));
+        let json = serde_json::to_value(&dto).expect("serialization should succeed");
+        assert_eq!(json["story_id"], "US-F1-057");
+        assert_eq!(json["task_path"], "delivery/backlog/x/US-F1-057.tasks.md");
+        assert_eq!(json["task_count"], 1);
+        assert_eq!(json["tasks"][0]["id"], "TASK-US-F1-057-001");
     }
 
     #[test]

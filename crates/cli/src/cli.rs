@@ -229,7 +229,7 @@ pub(crate) enum StoryCommand {
         #[arg(help = "Story id to move, for example US-F1-053.")]
         id: String,
         #[arg(
-            help = "Target status, for example todo, in-progress, ready-for-qa, done, or blocked."
+            help = "Target status, for example backlog, ready, todo, in-progress, ready-for-qa, done, or blocked."
         )]
         status: String,
         #[arg(
@@ -300,7 +300,17 @@ pub(crate) enum StoryCommand {
 #[derive(Subcommand)]
 pub(crate) enum TaskCommand {
     #[command(
-        about = "Add a sprint task. Effect: appends a task block to the story's sibling .tasks.md file. Side effects: does not create standalone T-*.md files."
+        about = "Show story tasks. Effect: reads the story's parsed task log and prints it in human or JSON format. Side effects: none."
+    )]
+    Show {
+        #[arg(help = "Story id whose tasks should be shown, for example US-F1-053.")]
+        story_id: String,
+        #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        about = "Add a story task. Effect: appends a task block to the story's sibling .tasks.md file. Side effects: does not create standalone T-*.md files."
     )]
     Add {
         #[arg(help = "Parent story id for the task, for example US-F1-053.")]
@@ -326,7 +336,7 @@ pub(crate) enum TaskCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Update a sprint task. Effect: rewrites the matching task block in the story's sibling .tasks.md file. Side effects: only supplied fields are changed."
+        about = "Update a story task. Effect: rewrites the matching task block in the story's sibling .tasks.md file. Side effects: only supplied fields are changed."
     )]
     Update {
         #[arg(help = "Parent story id for the task, for example US-F1-053.")]
@@ -354,6 +364,18 @@ pub(crate) enum TaskCommand {
             help = "Replacement task description. Omitted means keep the current description."
         )]
         description: Option<String>,
+        #[arg(help = "Repository root to update. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        about = "Delete a story task. Effect: removes the matching task block from the story's sibling .tasks.md file. Side effects: no standalone task artifacts are created."
+    )]
+    Delete {
+        #[arg(help = "Parent story id for the task, for example US-F1-053.")]
+        story_id: String,
+        #[arg(help = "Task id to delete, for example TASK-US-F1-053-001.")]
+        task_id: String,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
         #[arg(default_value = ".")]
         repo_root: PathBuf,
@@ -607,6 +629,14 @@ pub(crate) enum ReportCommand {
         #[arg(default_value = ".")]
         repo_root: PathBuf,
     },
+    #[command(
+        about = "Emit canonical probabilistic completion forecast data. Effect: read-only. Side effects: none."
+    )]
+    Forecast {
+        #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -648,7 +678,7 @@ pub(crate) enum Command {
         command: StoryCommand,
     },
     #[command(
-        about = "Maintain sprint task logs. Effect: mutates sibling .tasks.md files only. Side effects: no standalone task artifacts are created."
+        about = "Maintain story task logs. Effect: mutates sibling .tasks.md files only. Side effects: no standalone task artifacts are created."
     )]
     Task {
         #[command(subcommand)]
@@ -750,9 +780,10 @@ pub(crate) fn command_repo_root(command: &Command) -> Option<&PathBuf> {
             | StoryCommand::Update { repo_root, .. } => Some(repo_root),
         },
         Command::Task { command } => match command {
-            TaskCommand::Add { repo_root, .. } | TaskCommand::Update { repo_root, .. } => {
-                Some(repo_root)
-            }
+            TaskCommand::Show { repo_root, .. }
+            | TaskCommand::Add { repo_root, .. }
+            | TaskCommand::Update { repo_root, .. }
+            | TaskCommand::Delete { repo_root, .. } => Some(repo_root),
         },
         Command::Web { command } => match command {
             WebCommand::Start { repo_root, .. }
@@ -767,7 +798,9 @@ pub(crate) fn command_repo_root(command: &Command) -> Option<&PathBuf> {
             }
         },
         Command::Report { command } => match command {
-            ReportCommand::Wbs { repo_root } => Some(repo_root),
+            ReportCommand::Wbs { repo_root } | ReportCommand::Forecast { repo_root } => {
+                Some(repo_root)
+            }
         },
         Command::Completion { .. } => None,
     }
@@ -982,6 +1015,53 @@ mod tests {
                 command: DoctorCommand::Fix { target, repo_root },
             } => {
                 assert_eq!(target.as_deref(), Some("US-F1-053"));
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn task_show_parses_story_id() {
+        let args = Args::try_parse_from(["kanban", "task", "show", "US-F1-057"]).unwrap();
+
+        match args.command {
+            Command::Task {
+                command:
+                    TaskCommand::Show {
+                        story_id,
+                        repo_root,
+                    },
+            } => {
+                assert_eq!(story_id, "US-F1-057");
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn task_delete_parses_story_and_task_id() {
+        let args = Args::try_parse_from([
+            "kanban",
+            "task",
+            "delete",
+            "US-F1-057",
+            "TASK-US-F1-057-001",
+        ])
+        .unwrap();
+
+        match args.command {
+            Command::Task {
+                command:
+                    TaskCommand::Delete {
+                        story_id,
+                        task_id,
+                        repo_root,
+                    },
+            } => {
+                assert_eq!(story_id, "US-F1-057");
+                assert_eq!(task_id, "TASK-US-F1-057-001");
                 assert_eq!(repo_root, PathBuf::from("."));
             }
             _ => panic!("unexpected command"),

@@ -291,6 +291,14 @@ pub(crate) fn validate_timestamp_field(
         .get(field_name)
         .map(String::as_str)
         .unwrap_or_default();
+    let status = story.frontmatter.get("status").map(String::as_str);
+    let status_allows_null_work_started =
+        field_name == "work_started" && value == "null" && matches!(status, Some("draft" | "todo"));
+    let status_allows_null_work_done =
+        field_name == "work_done" && value == "null" && !matches!(status, Some("done"));
+    if status_allows_null_work_started || status_allows_null_work_done {
+        return;
+    }
     if allow_empty && value.is_empty() {
         return;
     }
@@ -382,6 +390,105 @@ mod tests {
         assert!(!rules.contains(&"missing-field:assignee"));
         assert!(!rules.contains(&"invalid-timestamp:created"));
         assert!(!rules.contains(&"invalid-timestamp:updated"));
+    }
+
+    #[test]
+    fn validate_story_accepts_backlog_status_as_ready_synonym() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = temp_root.path().join(
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-050-backlog-status.md",
+        );
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-050\ntype: user-story\nstatus: backlog\nepic: EP-F1-06\nsprint: ~\nassignee: Test User <test@example.com>\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(story_path, temp_root.path()).unwrap();
+        let issues = validate_story(&story);
+        let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+
+        assert!(!rules.contains(&"non-canonical-status"));
+    }
+
+    #[test]
+    fn validate_story_allows_null_work_started_for_draft_and_todo() {
+        for status in ["draft", "todo"] {
+            let temp_root = tempdir().unwrap();
+            init_temp_repo(temp_root.path());
+            let story_path = temp_root
+                .path()
+                .join(format!("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-05{}-null-work-started.md", if status == "draft" { 0 } else { 1 }));
+
+            fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+            fs::write(
+                &story_path,
+                format!("---\nid: US-F1-050\ntype: user-story\nstatus: {status}\nepic: EP-F1-06\nsprint: ~\nstory_points: 3\nwork_started: null\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n"),
+            )
+            .unwrap();
+
+            let story = read_story_file(story_path, temp_root.path()).unwrap();
+            let issues = validate_story(&story);
+            let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+
+            assert!(!rules.contains(&"invalid-timestamp:work_started"));
+        }
+    }
+
+    #[test]
+    fn validate_story_allows_null_work_done_unless_done() {
+        for status in [
+            "draft",
+            "todo",
+            "in-progress",
+            "ready-for-qa",
+            "blocked",
+            "dropped",
+        ] {
+            let temp_root = tempdir().unwrap();
+            init_temp_repo(temp_root.path());
+            let story_path = temp_root.path().join(format!(
+                "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-060-null-work-done-{status}.md"
+            ));
+
+            fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+            fs::write(
+                &story_path,
+                format!("---\nid: US-F1-060\ntype: user-story\nstatus: {status}\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: Test User <test@example.com>\nstory_points: 3\nwork_started:\nwork_done: null\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n"),
+            )
+            .unwrap();
+
+            let story = read_story_file(story_path, temp_root.path()).unwrap();
+            let issues = validate_story(&story);
+            let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+
+            assert!(!rules.contains(&"invalid-timestamp:work_done"));
+        }
+    }
+
+    #[test]
+    fn validate_story_rejects_null_work_done_when_done() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = temp_root.path().join(
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-061-null-work-done-when-done.md",
+        );
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-061\ntype: user-story\nstatus: done\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: Test User <test@example.com>\nstory_points: 3\nwork_started: 2026-05-28T14:05:54+0200\nwork_done: null\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(story_path, temp_root.path()).unwrap();
+        let issues = validate_story(&story);
+        let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+
+        assert!(rules.contains(&"invalid-timestamp:work_done"));
     }
 
     #[test]

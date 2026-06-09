@@ -330,8 +330,9 @@ pub(crate) fn sprint_overview_from_spec(
         story.frontmatter.get("sprint").map(String::as_str) == Some(spec.sprint_name.as_str())
     }) {
         let overview = story_overview(&repository.repo_root, story);
+        let status_key = normalize_status_alias(&overview.status);
         stories_by_status
-            .entry(overview.status.clone())
+            .entry(status_key)
             .or_default()
             .push(overview.clone());
 
@@ -738,6 +739,7 @@ fn format_task_summary(summary: Option<&TaskSummary>) -> String {
 
 fn status_summary_label(status: &str) -> &'static str {
     match status {
+        "backlog" | "ready" => "Ready",
         "todo" => "Todo",
         "in-progress" => "In progress",
         "ready-for-qa" => "Ready for QA",

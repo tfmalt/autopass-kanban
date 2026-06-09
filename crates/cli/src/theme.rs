@@ -122,6 +122,7 @@ impl Theme {
 
     pub(crate) fn status(&self, status: &str) -> String {
         match status {
+            "backlog" | "ready" => self.paint(Style::Muted, status),
             "todo" => self.paint(Style::Muted, status),
             "in-progress" => self.paint(Style::Blue, status),
             "ready-for-qa" => self.paint(Style::Purple, status),
@@ -133,6 +134,7 @@ impl Theme {
 
     pub(crate) fn status_text(&self, status: &str, text: impl std::fmt::Display) -> String {
         match status {
+            "backlog" | "ready" => self.paint(Style::Muted, text),
             "todo" => self.paint(Style::Muted, text),
             "in-progress" => self.paint(Style::Blue, text),
             "ready-for-qa" => self.paint(Style::Purple, text),

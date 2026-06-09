@@ -528,7 +528,7 @@ fn hidden_task_completion_listing_includes_task_ids_for_story() {
     .expect("story fixture should be written");
     std::fs::write(
         backlog_dir.join("US-F1-010-ci-pipeline-build-and-unit-tests.tasks.md"),
-        "# Tasks for US-F1-010\n\n---\n\n## TASK-US-F1-010-001 - First task\n\nStatus: To Do\nTags: cli\n\nDescription:\nFirst.\n",
+        "# Tasks for US-F1-010\n\nParent User Story: US-F1-010\nSprint: S001.foundation\n\n## TASK-US-F1-010-001 - First task\n\nStatus: todo\nTags: cli\n\nDescription:\nFirst.\n",
     )
     .expect("task fixture should be written");
 
@@ -671,7 +671,7 @@ fn zsh_completion_replaces_story_move_status_with_helper() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     assert!(
-        stdout.contains("':status -- Target status, for example todo, in-progress, ready-for-qa, done, or blocked.:_kanban_story_statuses'"),
+        stdout.contains("':status -- Target status, for example backlog, ready, todo, in-progress, ready-for-qa, done, or blocked.:_kanban_story_statuses'"),
         "story move status arg should use _kanban_story_statuses"
     );
 }
@@ -824,7 +824,7 @@ fn bash_completion_replaces_remaining_domain_arguments() {
     assert!(stdout.contains("kanban__subcmd__story__subcmd__list"));
     assert!(stdout.contains("--sprint)\n                    COMPREPLY=( $(compgen -W \"$(kanban list-ids sprints 2>/dev/null)\" -- \"${cur}\") )"));
     assert!(stdout.contains(
-        "story_statuses=\"draft ready todo in-progress ready-for-qa blocked done dropped\""
+        "story_statuses=\"draft backlog ready todo in-progress ready-for-qa blocked done dropped\""
     ));
     assert!(stdout.contains("kanban list-task-ids \"${prev}\" 2>/dev/null"));
     assert!(stdout.contains("kanban__subcmd__list__subcmd__task__subcmd__ids"));

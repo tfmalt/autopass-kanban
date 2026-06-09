@@ -524,7 +524,7 @@ fn task_add_emits_result_with_task_body() {
     let task_file = root.join("delivery/backlog/phase-1/01.infra/US-F1-001-cluster.tasks.md");
     fs::write(
         &task_file,
-        "# Tasks for US-F1-001\n\nParent User Story: US-F1-001\nSprint: S001.foundation\n\n---\n",
+        "# Tasks for US-F1-001\n\nParent User Story: US-F1-001\nSprint: S001.foundation\n",
     )
     .expect("write task file");
 
@@ -574,6 +574,213 @@ fn task_add_emits_result_with_task_body() {
         json["data"]["task_path"]
     );
     assert_eq!(out.status.code(), Some(0), "exit code should be 0");
+}
+
+#[test]
+fn task_show_emits_task_list_for_story() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_backlog_and_sprints(root);
+    let story_rel = "delivery/backlog/phase-1/06.tooling/US-F1-057-task-crud.md";
+    let frontmatter = "id: US-F1-057\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nassignee: TBD\nstory_points: 1\nwork_started:\nwork_done:\ncreated: 2026-06-09T10:18:05+0200\nupdated: 2026-06-09T10:18:05+0200\n";
+    write_story(root, story_rel, frontmatter, "# User Story\n\nBody.\n");
+    let task_file = root.join("delivery/backlog/phase-1/06.tooling/US-F1-057-task-crud.tasks.md");
+    fs::write(
+        &task_file,
+        "# Tasks for US-F1-057\n\nParent User Story: US-F1-057\nSprint: ~\n\n## TASK-US-F1-057-001 - Read tasks\n\nStatus: todo\nTags: cli\n\nDescription:\nRead tasks.\n",
+    )
+    .expect("write task file");
+
+    let out = kanban_in(
+        root,
+        &["--format", "json", "task", "show", "US-F1-057", &repo_root],
+    );
+
+    let json = parse_stdout(&out);
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["kind"], "task.show");
+    assert_eq!(json["data"]["story_id"], "US-F1-057");
+    assert_eq!(json["data"]["task_count"], 1);
+    assert_eq!(json["data"]["tasks"][0]["id"], "TASK-US-F1-057-001");
+}
+
+#[test]
+fn task_delete_removes_task_from_story() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_backlog_and_sprints(root);
+    let story_rel = "delivery/backlog/phase-1/06.tooling/US-F1-057-task-crud.md";
+    let frontmatter = "id: US-F1-057\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nassignee: TBD\nstory_points: 1\nwork_started:\nwork_done:\ncreated: 2026-06-09T10:18:05+0200\nupdated: 2026-06-09T10:18:05+0200\n";
+    write_story(root, story_rel, frontmatter, "# User Story\n\nBody.\n");
+    let task_file = root.join("delivery/backlog/phase-1/06.tooling/US-F1-057-task-crud.tasks.md");
+    fs::write(
+        &task_file,
+        "# Tasks for US-F1-057\n\nParent User Story: US-F1-057\nSprint: ~\n\n## TASK-US-F1-057-001 - First task\n\nStatus: todo\nTags: cli\n\nDescription:\nFirst.\n\n## TASK-US-F1-057-002 - Second task\n\nStatus: todo\nTags: tests\n\nDescription:\nSecond.\n",
+    )
+    .expect("write task file");
+
+    let out = kanban_in(
+        root,
+        &[
+            "--format",
+            "json",
+            "task",
+            "delete",
+            "US-F1-057",
+            "TASK-US-F1-057-001",
+            &repo_root,
+        ],
+    );
+
+    let json = parse_stdout(&out);
+    let updated = fs::read_to_string(task_file).expect("task file should be readable");
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["kind"], "task.delete");
+    assert_eq!(json["data"]["task_id"], "TASK-US-F1-057-001");
+    assert!(!updated.contains("TASK-US-F1-057-001 - First task"));
+    assert!(updated.contains("TASK-US-F1-057-002 - Second task"));
+}
+
+#[test]
+fn task_delete_missing_task_emits_error_without_partial_write() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_backlog_and_sprints(root);
+    let story_rel = "delivery/backlog/phase-1/06.tooling/US-F1-057-task-crud.md";
+    let frontmatter = "id: US-F1-057\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nassignee: TBD\nstory_points: 1\nwork_started:\nwork_done:\ncreated: 2026-06-09T10:18:05+0200\nupdated: 2026-06-09T10:18:05+0200\n";
+    write_story(root, story_rel, frontmatter, "# User Story\n\nBody.\n");
+    let task_file = root.join("delivery/backlog/phase-1/06.tooling/US-F1-057-task-crud.tasks.md");
+    let original = "# Tasks for US-F1-057\n\nParent User Story: US-F1-057\nSprint: ~\n\n## TASK-US-F1-057-001 - First task\n\nStatus: todo\nTags: cli\n\nDescription:\nFirst.\n";
+    fs::write(&task_file, original).expect("write task file");
+
+    let out = kanban_in(
+        root,
+        &[
+            "--format",
+            "json",
+            "task",
+            "delete",
+            "US-F1-057",
+            "TASK-US-F1-057-999",
+            &repo_root,
+        ],
+    );
+
+    let json = parse_stdout(&out);
+    let updated = fs::read_to_string(task_file).expect("task file should be readable");
+    assert_eq!(json["status"], "error");
+    assert_eq!(json["kind"], "task.delete");
+    assert_eq!(json["error"]["code"], "internal");
+    assert_eq!(updated, original);
+}
+
+#[test]
+fn task_add_accepts_backlog_story_without_sprint_assignment() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_backlog_and_sprints(root);
+
+    let story_rel = "delivery/backlog/phase-1/06.tooling/US-F1-057-task-crud.md";
+    let frontmatter = "id: US-F1-057\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nassignee: TBD\nstory_points: 1\nwork_started:\nwork_done:\ncreated: 2026-06-09T10:18:05+0200\nupdated: 2026-06-09T10:18:05+0200\n";
+    write_story(root, story_rel, frontmatter, "# User Story\n\nBody.\n");
+
+    let out = kanban_in(
+        root,
+        &[
+            "--format",
+            "json",
+            "task",
+            "add",
+            "US-F1-057",
+            "--title",
+            "Plan task",
+            "--description",
+            "Plan work before sprint assignment.",
+            &repo_root,
+        ],
+    );
+
+    let json = parse_stdout(&out);
+    assert_eq!(
+        json["status"],
+        "ok",
+        "task add should be ok for backlog stories; stderr: {}\nstdout: {}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8(out.stdout.clone()).unwrap_or_default()
+    );
+    assert_eq!(json["kind"], "task.add");
+    assert_eq!(json["data"]["story_id"], "US-F1-057");
+    assert_eq!(json["data"]["task_id"], "TASK-US-F1-057-001");
+    let task_file = root.join("delivery/backlog/phase-1/06.tooling/US-F1-057-task-crud.tasks.md");
+    let task_markdown = fs::read_to_string(task_file).expect("task file should be created");
+    assert!(task_markdown.contains("Sprint: ~"));
+    assert!(task_markdown.contains("## TASK-US-F1-057-001 - Plan task"));
+    assert_eq!(out.status.code(), Some(0), "exit code should be 0");
+}
+
+#[test]
+fn task_add_twice_does_not_emit_double_separator() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_backlog_and_sprints(root);
+
+    let story_rel = "delivery/backlog/phase-1/06.tooling/US-F1-057-task-crud.md";
+    let frontmatter = "id: US-F1-057\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nassignee: TBD\nstory_points: 1\nwork_started:\nwork_done:\ncreated: 2026-06-09T10:18:05+0200\nupdated: 2026-06-09T10:18:05+0200\n";
+    write_story(root, story_rel, frontmatter, "# User Story\n\nBody.\n");
+
+    let first = kanban_in(
+        root,
+        &[
+            "task",
+            "add",
+            "US-F1-057",
+            "--title",
+            "A new task",
+            "--description",
+            "add another task to the user story",
+            &repo_root,
+        ],
+    );
+    assert!(
+        first.status.success(),
+        "first task add should succeed; stderr: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    let second = kanban_in(
+        root,
+        &[
+            "task",
+            "add",
+            "US-F1-057",
+            "--title",
+            "A new task 2",
+            "--description",
+            "add another new task to the user story",
+            &repo_root,
+        ],
+    );
+    assert!(
+        second.status.success(),
+        "second task add should succeed; stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+
+    let task_file = root.join("delivery/backlog/phase-1/06.tooling/US-F1-057-task-crud.tasks.md");
+    let task_markdown = fs::read_to_string(task_file).expect("task file should be created");
+    assert!(!task_markdown.contains("\n\n---\n\n---\n\n"));
+    assert!(task_markdown.contains("## TASK-US-F1-057-001 - A new task"));
+    assert!(task_markdown.contains("## TASK-US-F1-057-002 - A new task 2"));
 }
 
 #[test]
