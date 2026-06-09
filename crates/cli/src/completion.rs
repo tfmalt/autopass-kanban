@@ -102,12 +102,26 @@ _kanban_story_point_values() {
     done < <(kanban config get story_points.allowed_values 2>/dev/null | tr -d '[]",' | tr '[:space:]' '\n')
     compadd -a values
 }
+_kanban_resolve_story_id() {
+    local candidate="$1"
+    local id
+    [[ -z "$candidate" ]] && return 1
+    while IFS= read -r id; do
+        if [[ "$id" == "$candidate" ]]; then
+            print -r -- "$id"
+            return 0
+        fi
+    done < <(kanban list-ids stories 2>/dev/null)
+    return 1
+}
 _kanban_phase_ids() {
     compadd F1 F2 F3 F4 F5 1 2 3 4 5
 }
 _kanban_task_ids_for_story() {
     local -a ids
-    local id story_id="${words[4]}"
+    local id story_id
+    story_id=$(_kanban_resolve_story_id "${words[CURRENT-1]}")
+    [[ -z "$story_id" ]] && return 0
     while IFS= read -r id; do
         [[ -n "$id" ]] && ids+=( "$id" )
     done < <(kanban list-task-ids "$story_id" 2>/dev/null)
@@ -250,7 +264,7 @@ pub(crate) fn enhance_zsh_completion(script: &str) -> String {
             "':id -- Sprint story id to move, for example US-F1-053.:_default'",
             "':id -- Sprint story id to move, for example US-F1-053.:_kanban_story_ids'",
         )
-        // Note: .replace replaces ALL occurrences — intentional for task add + task update
+        // Note: .replace replaces ALL occurrences — intentional for task add/update/delete
         .replace(
             "':story_id -- Parent story id for the task, for example US-F1-053.:_default'",
             "':story_id -- Parent story id for the task, for example US-F1-053.:_kanban_story_ids'",
@@ -258,6 +272,10 @@ pub(crate) fn enhance_zsh_completion(script: &str) -> String {
         .replace(
             "':task_id -- Task id to update, for example TASK-US-F1-053-001.:_default'",
             "':task_id -- Task id to update, for example TASK-US-F1-053-001.:_kanban_task_ids_for_story'",
+        )
+        .replace(
+            "':task_id -- Task id to delete, for example TASK-US-F1-053-001.:_default'",
+            "':task_id -- Task id to delete, for example TASK-US-F1-053-001.:_kanban_task_ids_for_story'",
         )
         .replace(
             "':story_id -- Story id whose task IDs should be listed, for example US-F1-053.:_default'",
@@ -981,21 +999,27 @@ pub(crate) fn inject_bash_task_update_status(script: &str) -> String {
                   while IFS= read -r id; do
                       [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
                   done < <(kanban list-ids stories 2>/dev/null)
-                  COMPREPLY=( "${matches[@]}" )
-                  return 0
-              fi
-              if [[ ${COMP_CWORD} -eq 4 && ${cur} != -* ]] ; then
-                  local -a matches=()
-                  local id
-                  while IFS= read -r id; do
-                      [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                  done < <(kanban list-task-ids "${prev}" 2>/dev/null)
-                  COMPREPLY=( "${matches[@]}" )
-                  return 0
-              fi
+                   COMPREPLY=( "${matches[@]}" )
+                   return 0
+               fi
+               if [[ ${COMP_CWORD} -eq 4 && ${cur} != -* ]] ; then
+                   local resolved_story
+                   resolved_story=$(_kanban_resolve_story_id "${prev}")
+                   if [[ -n "${resolved_story}" ]] ; then
+                       local -a matches=()
+                       local id
+                       while IFS= read -r id; do
+                           [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                       done < <(kanban list-task-ids "${resolved_story}" 2>/dev/null)
+                       COMPREPLY=( "${matches[@]}" )
+                   else
+                       COMPREPLY=()
+                   fi
+                   return 0
+               fi
              case "${prev}" in
-                 --title)
-                     COMPREPLY=()
+                  --title)
+                      COMPREPLY=()
                      return 0
                      ;;
                  --status)
@@ -1023,6 +1047,49 @@ pub(crate) fn inject_bash_task_update_status(script: &str) -> String {
              ;;
 "#;
     replace_bash_case_block(script, "kanban__subcmd__task__subcmd__update", replacement)
+}
+
+pub(crate) fn inject_bash_task_delete(script: &str) -> String {
+    let replacement = r#"        kanban__subcmd__task__subcmd__delete)
+             opts="-h --format --help <STORY_ID> <TASK_ID> [REPO_ROOT]"
+              if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
+                  local -a matches=()
+                  local id
+                  while IFS= read -r id; do
+                      [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                  done < <(kanban list-ids stories 2>/dev/null)
+                  COMPREPLY=( "${matches[@]}" )
+                  return 0
+              fi
+              if [[ ${COMP_CWORD} -eq 4 && ${cur} != -* ]] ; then
+                  local resolved_story
+                  resolved_story=$(_kanban_resolve_story_id "${prev}")
+                  if [[ -n "${resolved_story}" ]] ; then
+                      local -a matches=()
+                      local id
+                      while IFS= read -r id; do
+                          [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
+                      done < <(kanban list-task-ids "${resolved_story}" 2>/dev/null)
+                      COMPREPLY=( "${matches[@]}" )
+                  else
+                      COMPREPLY=()
+                  fi
+                  return 0
+              fi
+             case "${prev}" in
+                 --format)
+                     COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                     return 0
+                     ;;
+                 *)
+                     COMPREPLY=()
+                     ;;
+             esac
+             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+             return 0
+             ;;
+"#;
+    replace_bash_case_block(script, "kanban__subcmd__task__subcmd__delete", replacement)
 }
 
 /// Enhance the bash completion script with dynamic sprint name, story ID,
@@ -1073,6 +1140,7 @@ pub(crate) fn enhance_bash_completion(script: &str) -> String {
     );
     let script = inject_bash_task_add_status(&script);
     let script = inject_bash_task_update_status(&script);
+    let script = inject_bash_task_delete(&script);
     let script = inject_bash_doctor_fix_target(&script);
     let script = inject_bash_config_get(&script);
     let script = inject_bash_config_set(&script);
@@ -1097,6 +1165,19 @@ _kanban_ci_match() {
 }
 "#;
 
+pub(crate) const BASH_RESOLVE_STORY_ID_HELPER: &str = r#"
+# Resolve a task's parent story only when it matches a real story ID exactly.
+_kanban_resolve_story_id() {
+    local candidate id
+    candidate="$1"
+    [[ -z "$candidate" ]] && return 1
+    while IFS= read -r id; do
+        [[ "$id" == "$candidate" ]] && printf '%s\n' "$id" && return 0
+    done < <(kanban list-ids stories 2>/dev/null)
+    return 1
+}
+"#;
+
 /// Rewrite the prefix/substring ID match used by the injected dynamic loops so
 /// it matches case-insensitively. The matched idiom is identical across every
 /// injected story/epic/task lookup, so a single replacement covers them all.
@@ -1109,7 +1190,7 @@ pub(crate) fn make_bash_id_matches_case_insensitive(script: &str) -> String {
 
 /// Append the shared case-insensitive match helper to the bash script.
 pub(crate) fn append_bash_ci_helper(script: &str) -> String {
-    format!("{script}{BASH_CI_MATCH_HELPER}")
+    format!("{script}{BASH_CI_MATCH_HELPER}{BASH_RESOLVE_STORY_ID_HELPER}")
 }
 
 /// Register the documented `kb` alias for the same completion function as

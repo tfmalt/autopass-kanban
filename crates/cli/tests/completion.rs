@@ -694,6 +694,7 @@ fn zsh_completion_replaces_remaining_domain_arguments() {
     );
     assert!(stdout.contains("'--sprint=[Target sprint name or Snnn prefix, for example S001.planning or S001.]:SPRINT:_kanban_sprint_names'"));
     assert!(stdout.contains("':task_id -- Task id to update, for example TASK-US-F1-053-001.:_kanban_task_ids_for_story'"));
+    assert!(stdout.contains("':task_id -- Task id to delete, for example TASK-US-F1-053-001.:_kanban_task_ids_for_story'"));
     assert!(stdout.contains("':story_id -- Story id whose task IDs should be listed, for example US-F1-053.:_kanban_story_ids'"));
 }
 
@@ -826,9 +827,43 @@ fn bash_completion_replaces_remaining_domain_arguments() {
     assert!(stdout.contains(
         "story_statuses=\"draft backlog ready todo in-progress ready-for-qa blocked done dropped\""
     ));
-    assert!(stdout.contains("kanban list-task-ids \"${prev}\" 2>/dev/null"));
+    assert!(stdout.contains("resolved_story=$(_kanban_resolve_story_id \"${prev}\")"));
+    assert!(stdout.contains("kanban list-task-ids \"${resolved_story}\" 2>/dev/null"));
     assert!(stdout.contains("kanban__subcmd__list__subcmd__task__subcmd__ids"));
     assert!(!stdout.contains("kanban__subcmd__story__subcmd__plan)\n            opts=\"-h --sprint --format --help <ID> [REPO_ROOT]\"\n            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]]"));
+}
+
+#[test]
+fn zsh_task_completion_resolves_story_before_listing_task_ids() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("_kanban_resolve_story_id"));
+    assert!(stdout.contains("story_id=$(_kanban_resolve_story_id \"${words[CURRENT-1]}\")"));
+    assert!(stdout.contains("[[ -z \"$story_id\" ]] && return 0"));
+}
+
+#[test]
+fn bash_task_completion_resolves_story_before_listing_task_ids() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("_kanban_resolve_story_id() {"));
+    assert!(stdout.contains("resolved_story=$(_kanban_resolve_story_id \"${prev}\")"));
+    assert!(stdout.contains("done < <(kanban list-task-ids \"${resolved_story}\" 2>/dev/null)"));
+}
+
+#[test]
+fn bash_task_delete_completion_uses_story_scoped_task_ids() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("kanban__subcmd__task__subcmd__delete)"));
+    assert!(stdout.contains("opts=\"-h --format --help <STORY_ID> <TASK_ID> [REPO_ROOT]\""));
+    assert!(stdout.contains("resolved_story=$(_kanban_resolve_story_id \"${prev}\")"));
 }
 
 #[test]
