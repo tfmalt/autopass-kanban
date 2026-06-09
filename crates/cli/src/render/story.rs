@@ -326,38 +326,76 @@ pub(crate) fn push_story_tasks_section(
         return;
     }
 
-    let columns = task_table_columns(layout.width, &details.tasks);
-    let rows = details
-        .tasks
-        .iter()
-        .map(|task| {
-            vec![
-                TableCell::styled(&task.id, CellStyle::Id),
-                TableCell::preformatted(
-                    theme.status_text(
-                        &task.normalized_status,
-                        format!(
-                            "{} {}",
-                            status_icon(&task.normalized_status),
-                            task.normalized_status
-                        ),
-                    ),
-                    CellStyle::Precolored,
-                ),
-                TableCell::new(if task.tags.is_empty() {
-                    "-".to_string()
-                } else {
-                    task.tags.join(", ")
-                }),
-                TableCell::new(if task.description.trim().is_empty() {
-                    task.title.clone()
-                } else {
-                    format!("{} - {}", task.title, task.description.trim())
-                }),
-            ]
-        })
-        .collect::<Vec<_>>();
-    push_wrapped_table(output, theme, &columns, &rows);
+    let mut rendered_group = false;
+    for status in ["todo", "in-progress", "blocked", "done"] {
+        let tasks = details
+            .tasks
+            .iter()
+            .filter(|task| task.normalized_status == status)
+            .collect::<Vec<_>>();
+        if tasks.is_empty() {
+            continue;
+        }
+
+        if rendered_group {
+            push_line(output, "");
+        }
+        rendered_group = true;
+        push_line(
+            output,
+            &format!(
+                "  {}",
+                theme.status_text(status, format!("{} {status}", status_icon(status)))
+            ),
+        );
+        for task in tasks {
+            push_story_task_row(output, theme, layout.width, task);
+        }
+    }
+}
+
+pub(crate) fn push_story_task_row(output: &mut String, theme: &Theme, width: usize, task: &Task) {
+    let summary = format_task_row_summary(task);
+    let row_prefix = SPRINT_STORY_ROW_PREFIX;
+    let leading_prefix_plain = format!("{row_prefix}{}  ", task.id);
+    let leading_prefix = format!("{row_prefix}{}  ", theme.id(&task.id));
+    let continuation_prefix = " ".repeat(display_width(&leading_prefix_plain));
+    let summary_width = width
+        .saturating_sub(display_width(&leading_prefix_plain))
+        .max(1);
+
+    for (index, line) in wrap_text(&summary, summary_width).iter().enumerate() {
+        let prefix = if index == 0 {
+            leading_prefix.as_str()
+        } else {
+            continuation_prefix.as_str()
+        };
+        push_line(output, &format!("{prefix}{line}"));
+    }
+
+    let description = task.description.trim();
+    if description.is_empty() {
+        return;
+    }
+
+    let description_prefix = " ".repeat(display_width(SPRINT_STORY_ROW_PREFIX) + 2);
+    let description_width = width
+        .saturating_sub(display_width(&description_prefix))
+        .max(1);
+    for line in wrap_text(description, description_width) {
+        push_line(
+            output,
+            &format!("{description_prefix}{}", theme.paint(Style::Muted, line)),
+        );
+    }
+}
+
+pub(crate) fn format_task_row_summary(task: &Task) -> String {
+    if task.tags.is_empty() {
+        task.title.clone()
+    } else {
+        format!("{}  [{}]", task.title, task.tags.join(", "))
+    }
 }
 
 pub(crate) fn render_task_list(
@@ -589,12 +627,69 @@ mod tests {
         );
         assert!(output.contains("2026-05-21T00:00:00+0200"));
         assert!(output.contains("TASK-US-F1-010-001"));
-        assert!(output.contains("→ in-progress"));
-        assert!(output.contains("Build story renderer - Wire command output"));
+        assert!(output.contains("  → in-progress"));
+        assert!(output.contains("    · TASK-US-F1-010-001  Build story renderer [cli]"));
+        assert!(output.contains("        Wire command output"));
         assert!(!output.contains("Story:"));
         assert!(!output.contains("Task file"));
         assert!(!output.contains("delivery/backlog/"));
         assert!(!output.contains("| Risk | Mitigation |"));
         assert!(!output.contains("- [ ] Run `cargo test`"));
+    }
+
+    #[test]
+    fn story_details_wrap_task_rows_to_terminal_width() {
+        let theme = Theme::plain();
+        let details = StoryDetails {
+            story: StoryOverview {
+                id: "US-F1-999".to_string(),
+                title: "Compact task rendering".to_string(),
+                status: "in-progress".to_string(),
+                epic_id: Some("EP-F1-99".to_string()),
+                epic_title: Some("CLI".to_string()),
+                assignee: "Ada Lovelace <ada@example.test>".to_string(),
+                story_points: "5".to_string(),
+                sprint: Some("S999.test".to_string()),
+                relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-999.md"),
+                task_summary: None,
+                task_count: 0,
+                work_started: None,
+                work_done: None,
+            },
+            story_file_path: PathBuf::from("delivery/backlog/phase-1/US-F1-999.md"),
+            task_file_path: None,
+            epic_id: Some("EP-F1-99".to_string()),
+            epic_title: Some("CLI".to_string()),
+            work_started: None,
+            work_done: None,
+            story_statement: None,
+            acceptance_criteria: None,
+            definition_of_done: None,
+            notes_and_open_questions: None,
+            tasks: vec![kanban_core::Task {
+                id: "TASK-US-F1-999-001".to_string(),
+                title: "Improve the task renderer so compact task rows wrap responsively inside narrow terminals"
+                    .to_string(),
+                status: "In Progress".to_string(),
+                normalized_status: "in-progress".to_string(),
+                tags: vec!["cli".to_string(), "ux".to_string()],
+                description: "Keep task descriptions readable without falling back to the old table layout."
+                    .to_string(),
+            }],
+        };
+
+        let output = render_story_details(&theme, OutputLayout { width: 80 }, &details);
+
+        assert!(output.contains("  → in-progress"));
+        assert!(output.contains("TASK-US-F1-999-001"));
+        assert!(output.contains("[cli, ux]"));
+        assert!(!output.contains("Task  Status"));
+        assert!(!output.contains("Status  Tags"));
+        for line in output.lines() {
+            assert!(
+                display_width(line) <= 80,
+                "line exceeded 80 columns: {line}"
+            );
+        }
     }
 }
