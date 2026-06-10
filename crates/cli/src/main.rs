@@ -697,10 +697,10 @@ fn main() -> Result<()> {
                     theme.story_points(format_story_points(dto.remaining_points as usize)),
                 );
                 println!(
-                    "  {}  {:.1} pts/sprint over {} completed sprints ({})",
-                    theme.label("Velocity:"),
-                    dto.velocity.average,
-                    dto.velocity.completed_sprint_count,
+                    "  {}  {:.1} pts/day over {} observed workdays ({})",
+                    theme.label("Throughput:"),
+                    dto.throughput.average,
+                    dto.throughput.observed_day_count,
                     dto.confidence,
                 );
                 if let Some(date) = dto.completion.p80_date.as_deref() {
@@ -715,7 +715,7 @@ fn main() -> Result<()> {
                     println!(
                         "  {}  {}",
                         theme.label("Completion:"),
-                        theme.paint(Style::Muted, "no velocity data yet"),
+                        theme.paint(Style::Muted, "no throughput data yet"),
                     );
                 }
             }

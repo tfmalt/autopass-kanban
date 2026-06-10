@@ -17,8 +17,8 @@ and writes an xlsx report with:
   - Hierarchical WBS numbering (phase.epic.story) rebuilt from live data
   - SUM formulas for story-point totals on epic and phase rows
   - Start Date and End Date columns: actual for done/in-progress stories,
-    velocity-based estimates for not-yet-started stories
-  - Estimated hours derived from velocity for unstarted stories
+    daily-throughput estimates for not-yet-started stories
+  - Estimated hours derived from observed daily throughput for unstarted stories
   - Sprint burndown prognosis sheet
   - Phase summary sheet
   - Legend sheet
@@ -177,23 +177,47 @@ def _add_work_days(start: date, work_days: float) -> date:
     return result
 
 
+def _work_days_between_inclusive(start: date, end: date) -> int:
+    days   = 0
+    cursor = start
+    while cursor <= end:
+        if cursor.weekday() < 5:
+            days += 1
+        cursor += timedelta(days=1)
+    return days
+
+
 # ── Estimation ────────────────────────────────────────────────────────────────
 
-def _compute_estimates(stories: list, velocity: dict, sprint_duration_weeks: int) -> tuple[dict, float]:
+def _forecast_throughput(forecast: dict | None, velocity: dict, sprint_duration_weeks: int) -> tuple[float, str]:
+    throughput = (forecast or {}).get("throughput", {})
+    avg_daily  = throughput.get("average", 0) or 0
+    observed   = throughput.get("observed_day_count", 0) or 0
+    if avg_daily > 0:
+        return avg_daily, f"daily throughput over {observed} observed workdays"
+
+    avg_sprint = velocity.get("avg_points_per_sprint", 0) or 0
+    work_days  = max(1, sprint_duration_weeks * 5)
+    if avg_sprint > 0:
+        return avg_sprint / work_days, "sprint velocity fallback"
+
+    return 0.0, "no throughput data"
+
+
+def _compute_estimates(stories: list, velocity: dict, forecast: dict | None, sprint_duration_weeks: int) -> tuple[dict, float]:
     """
     Return (estimates, hours_per_point).
     estimates: {story_id: {est_hours, est_start, est_end}}
-    hours_per_point is 0 if velocity is unknown.
+    hours_per_point is 0 if throughput is unknown.
     """
-    avg_pts = velocity.get("avg_points_per_sprint", 0) or 0
-    if avg_pts <= 0:
+    avg_pts_per_workday, _source = _forecast_throughput(forecast, velocity, sprint_duration_weeks)
+    if avg_pts_per_workday <= 0:
         empty = {s["id"]: {"est_hours": None, "est_start": None, "est_end": None} for s in stories}
         return empty, 0.0
 
     hours_per_day    = 7
-    work_days_sprint = sprint_duration_weeks * 5
-    hours_per_point  = (work_days_sprint * hours_per_day) / avg_pts
-    days_per_point   = work_days_sprint / avg_pts
+    hours_per_point  = hours_per_day / avg_pts_per_workday
+    days_per_point   = 1 / avg_pts_per_workday
 
     STATUS_ORDER = {
         "in-progress": 0, "ready-for-qa": 1, "ready": 2,
@@ -538,6 +562,9 @@ def build_sprint_burndown_sheet(ws, sprints: list, velocity: dict, forecast: dic
     completed = velocity.get("completed_sprint_count", 0)
     dur       = velocity.get("sprint_duration_weeks", 2)
     completion = forecast.get("completion", {}) if forecast else {}
+    throughput = forecast.get("throughput", {}) if forecast else {}
+    daily_avg, forecast_source = _forecast_throughput(forecast, velocity, dur)
+    observed_days = throughput.get("observed_day_count", 0) or 0
     p50 = completion.get("p50_date")
     p80 = completion.get("p80_date")
     p90 = completion.get("p90_date")
@@ -547,7 +574,8 @@ def build_sprint_burndown_sheet(ws, sprints: list, velocity: dict, forecast: dic
     ws.row_dimensions[2].height = 16
     sc            = ws["A2"]
     sc.value      = (
-        f"Velocity: {avg:.1f} pts/sprint (over {completed} completed sprint{'s' if completed != 1 else ''})  ·  "
+        f"Throughput: {daily_avg:.1f} pts/workday (over {observed_days} observed workdays)  ·  "
+        f"Sprint velocity: {avg:.1f} pts/sprint (over {completed} completed sprint{'s' if completed != 1 else ''})  ·  "
         f"Remaining: {remaining} pts  ·  Forecast completion: {est_text}  ·  Generated: {generated_at[:10]}"
     )
     sc.font       = Font(italic=True, color=COLOUR_WHITE_FG, size=9)
@@ -556,7 +584,7 @@ def build_sprint_burndown_sheet(ws, sprints: list, velocity: dict, forecast: dic
 
     _write_header_row(ws, 3, [
         "Sprint", "Start", "End", "Planned Pts", "Delivered Pts",
-        "Velocity (avg)", "Remaining (cum.)", "Status",
+        "Rate (avg)", "Remaining (cum.)", "Status",
     ])
 
     total_delivered_all  = sum(s.get("delivered_points", 0) for s in sprints)
@@ -594,7 +622,7 @@ def build_sprint_burndown_sheet(ws, sprints: list, velocity: dict, forecast: dic
                 c.number_format = "0"
         row += 1
 
-    if p80 and avg > 0 and sprints:
+    if p80 and daily_avg > 0 and sprints:
         last_end       = datetime.strptime(sprints[-1]["end_date"], "%Y-%m-%d").date()
         sprint_days    = dur * 7
         proj_remaining = cumulative_remaining
@@ -605,7 +633,7 @@ def build_sprint_burndown_sheet(ws, sprints: list, velocity: dict, forecast: dic
 
         ws.merge_cells(f"A{row}:H{row}")
         ws.row_dimensions[row].height = 17
-        c            = ws.cell(row=row, column=1, value="▸ Projected future sprints (based on current velocity)")
+        c            = ws.cell(row=row, column=1, value=f"▸ Projected future sprints (based on {forecast_source})")
         c.font       = Font(bold=True, italic=True, color="FF444444", size=9)
         c.alignment  = Alignment(horizontal="left", vertical="center")
         row         += 1
@@ -613,7 +641,8 @@ def build_sprint_burndown_sheet(ws, sprints: list, velocity: dict, forecast: dic
         while proj_remaining > 0 and sprint_num <= 40:
             proj_start         = last_end + timedelta(days=1 + (sprint_num - 1) * sprint_days)
             proj_end           = proj_start + timedelta(days=sprint_days - 1)
-            projected_delivery = min(avg, proj_remaining)
+            work_days          = _work_days_between_inclusive(proj_start, proj_end)
+            projected_delivery = min(daily_avg * work_days, proj_remaining)
             proj_remaining     = max(0, proj_remaining - projected_delivery)
 
             ws.row_dimensions[row].height = 16
@@ -621,9 +650,9 @@ def build_sprint_burndown_sheet(ws, sprints: list, velocity: dict, forecast: dic
                 f"S{len(sprints) + sprint_num:03d}.projected",
                 proj_start.strftime("%Y-%m-%d"),
                 proj_end.strftime("%Y-%m-%d"),
-                round(avg),
+                round(daily_avg * work_days),
                 round(projected_delivery),
-                avg,
+                daily_avg,
                 max(0, proj_remaining),
                 "projected",
             ]
@@ -667,9 +696,9 @@ def build_legend_sheet(ws):
             (None, "Priority",   "Critical / High / Medium / Low"),
             (None, "Status",     "Current workflow status"),
             (None, "Story Pts",  "Estimated story points; SUM for epic/phase rows"),
-            (None, "Est Hours",  "Estimated hours (velocity-based)"),
+            (None, "Est Hours",  "Estimated hours (throughput-based)"),
             (None, "Start Date", "Actual start (done/in-progress) or estimated"),
-            (None, "End Date",   "Actual end (done) or velocity-based estimate"),
+            (None, "End Date",   "Actual end (done) or throughput-based estimate"),
             (None, "Notes",      "Free-text remarks"),
         ]),
     ]
@@ -760,7 +789,8 @@ def main():
 
     hierarchy              = _build_hierarchy(stories)
     sprint_dur             = velocity.get("sprint_duration_weeks", 2)
-    estimates, hpp         = _compute_estimates(stories, velocity, sprint_dur)
+    estimates, hpp         = _compute_estimates(stories, velocity, forecast, sprint_dur)
+    avg_daily, source      = _forecast_throughput(forecast, velocity, sprint_dur)
 
     wb = openpyxl.Workbook()
 
@@ -787,7 +817,7 @@ def main():
     if hpp > 0:
         print(
             f"  Hours/point: {hpp:.1f}h  "
-            f"(sprint={sprint_dur}w, velocity={velocity.get('avg_points_per_sprint', 0):.1f} pts/sprint)",
+            f"({source}, {avg_daily:.1f} pts/workday)",
             file=sys.stderr,
         )
     completion = forecast.get("completion", {})

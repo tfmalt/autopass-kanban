@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use chrono::Datelike;
 use serde::Serialize;
 
 use crate::util::{normalize_status_alias, parse_assignee_list};
@@ -912,21 +913,21 @@ pub struct ReportVelocityDto {
     pub sprint_duration_weeks: u32,
 }
 
-/// Velocity distribution used by the canonical forecast model.
+/// Daily throughput distribution used by the canonical forecast model.
 #[derive(Debug, Clone, Serialize)]
-pub struct ForecastVelocityDto {
+pub struct ForecastThroughputDto {
     pub samples: Vec<i64>,
     pub average: f64,
     pub median: f64,
-    pub completed_sprint_count: usize,
+    pub observed_day_count: usize,
 }
 
 /// Probabilistic completion bands from deterministic Monte Carlo simulation.
 #[derive(Debug, Clone, Serialize)]
 pub struct ForecastCompletionDto {
-    pub p50_sprints: Option<u32>,
-    pub p80_sprints: Option<u32>,
-    pub p90_sprints: Option<u32>,
+    pub p50_days: Option<u32>,
+    pub p80_days: Option<u32>,
+    pub p90_days: Option<u32>,
     pub p50_date: Option<String>,
     pub p80_date: Option<String>,
     pub p90_date: Option<String>,
@@ -939,7 +940,7 @@ pub struct ReportForecastDto {
     pub remaining_points: i64,
     pub sprint_duration_weeks: u32,
     pub projection_start_date: String,
-    pub velocity: ForecastVelocityDto,
+    pub throughput: ForecastThroughputDto,
     pub completion: ForecastCompletionDto,
     pub confidence: String,
 }
@@ -960,7 +961,7 @@ struct ForecastInputs {
     remaining_points: i64,
     sprint_duration_weeks: u32,
     projection_start_date: chrono::NaiveDate,
-    velocity_samples: Vec<i64>,
+    throughput_samples: Vec<i64>,
 }
 
 fn average(values: &[i64]) -> f64 {
@@ -998,21 +999,66 @@ fn percentile(sorted_values: &[u32], percentile: f64) -> Option<u32> {
     sorted_values.get(index).copied()
 }
 
-fn completion_date(
-    start: chrono::NaiveDate,
-    sprint_duration_weeks: u32,
-    sprints: Option<u32>,
-) -> Option<String> {
-    let sprints = sprints?;
-    let days = i64::from(sprints) * i64::from(sprint_duration_weeks) * 7;
-    Some(
-        (start + chrono::Duration::days(days))
-            .format("%Y-%m-%d")
-            .to_string(),
-    )
+fn is_weekday(date: chrono::NaiveDate) -> bool {
+    date.weekday().number_from_monday() <= 5
 }
 
-fn simulate_completion_sprints(remaining_points: i64, samples: &[i64]) -> Vec<u32> {
+fn completion_date(start: chrono::NaiveDate, days: Option<u32>) -> Option<String> {
+    let mut remaining_days = days?;
+    let mut date = start;
+    while remaining_days > 0 {
+        date += chrono::Duration::days(1);
+        if is_weekday(date) {
+            remaining_days -= 1;
+        }
+    }
+    Some(date.format("%Y-%m-%d").to_string())
+}
+
+fn parse_frontmatter_date(value: &str) -> Option<chrono::NaiveDate> {
+    let date_part = value.trim().get(..10)?;
+    chrono::NaiveDate::parse_from_str(date_part, "%Y-%m-%d").ok()
+}
+
+fn daily_throughput_samples(stories: &[StoryOverview], today: chrono::NaiveDate) -> Vec<i64> {
+    let mut points_by_day: BTreeMap<chrono::NaiveDate, i64> = BTreeMap::new();
+    for story in stories {
+        if !story.status.eq_ignore_ascii_case("done") {
+            continue;
+        }
+        let Some(work_done) = story.work_done.as_deref().and_then(parse_frontmatter_date) else {
+            continue;
+        };
+        let points = parse_points(&story.story_points).unwrap_or(0);
+        if points <= 0 {
+            continue;
+        }
+        *points_by_day.entry(work_done).or_default() += points;
+    }
+
+    let Some(first_day) = points_by_day.keys().next().copied() else {
+        return Vec::new();
+    };
+
+    let end_day = today.max(
+        points_by_day
+            .keys()
+            .next_back()
+            .copied()
+            .unwrap_or(first_day),
+    );
+    let mut samples = Vec::new();
+    let mut day = first_day;
+    while day <= end_day {
+        if is_weekday(day) || points_by_day.contains_key(&day) {
+            samples.push(*points_by_day.get(&day).unwrap_or(&0));
+        }
+        day += chrono::Duration::days(1);
+    }
+    samples
+}
+
+fn simulate_completion_days(remaining_points: i64, samples: &[i64]) -> Vec<u32> {
     if remaining_points <= 0 {
         return vec![0];
     }
@@ -1021,20 +1067,20 @@ fn simulate_completion_sprints(remaining_points: i64, samples: &[i64]) -> Vec<u3
     }
 
     const ITERATIONS: usize = 10_000;
-    const MAX_SPRINTS: u32 = 1_000;
+    const MAX_DAYS: u32 = 10_000;
     let mut seed = 0xA17C_0DE5_u64;
     let mut results = Vec::with_capacity(ITERATIONS);
 
     for _ in 0..ITERATIONS {
         let mut remaining = remaining_points;
-        let mut sprints = 0_u32;
-        while remaining > 0 && sprints < MAX_SPRINTS {
+        let mut days = 0_u32;
+        while remaining > 0 && days < MAX_DAYS {
             let idx = (next_random(&mut seed) as usize) % samples.len();
             remaining -= samples[idx].max(0);
-            sprints += 1;
+            days += 1;
         }
         if remaining <= 0 {
-            results.push(sprints);
+            results.push(days);
         }
     }
 
@@ -1044,17 +1090,17 @@ fn simulate_completion_sprints(remaining_points: i64, samples: &[i64]) -> Vec<u3
 
 impl ReportForecastDto {
     fn from_inputs(inputs: ForecastInputs) -> Self {
-        let samples = inputs.velocity_samples;
-        let completed_sprint_count = samples.len();
-        let simulations = simulate_completion_sprints(inputs.remaining_points, &samples);
+        let samples = inputs.throughput_samples;
+        let observed_day_count = samples.len();
+        let simulations = simulate_completion_days(inputs.remaining_points, &samples);
         let p50 = percentile(&simulations, 0.50);
         let p80 = percentile(&simulations, 0.80);
         let p90 = percentile(&simulations, 0.90);
-        let confidence = if completed_sprint_count == 0 || simulations.is_empty() {
+        let confidence = if observed_day_count == 0 || simulations.is_empty() {
             "none"
-        } else if completed_sprint_count < 3 {
+        } else if observed_day_count < 5 {
             "low"
-        } else if completed_sprint_count < 6 {
+        } else if observed_day_count < 10 {
             "medium"
         } else {
             "high"
@@ -1065,31 +1111,19 @@ impl ReportForecastDto {
             remaining_points: inputs.remaining_points,
             sprint_duration_weeks: inputs.sprint_duration_weeks,
             projection_start_date: inputs.projection_start_date.format("%Y-%m-%d").to_string(),
-            velocity: ForecastVelocityDto {
+            throughput: ForecastThroughputDto {
                 average: average(&samples),
                 median: median(&samples),
-                completed_sprint_count,
+                observed_day_count,
                 samples,
             },
             completion: ForecastCompletionDto {
-                p50_sprints: p50,
-                p80_sprints: p80,
-                p90_sprints: p90,
-                p50_date: completion_date(
-                    inputs.projection_start_date,
-                    inputs.sprint_duration_weeks,
-                    p50,
-                ),
-                p80_date: completion_date(
-                    inputs.projection_start_date,
-                    inputs.sprint_duration_weeks,
-                    p80,
-                ),
-                p90_date: completion_date(
-                    inputs.projection_start_date,
-                    inputs.sprint_duration_weeks,
-                    p90,
-                ),
+                p50_days: p50,
+                p80_days: p80,
+                p90_days: p90,
+                p50_date: completion_date(inputs.projection_start_date, p50),
+                p80_date: completion_date(inputs.projection_start_date, p80),
+                p90_date: completion_date(inputs.projection_start_date, p90),
             },
             confidence: confidence.to_string(),
         }
@@ -1237,7 +1271,7 @@ impl PreparedReport {
             remaining_points: remaining,
             sprint_duration_weeks,
             projection_start_date: today,
-            velocity_samples,
+            throughput_samples: daily_throughput_samples(stories, today),
         };
 
         Self {
@@ -1309,31 +1343,65 @@ mod tests {
             remaining_points: 20,
             sprint_duration_weeks: 2,
             projection_start_date: chrono::NaiveDate::from_ymd_opt(2026, 6, 9).unwrap(),
-            velocity_samples: vec![5, 10, 15],
+            throughput_samples: vec![5, 10, 15],
         });
 
         let json = serde_json::to_value(&forecast).expect("serialization should succeed");
         assert_eq!(json["remaining_points"], 20);
-        assert_eq!(json["velocity"]["average"], 10.0);
-        assert_eq!(json["velocity"]["median"], 10.0);
-        assert_eq!(json["confidence"], "medium");
-        assert!(json["completion"]["p50_sprints"].as_u64().unwrap() >= 2);
+        assert_eq!(json["throughput"]["average"], 10.0);
+        assert_eq!(json["throughput"]["median"], 10.0);
+        assert_eq!(json["confidence"], "low");
+        assert!(json["completion"]["p50_days"].as_u64().unwrap() >= 2);
         assert!(json["completion"]["p90_date"].is_string());
     }
 
     #[test]
-    fn canonical_forecast_has_no_completion_without_velocity() {
+    fn canonical_forecast_has_no_completion_without_throughput() {
         let forecast = ReportForecastDto::from_inputs(ForecastInputs {
             generated_at: "2026-06-09T10:00:00+02:00".to_string(),
             remaining_points: 20,
             sprint_duration_weeks: 2,
             projection_start_date: chrono::NaiveDate::from_ymd_opt(2026, 6, 9).unwrap(),
-            velocity_samples: vec![],
+            throughput_samples: vec![],
         });
 
         assert_eq!(forecast.confidence, "none");
         assert_eq!(forecast.completion.p80_date, None);
-        assert_eq!(forecast.velocity.average, 0.0);
+        assert_eq!(forecast.throughput.average, 0.0);
+    }
+
+    #[test]
+    fn daily_throughput_samples_group_done_points_and_include_zero_weekdays() {
+        fn story(id: &str, status: &str, points: &str, work_done: Option<&str>) -> StoryOverview {
+            StoryOverview {
+                id: id.to_string(),
+                title: id.to_string(),
+                status: status.to_string(),
+                epic_id: None,
+                epic_title: None,
+                assignee: String::new(),
+                story_points: points.to_string(),
+                sprint: Some("S001".to_string()),
+                relative_path: PathBuf::from(format!("delivery/backlog/{id}.md")),
+                task_summary: None,
+                task_count: 0,
+                work_started: None,
+                work_done: work_done.map(str::to_string),
+            }
+        }
+
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+        let samples = daily_throughput_samples(
+            &[
+                story("US-F1-001", "done", "5", Some("2026-06-08T12:00:00+0200")),
+                story("US-F1-002", "done", "3", Some("2026-06-08T13:00:00+0200")),
+                story("US-F1-003", "todo", "13", None),
+                story("US-F1-004", "done", "2", Some("2026-06-10T09:00:00+0200")),
+            ],
+            today,
+        );
+
+        assert_eq!(samples, vec![8, 0, 2]);
     }
 
     #[test]
