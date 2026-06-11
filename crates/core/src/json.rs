@@ -859,6 +859,8 @@ pub struct ReportStoryDto {
     pub path: String,
     pub work_started: Option<String>,
     pub work_done: Option<String>,
+    pub planned_start: Option<String>,
+    pub planned_end: Option<String>,
 }
 
 impl ReportStoryDto {
@@ -875,6 +877,8 @@ impl ReportStoryDto {
             path: path_string(&o.relative_path),
             work_started: o.work_started.clone(),
             work_done: o.work_done.clone(),
+            planned_start: o.planned_start.clone(),
+            planned_end: o.planned_end.clone(),
         }
     }
 }
@@ -1387,6 +1391,8 @@ mod tests {
                 task_count: 0,
                 work_started: None,
                 work_done: work_done.map(str::to_string),
+                planned_start: None,
+                planned_end: None,
             }
         }
 
@@ -1433,6 +1439,8 @@ mod tests {
             task_count: 1,
             work_started: None,
             work_done: None,
+            planned_start: None,
+            planned_end: None,
         };
         let dto = StoryOverviewDto::from_overview(&overview);
         let json = serde_json::to_value(&dto).expect("serialization should succeed");
@@ -1442,6 +1450,35 @@ mod tests {
         assert!(json["assignee"].is_null());
         assert_eq!(json["sprint"], "S001");
         assert_eq!(json["path"], "delivery/backlog/x/US-F1-001-cluster.md");
+    }
+
+    #[test]
+    fn report_story_dto_serializes_planned_dates_from_frontmatter_metadata() {
+        let overview = crate::StoryOverview {
+            id: "US-F1-058".to_string(),
+            title: "Add planned and actual dates".to_string(),
+            status: "todo".to_string(),
+            epic_id: Some("EP-F1-06".to_string()),
+            epic_title: Some("Git-driven kanban and backlog tooling".to_string()),
+            assignee: "TBD".to_string(),
+            story_points: "1".to_string(),
+            sprint: Some("S001.scaffolding-part-1".to_string()),
+            relative_path: PathBuf::from("delivery/backlog/x/US-F1-058.md"),
+            task_summary: None,
+            task_count: 0,
+            work_started: Some("2026-06-11T10:00:00+0200".to_string()),
+            work_done: None,
+            planned_start: Some("2026-06-15".to_string()),
+            planned_end: Some("2026-06-19".to_string()),
+        };
+
+        let dto = ReportStoryDto::from_overview(&overview);
+        let json = serde_json::to_value(&dto).expect("serialization should succeed");
+
+        assert_eq!(json["planned_start"], "2026-06-15");
+        assert_eq!(json["planned_end"], "2026-06-19");
+        assert_eq!(json["work_started"], "2026-06-11T10:00:00+0200");
+        assert!(json["work_done"].is_null());
     }
 
     #[test]
@@ -1460,6 +1497,8 @@ mod tests {
             task_count: 0,
             work_started: None,
             work_done: None,
+            planned_start: None,
+            planned_end: None,
         };
         let dto = StoryOverviewDto::from_overview(&overview);
         let json = serde_json::to_value(&dto).expect("serialization should succeed");
@@ -1553,6 +1592,8 @@ mod tests {
             task_count: 1,
             work_started: None,
             work_done: None,
+            planned_start: None,
+            planned_end: None,
         };
         let details = crate::StoryDetails {
             story: overview,
@@ -1607,6 +1648,8 @@ mod tests {
             task_count: 0,
             work_started: None,
             work_done: None,
+            planned_start: None,
+            planned_end: None,
         };
         let details = crate::StoryDetails {
             story: overview,
@@ -1679,6 +1722,8 @@ mod tests {
             task_count: 0,
             work_started: None,
             work_done: None,
+            planned_start: None,
+            planned_end: None,
         };
 
         let mut stories_by_status = BTreeMap::new();
@@ -1758,6 +1803,8 @@ mod tests {
             task_count: 0,
             work_started: None,
             work_done: None,
+            planned_start: None,
+            planned_end: None,
         };
 
         // Two source keys that slugify to the same slug "in-progress"

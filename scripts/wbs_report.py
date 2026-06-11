@@ -16,8 +16,8 @@ The script reads JSON from stdin (produced by `kanban --format json report wbs`)
 and writes an xlsx report with:
   - Hierarchical WBS numbering (phase.epic.story) rebuilt from live data
   - SUM formulas for story-point totals on epic and phase rows
-  - Start Date and End Date columns: actual for done/in-progress stories,
-    daily-throughput estimates for not-yet-started stories
+  - Planned Start Date and Planned End Date columns from markdown metadata
+  - Actual Start Date, Actual End Date, and Actual Period from lifecycle fields
   - Estimated hours derived from observed daily throughput for unstarted stories
   - Sprint burndown prognosis sheet
   - Phase summary sheet
@@ -69,34 +69,40 @@ PHASE_META = {
     "F5": {"title": "Phase 5 – Driftssettelse og Stabilisering",         "milestone": "MP5 – Production Readiness",  "period": "Q2 2027", "priority": "High"},
 }
 
-# ── Output column layout (A–L, 12 columns) ───────────────────────────────────
-COL_WBS        = 1   # A: hierarchical WBS number (1.1.2)
-COL_ID         = 2   # B: ID (phase code / EP-* / US-*)
-COL_TITLE      = 3   # C: Title
-COL_MILESTONE  = 4   # D: Milestone
-COL_PERIOD     = 5   # E: Period
-COL_PRIORITY   = 6   # F: Priority
-COL_STATUS     = 7   # G: Status
-COL_POINTS     = 8   # H: Story Points (SUM formula for epic/phase)
-COL_HOURS      = 9   # I: Est Hours
-COL_START_DATE = 10  # J: Start Date (actual or estimated)
-COL_END_DATE   = 11  # K: End Date   (actual or estimated)
-COL_NOTES      = 12  # L: Notes
-TOTAL_COLS     = 12
+# ── Output column layout (A–O, 15 columns) ───────────────────────────────────
+COL_WBS                = 1   # A: hierarchical WBS number (1.1.2)
+COL_ID                 = 2   # B: ID (phase code / EP-* / US-*)
+COL_TITLE              = 3   # C: Title
+COL_MILESTONE          = 4   # D: Milestone
+COL_PERIOD             = 5   # E: Planned period
+COL_PRIORITY           = 6   # F: Priority
+COL_STATUS             = 7   # G: Status
+COL_POINTS             = 8   # H: Story Points (SUM formula for epic/phase)
+COL_HOURS              = 9   # I: Est Hours
+COL_PLANNED_START_DATE = 10  # J: Planned Start Date
+COL_PLANNED_END_DATE   = 11  # K: Planned End Date
+COL_ACTUAL_START_DATE  = 12  # L: Actual Start Date
+COL_ACTUAL_END_DATE    = 13  # M: Actual End Date
+COL_ACTUAL_PERIOD      = 14  # N: Actual Period
+COL_NOTES              = 15  # O: Notes
+TOTAL_COLS             = 15
 
 WBS_COLUMN_WIDTHS = {
     "A": 10,   # WBS No
     "B": 14,   # ID
     "C": 55,   # Title
     "D": 28,   # Milestone
-    "E": 12,   # Period
+    "E": 16,   # Planned Period
     "F": 12,   # Priority
     "G": 15,   # Status
     "H": 11,   # Story Pts
     "I": 11,   # Est Hours
-    "J": 14,   # Start Date
-    "K": 14,   # End Date
-    "L": 35,   # Notes
+    "J": 18,   # Planned Start Date
+    "K": 18,   # Planned End Date
+    "L": 17,   # Actual Start Date
+    "M": 17,   # Actual End Date
+    "N": 15,   # Actual Period
+    "O": 35,   # Notes
 }
 
 DATE_FMT = "YYYY-MM-DD"
@@ -187,6 +193,25 @@ def _work_days_between_inclusive(start: date, end: date) -> int:
     return days
 
 
+def _quarter(d: date) -> tuple[int, int]:
+    return ((d.month - 1) // 3 + 1, d.year)
+
+
+def _period_label(start: date | None, end: date | None) -> str | None:
+    first = start or end
+    last = end or start
+    if first is None or last is None:
+        return None
+
+    q1, y1 = _quarter(first)
+    q2, y2 = _quarter(last)
+    if (q1, y1) == (q2, y2):
+        return f"Q{q1} {y1}"
+    if y1 == y2:
+        return f"Q{q1}-Q{q2} {y1}"
+    return f"Q{q1} {y1}-Q{q2} {y2}"
+
+
 # ── Estimation ────────────────────────────────────────────────────────────────
 
 def _forecast_throughput(forecast: dict | None, velocity: dict, sprint_duration_weeks: int) -> tuple[float, str]:
@@ -266,28 +291,26 @@ def _compute_estimates(stories: list, velocity: dict, forecast: dict | None, spr
     return estimates, hours_per_point
 
 
-def _group_dates(stories_in_group: list, estimates: dict) -> tuple[date | None, date | None]:
-    """Return (min_start, max_end) across a group of stories."""
+def _group_planned_dates(stories_in_group: list) -> tuple[date | None, date | None]:
+    """Return (min planned_start, max planned_end) across a group of stories."""
     starts, ends = [], []
     for s in stories_in_group:
-        sid    = s["id"]
-        status = s["status"].lower()
-        ws_d   = _parse_iso_date(s.get("work_started"))
-        wd_d   = _parse_iso_date(s.get("work_done"))
-        est    = estimates.get(sid, {})
+        planned_start = _parse_iso_date(s.get("planned_start"))
+        planned_end   = _parse_iso_date(s.get("planned_end"))
+        if planned_start: starts.append(planned_start)
+        if planned_end:   ends.append(planned_end)
 
-        if status == "done":
-            if ws_d: starts.append(ws_d)
-            if wd_d: ends.append(wd_d)
-        elif status in ("in-progress", "ready-for-qa"):
-            if ws_d: starts.append(ws_d)
-            ee = est.get("est_end")
-            if ee:   ends.append(ee)
-        else:
-            es = est.get("est_start")
-            ee = est.get("est_end")
-            if es: starts.append(es)
-            if ee: ends.append(ee)
+    return (min(starts) if starts else None), (max(ends) if ends else None)
+
+
+def _group_actual_dates(stories_in_group: list) -> tuple[date | None, date | None]:
+    """Return (min actual_start, max actual_end) across lifecycle dates."""
+    starts, ends = [], []
+    for s in stories_in_group:
+        actual_start = _parse_iso_date(s.get("work_started"))
+        actual_end   = _parse_iso_date(s.get("work_done"))
+        if actual_start: starts.append(actual_start)
+        if actual_end:   ends.append(actual_end)
 
     return (min(starts) if starts else None), (max(ends) if ends else None)
 
@@ -338,37 +361,50 @@ def _write_header_row(ws, row_num: int, headers: list):
         c.alignment  = Alignment(horizontal="center", vertical="center")
 
 
+def _set_outline_level(ws, row_num: int, level: int):
+    ws.row_dimensions[row_num].outlineLevel = level
+
+
 def _write_phase_row(ws, row_num: int, wbs: str, phase_id: str,
-                     ph_start: date | None, ph_end: date | None):
+                     planned_start: date | None, planned_end: date | None,
+                     actual_start: date | None, actual_end: date | None):
     meta                          = PHASE_META.get(phase_id, {})
     ws.row_dimensions[row_num].height = 20
     ws.cell(row_num, COL_WBS,       value=wbs)
     ws.cell(row_num, COL_ID,        value=phase_id)
     ws.cell(row_num, COL_TITLE,     value=f"   {meta.get('title', phase_id)}")
     ws.cell(row_num, COL_MILESTONE, value=meta.get("milestone", ""))
-    ws.cell(row_num, COL_PERIOD,    value=meta.get("period", ""))
+    ws.cell(row_num, COL_PERIOD,    value=_period_label(planned_start, planned_end) or meta.get("period", ""))
     ws.cell(row_num, COL_PRIORITY,  value=meta.get("priority", ""))
     ws.cell(row_num, COL_STATUS,    value="")
     ws.cell(row_num, COL_HOURS,     value=None)
-    if ph_start: _set_date_cell(ws.cell(row_num, COL_START_DATE), ph_start)
-    if ph_end:   _set_date_cell(ws.cell(row_num, COL_END_DATE),   ph_end)
+    if planned_start: _set_date_cell(ws.cell(row_num, COL_PLANNED_START_DATE), planned_start)
+    if planned_end:   _set_date_cell(ws.cell(row_num, COL_PLANNED_END_DATE),   planned_end)
+    if actual_start:  _set_date_cell(ws.cell(row_num, COL_ACTUAL_START_DATE),  actual_start)
+    if actual_end:    _set_date_cell(ws.cell(row_num, COL_ACTUAL_END_DATE),    actual_end)
+    ws.cell(row_num, COL_ACTUAL_PERIOD, value=_period_label(actual_start, actual_end))
     apply_row_style(ws, row_num, level=2)
 
 
 def _write_epic_row(ws, row_num: int, wbs: str, epic_id: str, epic_title: str,
-                    phase_id: str, ep_start: date | None, ep_end: date | None):
+                    phase_id: str,
+                    planned_start: date | None, planned_end: date | None,
+                    actual_start: date | None, actual_end: date | None):
     meta                          = PHASE_META.get(phase_id, {})
     ws.row_dimensions[row_num].height = 18
     ws.cell(row_num, COL_WBS,       value=wbs)
     ws.cell(row_num, COL_ID,        value=epic_id)
     ws.cell(row_num, COL_TITLE,     value=f"   {epic_title}")
     ws.cell(row_num, COL_MILESTONE, value=meta.get("milestone", ""))
-    ws.cell(row_num, COL_PERIOD,    value=meta.get("period", ""))
+    ws.cell(row_num, COL_PERIOD,    value=_period_label(planned_start, planned_end) or meta.get("period", ""))
     ws.cell(row_num, COL_PRIORITY,  value=meta.get("priority", ""))
     ws.cell(row_num, COL_STATUS,    value="")
     ws.cell(row_num, COL_HOURS,     value=None)
-    if ep_start: _set_date_cell(ws.cell(row_num, COL_START_DATE), ep_start)
-    if ep_end:   _set_date_cell(ws.cell(row_num, COL_END_DATE),   ep_end)
+    if planned_start: _set_date_cell(ws.cell(row_num, COL_PLANNED_START_DATE), planned_start)
+    if planned_end:   _set_date_cell(ws.cell(row_num, COL_PLANNED_END_DATE),   planned_end)
+    if actual_start:  _set_date_cell(ws.cell(row_num, COL_ACTUAL_START_DATE),  actual_start)
+    if actual_end:    _set_date_cell(ws.cell(row_num, COL_ACTUAL_END_DATE),    actual_end)
+    ws.cell(row_num, COL_ACTUAL_PERIOD, value=_period_label(actual_start, actual_end))
     apply_row_style(ws, row_num, level=3)
 
 
@@ -392,21 +428,25 @@ def _write_story_row(ws, row_num: int, wbs: str, story: dict,
     elif est.get("est_hours") is not None:
         ws.cell(row_num, COL_HOURS, value=est["est_hours"])
 
-    ws_date = _parse_iso_date(story.get("work_started"))
-    wd_date = _parse_iso_date(story.get("work_done"))
+    planned_start = _parse_iso_date(story.get("planned_start"))
+    planned_end   = _parse_iso_date(story.get("planned_end"))
+    actual_start  = _parse_iso_date(story.get("work_started"))
+    actual_end    = _parse_iso_date(story.get("work_done"))
 
-    if status == "done":
-        if ws_date: _set_date_cell(ws.cell(row_num, COL_START_DATE), ws_date)
-        if wd_date: _set_date_cell(ws.cell(row_num, COL_END_DATE),   wd_date)
-    elif status in ("in-progress", "ready-for-qa"):
-        if ws_date: _set_date_cell(ws.cell(row_num, COL_START_DATE), ws_date)
-        ee = est.get("est_end")
-        if ee:      _set_date_cell(ws.cell(row_num, COL_END_DATE),   ee)
-    else:
-        es = est.get("est_start")
-        ee = est.get("est_end")
-        if es: _set_date_cell(ws.cell(row_num, COL_START_DATE), es)
-        if ee: _set_date_cell(ws.cell(row_num, COL_END_DATE),   ee)
+    ws.cell(row_num, COL_PERIOD, value=_period_label(planned_start, planned_end))
+    if planned_start: _set_date_cell(ws.cell(row_num, COL_PLANNED_START_DATE), planned_start)
+    if planned_end:   _set_date_cell(ws.cell(row_num, COL_PLANNED_END_DATE),   planned_end)
+    if actual_start:  _set_date_cell(ws.cell(row_num, COL_ACTUAL_START_DATE),  actual_start)
+    if actual_end:    _set_date_cell(ws.cell(row_num, COL_ACTUAL_END_DATE),    actual_end)
+    ws.cell(row_num, COL_ACTUAL_PERIOD, value=_period_label(actual_start, actual_end))
+
+    if not planned_start or not planned_end:
+        missing = []
+        if not planned_start:
+            missing.append("start")
+        if not planned_end:
+            missing.append("end")
+        ws.cell(row_num, COL_NOTES, value=f"Missing planned baseline: {', '.join(missing)}")
 
     apply_row_style(ws, row_num, level=4)
 
@@ -424,12 +464,14 @@ def build_wbs_sheet(ws, hierarchy: list, estimates: dict,
                     hours_per_point: float, generated_at: str):
     for col_letter, width in WBS_COLUMN_WIDTHS.items():
         ws.column_dimensions[col_letter].width = width
+    ws.sheet_properties.outlinePr.summaryBelow = False
 
     report_date = date.fromisoformat(generated_at[:10])
     _write_title_row(ws, 1, f"AutoPASS IP 2.0 – WBS – Report {report_date.strftime('%Y-%m-%d')}")
     _write_header_row(ws, 2, [
         "WBS No", "ID", "Title", "Milestone", "Period", "Priority",
-        "Status", "Story Pts", "Est Hours", "Start Date", "End Date", "Notes",
+        "Status", "Story Pts", "Est Hours", "Planned Start Date", "Planned End Date",
+        "Actual Start Date", "Actual End Date", "Actual Period", "Notes",
     ])
 
     row    = 3
@@ -458,12 +500,16 @@ def build_wbs_sheet(ws, hierarchy: list, estimates: dict,
             for story in epic["stories"]:
                 st_num += 1
                 _write_story_row(ws, row, f"{ep_wbs}.{st_num}", story, estimates, hours_per_point)
+                _set_outline_level(ws, row, 2)
                 row    += 1
 
             last_story_row = row - 1
-            ep_start, ep_end = _group_dates(epic["stories"], estimates)
+            ep_planned_start, ep_planned_end = _group_planned_dates(epic["stories"])
+            ep_actual_start, ep_actual_end   = _group_actual_dates(epic["stories"])
             _write_epic_row(ws, epic_row, ep_wbs, epic["id"], epic["title"],
-                            ph_id, ep_start, ep_end)
+                            ph_id, ep_planned_start, ep_planned_end,
+                            ep_actual_start, ep_actual_end)
+            _set_outline_level(ws, epic_row, 1)
 
             pts_formula = (f"=SUM(H{first_story_row}:H{last_story_row})"
                            if last_story_row >= first_story_row else 0)
@@ -471,8 +517,10 @@ def build_wbs_sheet(ws, hierarchy: list, estimates: dict,
             apply_row_style(ws, epic_row, level=3)
 
         all_phase_stories = [s for ep in phase["epics"] for s in ep["stories"]]
-        ph_start, ph_end  = _group_dates(all_phase_stories, estimates)
-        _write_phase_row(ws, phase_row, ph_wbs, ph_id, ph_start, ph_end)
+        ph_planned_start, ph_planned_end = _group_planned_dates(all_phase_stories)
+        ph_actual_start, ph_actual_end   = _group_actual_dates(all_phase_stories)
+        _write_phase_row(ws, phase_row, ph_wbs, ph_id, ph_planned_start, ph_planned_end,
+                         ph_actual_start, ph_actual_end)
 
         if epic_rows_this_phase:
             refs = ",".join(f"H{r}" for r in epic_rows_this_phase)
@@ -692,14 +740,17 @@ def build_legend_sheet(ws):
             (None, "ID",         "Artifact ID — Fn / EP-Fn-* / US-Fn-*"),
             (None, "Title",      "Phase, epic, or story title"),
             (None, "Milestone",  "Delivery milestone (MP1–MP5)"),
-            (None, "Period",     "Target delivery quarter"),
+            (None, "Period",     "Planned quarter or period derived from planned dates when present"),
             (None, "Priority",   "Critical / High / Medium / Low"),
             (None, "Status",     "Current workflow status"),
             (None, "Story Pts",  "Estimated story points; SUM for epic/phase rows"),
             (None, "Est Hours",  "Estimated hours (throughput-based)"),
-            (None, "Start Date", "Actual start (done/in-progress) or estimated"),
-            (None, "End Date",   "Actual end (done) or throughput-based estimate"),
-            (None, "Notes",      "Free-text remarks"),
+            (None, "Planned Start Date", "Stored markdown baseline start date; never recalculated from velocity"),
+            (None, "Planned End Date",   "Stored markdown baseline end date; blank when no baseline exists"),
+            (None, "Actual Start Date",  "Lifecycle start date from work_started"),
+            (None, "Actual End Date",    "Lifecycle completion date from work_done"),
+            (None, "Actual Period",      "Quarter or period derived from actual lifecycle dates"),
+            (None, "Notes",              "Missing planned baseline or other report remarks"),
         ]),
     ]
 

@@ -85,6 +85,8 @@ pub struct StoryOverview {
     pub task_count: usize,
     pub work_started: Option<String>,
     pub work_done: Option<String>,
+    pub planned_start: Option<String>,
+    pub planned_end: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

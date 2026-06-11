@@ -452,6 +452,8 @@ mod tests {
                 task_count: 10,
                 work_started: None,
                 work_done: None,
+                planned_start: None,
+                planned_end: None,
             }],
         );
         let sprint = SprintOverview {
@@ -572,6 +574,8 @@ mod tests {
                 task_count: 0,
                 work_started: None,
                 work_done: None,
+                planned_start: None,
+                planned_end: None,
             }],
         );
         stories_by_status.insert(
@@ -590,6 +594,8 @@ mod tests {
                 task_count: 0,
                 work_started: None,
                 work_done: None,
+                planned_start: None,
+                planned_end: None,
             }],
         );
         let sprint = SprintOverview {
@@ -654,6 +660,8 @@ mod tests {
                 task_count: 0,
                 work_started: None,
                 work_done: None,
+                planned_start: None,
+                planned_end: None,
             }],
         );
         stories_by_status.insert(
@@ -672,6 +680,8 @@ mod tests {
                 task_count: 0,
                 work_started: None,
                 work_done: None,
+                planned_start: None,
+                planned_end: None,
             }],
         );
         let sprint = SprintOverview {
@@ -728,6 +738,8 @@ mod tests {
             task_count: 0,
             work_started: None,
             work_done: None,
+            planned_start: None,
+            planned_end: None,
         };
 
         let label = format_colored_story_status_label(&theme, &story, 3);
@@ -756,6 +768,8 @@ mod tests {
                 task_count: 0,
                 work_started: None,
                 work_done: None,
+                planned_start: None,
+                planned_end: None,
             }],
         );
         let sprint = SprintOverview {
@@ -830,6 +844,8 @@ mod tests {
                 task_count: 0,
                 work_started: None,
                 work_done: None,
+                planned_start: None,
+                planned_end: None,
             }],
         );
         let sprint = SprintOverview {

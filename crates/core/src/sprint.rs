@@ -679,8 +679,10 @@ fn render_assignee_cell(value: &str) -> String {
 
     let pattern =
         Regex::new(r"(?P<name>[^<]+?)\s*<(?P<email>[^>]+)>").expect("valid assignee parse regex");
-    let links = pattern
-        .captures_iter(trimmed)
+    let assignees = parse_assignee_list(trimmed);
+    let links = assignees
+        .iter()
+        .filter_map(|assignee| pattern.captures(assignee))
         .filter_map(|captures| {
             let name = captures.name("name")?.as_str().trim();
             let email = captures.name("email")?.as_str().trim();
@@ -1047,6 +1049,18 @@ mod tests {
         assert!(markdown.contains("| Total stories | 0 | 0 |"));
         assert!(markdown.contains("| Story | Points | Assignee | Tasks |"));
         assert!(markdown.contains("| — | — | — | — |"));
+    }
+
+    #[test]
+    fn render_assignee_cell_links_comma_separated_assignees_without_leading_comma() {
+        let rendered = render_assignee_cell(
+            "Thomas Malt <thomas.malt@vegvesen.no>, Sondre Bjerkerud <sondre.bjerkerud@soprasteria.com>",
+        );
+
+        assert_eq!(
+            rendered,
+            "[Thomas Malt](mailto:thomas.malt@vegvesen.no) and [Sondre Bjerkerud](mailto:sondre.bjerkerud@soprasteria.com)"
+        );
     }
 
     #[test]

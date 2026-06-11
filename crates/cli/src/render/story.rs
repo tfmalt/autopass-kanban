@@ -542,6 +542,8 @@ mod tests {
             task_count: 0,
             work_started: None,
             work_done: None,
+            planned_start: None,
+            planned_end: None,
         }];
 
         let output = render_story_list(&theme, "active sprint (S000.getting-started)", &stories);
@@ -577,6 +579,8 @@ mod tests {
                 task_count: 4,
                 work_started: None,
                 work_done: None,
+                planned_start: None,
+                planned_end: None,
             },
             story_file_path: PathBuf::from(
                 "delivery/backlog/phase-1-scaffolding/01.plattforminfrastruktur/US-F1-010.md",
@@ -655,6 +659,8 @@ mod tests {
                 task_count: 0,
                 work_started: None,
                 work_done: None,
+                planned_start: None,
+                planned_end: None,
             },
             story_file_path: PathBuf::from("delivery/backlog/phase-1/US-F1-999.md"),
             task_file_path: None,

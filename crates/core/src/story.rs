@@ -644,6 +644,16 @@ pub(crate) fn story_overview(repo_root: &Path, story: &Story) -> StoryOverview {
             .get("work_done")
             .filter(|v| !v.trim().is_empty())
             .cloned(),
+        planned_start: story
+            .frontmatter
+            .get("planned_start")
+            .filter(|v| !v.trim().is_empty())
+            .cloned(),
+        planned_end: story
+            .frontmatter
+            .get("planned_end")
+            .filter(|v| !v.trim().is_empty())
+            .cloned(),
     }
 }
 
