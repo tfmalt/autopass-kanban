@@ -167,8 +167,19 @@ docker ps --filter name=aup-kanban-1
 
 ### Permission errors on backlog files
 
-The container runs as your UID/GID (passed via `KANBAN_UID`/`KANBAN_GID` env vars). If you cloned the repo as a different user, fix ownership:
+**Most common cause:** The volume mount (`/workspace`) has incompatible ownership or the container was started with a different UID/GID.
+
+**Automatic fix:** The container's entrypoint script automatically corrects `/workspace` ownership to match the running user when the container starts. **No manual action required** — just ensure the container is fresh:
 
 ```bash
-sudo chown -R "$(id -u):$(id -g)" /git/ip-2.0/delivery/
+docker compose -f /git/ip-2.0/tools/kanban-container/docker-compose.kanban.yml down
+docker compose -f /git/ip-2.0/tools/kanban-container/docker-compose.kanban.yml up -d aup-kanban
 ```
+
+**Manual fix (if needed):** If the container is still unable to write:
+
+```bash
+sudo chown -R "$(id -u):$(id -g)" /git/ip-2.0
+```
+
+The container passes your UID/GID via `KANBAN_UID`/`KANBAN_GID` environment variables in the wrapper script (`tools/kanban-container/kanban`).
