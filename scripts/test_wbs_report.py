@@ -12,6 +12,17 @@ import wbs_report
 
 
 class WbsReportTests(unittest.TestCase):
+    def test_aggregate_status_collapses_story_workflow_states(self):
+        self.assertEqual(wbs_report._aggregate_status([]), "PLANNED")
+        self.assertEqual(wbs_report._aggregate_status([{"status": "ready"}]), "PLANNED")
+        self.assertEqual(wbs_report._aggregate_status([{"status": "todo"}]), "TODO")
+        self.assertEqual(wbs_report._aggregate_status([{"status": "blocked"}]), "IN PROGRESS")
+        self.assertEqual(wbs_report._aggregate_status([{"status": "done"}]), "DONE")
+        self.assertEqual(
+            wbs_report._aggregate_status([{"status": "done"}, {"status": "ready"}]),
+            "IN PROGRESS",
+        )
+
     def test_wbs_sheet_renders_planned_and_actual_date_columns(self):
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -83,6 +94,64 @@ class WbsReportTests(unittest.TestCase):
         self.assertEqual(ws.row_dimensions[4].outlineLevel, 1)
         self.assertEqual(ws.row_dimensions[5].outlineLevel, 2)
         self.assertEqual(ws.row_dimensions[6].outlineLevel, 2)
+
+    def test_wbs_sheet_rolls_story_status_up_to_epic_and_phase(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        hierarchy = [
+            {
+                "id": "F1",
+                "epics": [
+                    {
+                        "id": "EP-F1-01",
+                        "title": "Active epic",
+                        "stories": [
+                            {
+                                "id": "US-F1-001",
+                                "title": "Started story",
+                                "status": "in-progress",
+                                "story_points": 1,
+                                "phase": "F1",
+                                "epic_id": "EP-F1-01",
+                            },
+                            {
+                                "id": "US-F1-002",
+                                "title": "Queued story",
+                                "status": "todo",
+                                "story_points": 1,
+                                "phase": "F1",
+                                "epic_id": "EP-F1-01",
+                            },
+                        ],
+                    },
+                    {
+                        "id": "EP-F1-02",
+                        "title": "Completed epic",
+                        "stories": [
+                            {
+                                "id": "US-F1-003",
+                                "title": "Finished story",
+                                "status": "done",
+                                "story_points": 1,
+                                "phase": "F1",
+                                "epic_id": "EP-F1-02",
+                            },
+                        ],
+                    },
+                ],
+            }
+        ]
+        estimates = {
+            story["id"]: {"est_hours": None, "est_start": None, "est_end": None}
+            for epic in hierarchy[0]["epics"]
+            for story in epic["stories"]
+        }
+
+        wbs_report.build_wbs_sheet(ws, hierarchy, estimates, 0.0, "2026-06-12T10:00:00+02:00")
+
+        self.assertEqual(ws.cell(3, wbs_report.COL_STATUS).value, "IN PROGRESS")
+        self.assertEqual(ws.cell(4, wbs_report.COL_STATUS).value, "IN PROGRESS")
+        self.assertEqual(ws.cell(7, wbs_report.COL_STATUS).value, "DONE")
 
 
 if __name__ == "__main__":

@@ -315,6 +315,24 @@ def _group_actual_dates(stories_in_group: list) -> tuple[date | None, date | Non
     return (min(starts) if starts else None), (max(ends) if ends else None)
 
 
+def _aggregate_status(stories_in_group: list) -> str:
+    """Collapse story workflow states into the report-level progress status."""
+    statuses = {(s.get("status") or "").lower() for s in stories_in_group}
+    statuses.discard("")
+
+    if not statuses:
+        return "PLANNED"
+    if statuses <= {"done", "dropped"}:
+        return "DONE"
+    if statuses & {"in-progress", "ready-for-qa", "blocked"}:
+        return "IN PROGRESS"
+    if statuses & {"done", "dropped"}:
+        return "IN PROGRESS"
+    if "todo" in statuses:
+        return "TODO"
+    return "PLANNED"
+
+
 # ── Hierarchy builder ─────────────────────────────────────────────────────────
 
 def _build_hierarchy(stories: list) -> list:
@@ -366,6 +384,7 @@ def _set_outline_level(ws, row_num: int, level: int):
 
 
 def _write_phase_row(ws, row_num: int, wbs: str, phase_id: str,
+                     status: str,
                      planned_start: date | None, planned_end: date | None,
                      actual_start: date | None, actual_end: date | None):
     meta                          = PHASE_META.get(phase_id, {})
@@ -376,7 +395,7 @@ def _write_phase_row(ws, row_num: int, wbs: str, phase_id: str,
     ws.cell(row_num, COL_MILESTONE, value=meta.get("milestone", ""))
     ws.cell(row_num, COL_PERIOD,    value=_period_label(planned_start, planned_end) or meta.get("period", ""))
     ws.cell(row_num, COL_PRIORITY,  value=meta.get("priority", ""))
-    ws.cell(row_num, COL_STATUS,    value="")
+    ws.cell(row_num, COL_STATUS,    value=status)
     ws.cell(row_num, COL_HOURS,     value=None)
     if planned_start: _set_date_cell(ws.cell(row_num, COL_PLANNED_START_DATE), planned_start)
     if planned_end:   _set_date_cell(ws.cell(row_num, COL_PLANNED_END_DATE),   planned_end)
@@ -388,6 +407,7 @@ def _write_phase_row(ws, row_num: int, wbs: str, phase_id: str,
 
 def _write_epic_row(ws, row_num: int, wbs: str, epic_id: str, epic_title: str,
                     phase_id: str,
+                    status: str,
                     planned_start: date | None, planned_end: date | None,
                     actual_start: date | None, actual_end: date | None):
     meta                          = PHASE_META.get(phase_id, {})
@@ -398,7 +418,7 @@ def _write_epic_row(ws, row_num: int, wbs: str, epic_id: str, epic_title: str,
     ws.cell(row_num, COL_MILESTONE, value=meta.get("milestone", ""))
     ws.cell(row_num, COL_PERIOD,    value=_period_label(planned_start, planned_end) or meta.get("period", ""))
     ws.cell(row_num, COL_PRIORITY,  value=meta.get("priority", ""))
-    ws.cell(row_num, COL_STATUS,    value="")
+    ws.cell(row_num, COL_STATUS,    value=status)
     ws.cell(row_num, COL_HOURS,     value=None)
     if planned_start: _set_date_cell(ws.cell(row_num, COL_PLANNED_START_DATE), planned_start)
     if planned_end:   _set_date_cell(ws.cell(row_num, COL_PLANNED_END_DATE),   planned_end)
@@ -506,8 +526,9 @@ def build_wbs_sheet(ws, hierarchy: list, estimates: dict,
             last_story_row = row - 1
             ep_planned_start, ep_planned_end = _group_planned_dates(epic["stories"])
             ep_actual_start, ep_actual_end   = _group_actual_dates(epic["stories"])
+            ep_status                        = _aggregate_status(epic["stories"])
             _write_epic_row(ws, epic_row, ep_wbs, epic["id"], epic["title"],
-                            ph_id, ep_planned_start, ep_planned_end,
+                            ph_id, ep_status, ep_planned_start, ep_planned_end,
                             ep_actual_start, ep_actual_end)
             _set_outline_level(ws, epic_row, 1)
 
@@ -519,7 +540,8 @@ def build_wbs_sheet(ws, hierarchy: list, estimates: dict,
         all_phase_stories = [s for ep in phase["epics"] for s in ep["stories"]]
         ph_planned_start, ph_planned_end = _group_planned_dates(all_phase_stories)
         ph_actual_start, ph_actual_end   = _group_actual_dates(all_phase_stories)
-        _write_phase_row(ws, phase_row, ph_wbs, ph_id, ph_planned_start, ph_planned_end,
+        ph_status                        = _aggregate_status(all_phase_stories)
+        _write_phase_row(ws, phase_row, ph_wbs, ph_id, ph_status, ph_planned_start, ph_planned_end,
                          ph_actual_start, ph_actual_end)
 
         if epic_rows_this_phase:
