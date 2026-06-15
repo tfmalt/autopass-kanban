@@ -51,6 +51,17 @@ pub struct Story {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Epic {
+    pub file_path: PathBuf,
+    pub relative_path: PathBuf,
+    pub file_name: String,
+    pub frontmatter: BTreeMap<String, String>,
+    pub frontmatter_keys: BTreeSet<String>,
+    pub markdown: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ValidationIssue {
     pub file_path: PathBuf,
     pub rule: String,
@@ -87,6 +98,17 @@ pub struct StoryOverview {
     pub work_done: Option<String>,
     pub planned_start: Option<String>,
     pub planned_end: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpicOverview {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub phase: Option<String>,
+    pub owner: Option<String>,
+    pub milestone: Option<String>,
+    pub relative_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,6 +230,24 @@ pub struct StoryDetails {
     pub definition_of_done: Option<String>,
     pub notes_and_open_questions: Option<String>,
     pub tasks: Vec<Task>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpicDetails {
+    pub epic: EpicOverview,
+    pub story_ids: Vec<String>,
+    pub stories_by_status: BTreeMap<String, Vec<StoryOverview>>,
+    pub child_stories: Vec<StoryOverview>,
+    pub warnings: Vec<String>,
+    pub body: String,
+    pub business_context: Option<String>,
+    pub business_value: Option<String>,
+    pub scope: Option<String>,
+    pub acceptance_criteria: Option<String>,
+    pub non_functional_requirements: Option<String>,
+    pub dependencies: Option<String>,
+    pub definition_of_done: Option<String>,
+    pub notes_and_open_questions: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

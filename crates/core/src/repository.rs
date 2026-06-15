@@ -202,6 +202,29 @@ pub fn read_story_file(file_path: impl AsRef<Path>, repo_root: impl AsRef<Path>)
     })
 }
 
+pub fn read_epic_file(file_path: impl AsRef<Path>, repo_root: impl AsRef<Path>) -> Result<Epic> {
+    let repo_root = repo_root.as_ref();
+    let file_path = fs::canonicalize(file_path.as_ref())
+        .with_context(|| format!("resolve epic file {}", file_path.as_ref().display()))?;
+    let markdown = fs::read_to_string(&file_path)
+        .with_context(|| format!("read epic file {}", file_path.display()))?;
+    let parsed = parse_frontmatter(&markdown);
+
+    Ok(Epic {
+        relative_path: relative_path(repo_root, &file_path),
+        file_name: file_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        body: parsed.body,
+        file_path,
+        frontmatter: parsed.frontmatter,
+        frontmatter_keys: parsed.frontmatter_keys,
+        markdown,
+    })
+}
+
 pub fn read_repository(repo_root: impl AsRef<Path>) -> Result<Repository> {
     let config = load_kanban_config(repo_root)?;
     let repo_root = config.repo_root.clone();
@@ -211,6 +234,22 @@ pub fn read_repository(repo_root: impl AsRef<Path>) -> Result<Repository> {
         .map(|path| read_story_file(path, &repo_root))
         .collect::<Result<Vec<_>>>()?;
     Ok(Repository { repo_root, stories })
+}
+
+pub(crate) fn epic_overview(epic: &Epic) -> EpicOverview {
+    EpicOverview {
+        id: epic.frontmatter.get("id").cloned().unwrap_or_else(|| {
+            epic.file_name
+                .trim_end_matches(STORY_FILE_SUFFIX)
+                .to_string()
+        }),
+        title: story_title(&epic.body).unwrap_or_else(|| epic.file_name.clone()),
+        status: epic.frontmatter.get("status").cloned().unwrap_or_default(),
+        phase: epic.frontmatter.get("phase").cloned(),
+        owner: epic.frontmatter.get("owner").cloned(),
+        milestone: epic.frontmatter.get("milestone").cloned(),
+        relative_path: epic.relative_path.clone(),
+    }
 }
 
 pub(crate) fn epic_title(repo_root: &Path, story: &Story) -> Option<String> {

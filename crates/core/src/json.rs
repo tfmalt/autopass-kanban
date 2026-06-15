@@ -13,9 +13,9 @@ use serde::Serialize;
 use crate::util::{normalize_status_alias, parse_assignee_list};
 use crate::{
     BlockedWorkItem, CompletionItem, ConfigInitResult, ConfigSetResult, CreateSprintResult,
-    DoctorFinding, MoveStoryResult, PhaseOverview, PlanStoryResult, RolloverResult, SprintOverview,
-    Story, StoryDetails, StoryOverview, StoryUpdateResult, Task, TaskListResult,
-    TaskMutationResult, TaskSummary, ValidationReport,
+    DoctorFinding, Epic, EpicDetails, EpicOverview, MoveStoryResult, PhaseOverview,
+    PlanStoryResult, RolloverResult, SprintOverview, Story, StoryDetails, StoryOverview,
+    StoryUpdateResult, Task, TaskListResult, TaskMutationResult, TaskSummary, ValidationReport,
 };
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -36,6 +36,7 @@ pub enum KanbanErrorCode {
     NotInitialized,
     StoryNotFound,
     SprintNotFound,
+    EpicNotFound,
     PhaseNotFound,
     InvalidStatus,
     InvalidArgument,
@@ -57,6 +58,8 @@ impl KanbanErrorCode {
             KanbanErrorCode::InvalidStatus
         } else if msg.contains("sprint not found") {
             KanbanErrorCode::SprintNotFound
+        } else if msg.contains("epic not found") {
+            KanbanErrorCode::EpicNotFound
         } else if msg.contains("story not found") {
             KanbanErrorCode::StoryNotFound
         } else if msg.contains("frontmatter") || msg.contains("parse") {
@@ -359,6 +362,110 @@ pub struct StoryShowDto {
     pub body: String,
     pub tasks: Vec<TaskDto>,
     pub task_summary: Option<TaskSummary>,
+}
+
+/// DTO for an epic overview row.
+#[derive(Debug, Clone, Serialize)]
+pub struct EpicOverviewDto {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub status_normalized: String,
+    pub phase: Option<String>,
+    pub owner: Option<String>,
+    pub milestone: Option<String>,
+    pub path: String,
+}
+
+impl EpicOverviewDto {
+    pub fn from_overview(o: &EpicOverview) -> Self {
+        Self {
+            id: o.id.clone(),
+            title: o.title.clone(),
+            status: o.status.clone(),
+            status_normalized: slugify_status(&o.status),
+            phase: o.phase.clone(),
+            owner: o.owner.clone(),
+            milestone: o.milestone.clone(),
+            path: path_string(&o.relative_path),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EpicSectionsDto {
+    pub business_context: Option<String>,
+    pub business_value: Option<String>,
+    pub scope: Option<String>,
+    pub acceptance_criteria: Option<String>,
+    pub non_functional_requirements: Option<String>,
+    pub dependencies: Option<String>,
+    pub definition_of_done: Option<String>,
+    pub notes_and_open_questions: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EpicShowDto {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub status_normalized: String,
+    pub phase: Option<String>,
+    pub owner: Option<String>,
+    pub milestone: Option<String>,
+    pub path: String,
+    pub frontmatter: BTreeMap<String, String>,
+    pub story_ids: Vec<String>,
+    pub stories_by_status: BTreeMap<String, Vec<StoryOverviewDto>>,
+    pub sections: EpicSectionsDto,
+    pub body: String,
+}
+
+impl EpicShowDto {
+    pub fn from_details(details: &EpicDetails, body: &str) -> Self {
+        let mut stories_by_status = BTreeMap::new();
+        for (status, stories) in &details.stories_by_status {
+            stories_by_status.insert(
+                slugify_status(status),
+                stories
+                    .iter()
+                    .map(StoryOverviewDto::from_overview)
+                    .collect(),
+            );
+        }
+
+        Self {
+            id: details.epic.id.clone(),
+            title: details.epic.title.clone(),
+            status: details.epic.status.clone(),
+            status_normalized: slugify_status(&details.epic.status),
+            phase: details.epic.phase.clone(),
+            owner: details.epic.owner.clone(),
+            milestone: details.epic.milestone.clone(),
+            path: path_string(&details.epic.relative_path),
+            frontmatter: BTreeMap::new(),
+            story_ids: details.story_ids.clone(),
+            stories_by_status,
+            sections: EpicSectionsDto {
+                business_context: details.business_context.clone(),
+                business_value: details.business_value.clone(),
+                scope: details.scope.clone(),
+                acceptance_criteria: details.acceptance_criteria.clone(),
+                non_functional_requirements: details.non_functional_requirements.clone(),
+                dependencies: details.dependencies.clone(),
+                definition_of_done: details.definition_of_done.clone(),
+                notes_and_open_questions: details.notes_and_open_questions.clone(),
+            },
+            body: body.to_string(),
+        }
+    }
+
+    pub fn from_details_and_source(details: &EpicDetails, source: &Epic) -> Self {
+        Self {
+            frontmatter: source.frontmatter.clone(),
+            ..Self::from_details(details, &source.body)
+        }
+    }
 }
 
 impl StoryShowDto {

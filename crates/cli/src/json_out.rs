@@ -128,6 +128,25 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
                 KanbanErrorBody::from_anyhow(&error),
             )),
         },
+        Command::Epic {
+            command: EpicCommand::Show { id, repo_root },
+        } => match find_epic_with_source(repo_root, id) {
+            Ok(Some((details, source))) => {
+                let dto = EpicShowDto::from_details_and_source(&details, &source);
+                print_envelope(&JsonEnvelope::ok("epic.show", dto))
+            }
+            Ok(None) => {
+                let body = KanbanErrorBody::new(
+                    KanbanErrorCode::EpicNotFound,
+                    format!("No epic matches id '{id}'"),
+                );
+                print_envelope(&JsonEnvelope::<EpicShowDto>::error("epic.show", body))
+            }
+            Err(error) => print_envelope(&JsonEnvelope::<EpicShowDto>::error(
+                "epic.show",
+                KanbanErrorBody::from_anyhow(&error),
+            )),
+        },
         Command::Story {
             command:
                 StoryCommand::List {

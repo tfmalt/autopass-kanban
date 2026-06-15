@@ -304,6 +304,12 @@ fn main() -> Result<()> {
                 print_phase_overview(&theme, OutputLayout::for_stdout()?, &phase);
             }
         },
+        Command::Epic { command } => match command {
+            EpicCommand::Show { id, repo_root } => match find_epic(repo_root, &id)? {
+                Some(details) => print_epic_details(&theme, OutputLayout::for_stdout()?, &details),
+                None => println!("{} {id}", theme.warning("Epic not found:")),
+            },
+        },
         Command::Story { command } => match command {
             StoryCommand::Show { id, repo_root } => match find_story(repo_root, &id)? {
                 Some(details) => print_story_details(&theme, OutputLayout::for_stdout()?, &details),

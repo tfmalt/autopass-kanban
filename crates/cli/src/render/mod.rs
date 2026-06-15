@@ -1,4 +1,5 @@
 pub(crate) mod common;
+pub(crate) mod epic;
 pub(crate) mod inline;
 pub(crate) mod markdown;
 pub(crate) mod phase;
@@ -9,6 +10,8 @@ pub(crate) mod table;
 
 #[allow(unused_imports)]
 pub(crate) use common::*;
+#[allow(unused_imports)]
+pub(crate) use epic::*;
 #[allow(unused_imports)]
 pub(crate) use inline::*;
 #[allow(unused_imports)]

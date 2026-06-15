@@ -235,6 +235,69 @@ fn story_show_missing_id_emits_story_not_found() {
 }
 
 #[test]
+fn epic_show_emits_epic_with_progress_sections_and_child_stories() {
+    let dir = tempdir().expect("temp dir should be created");
+    let repo_root = dir.path().to_string_lossy().into_owned();
+
+    init_repo(dir.path());
+
+    let epic_rel =
+        "delivery/backlog/phase-1/06.tooling/EP-F1-06-git-driven-kanban-and-backlog-tooling.md";
+    let epic_frontmatter = "id: EP-F1-06\ntype: epic\nstatus: draft\nphase: 1\nowner: Solution Architect / Product Owner\nmilestone: MP1\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-06-11T14:08:39+0200\n";
+    let epic_body = "# Epic: Git-driven kanban and backlog tooling\n\n## Business Context\n\nMarkdown-first workflow.\n\n## Acceptance Criteria\n\n- Epic inspection is available.\n";
+    write_story(dir.path(), epic_rel, epic_frontmatter, epic_body);
+
+    let story_rel = "delivery/backlog/phase-1/06.tooling/US-F1-052-add-read-only-cli-for-sprint-and-backlog-inspection.md";
+    let story_frontmatter = "id: US-F1-052\nstatus: done\nstory_points: 5\nsprint: S001\ntype: user-story\nepic: EP-F1-06\nassignee: TBD\nwork_started: ~\nwork_done: 2026-01-01T00:00:00+02:00\ncreated: 2026-01-01T00:00:00+02:00\nupdated: 2026-01-01T00:00:00+02:00\n";
+    let story_body = "# User Story: Add read-only CLI for sprint and backlog inspection\n";
+    write_story(dir.path(), story_rel, story_frontmatter, story_body);
+
+    let out = kanban_in(
+        dir.path(),
+        &["--format", "json", "epic", "show", "EP-F1-06", &repo_root],
+    );
+
+    let json = parse_stdout(&out);
+    assert!(
+        out.status.success(),
+        "exit code should be 0; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["kind"], "epic.show");
+    assert_eq!(json["data"]["id"], "EP-F1-06");
+    assert_eq!(json["data"]["phase"], "1");
+    assert_eq!(json["data"]["story_ids"][0], "US-F1-052");
+    assert_eq!(
+        json["data"]["stories_by_status"]["done"][0]["id"],
+        "US-F1-052"
+    );
+    assert_eq!(
+        json["data"]["sections"]["business_context"],
+        "Markdown-first workflow."
+    );
+}
+
+#[test]
+fn epic_show_missing_id_emits_epic_not_found() {
+    let dir = tempdir().expect("temp dir should be created");
+    let repo_root = dir.path().to_string_lossy().into_owned();
+
+    init_repo(dir.path());
+    fs::create_dir_all(dir.path().join("delivery/backlog")).expect("create backlog dir");
+
+    let out = kanban_in(
+        dir.path(),
+        &["--format", "json", "epic", "show", "EP-F1-999", &repo_root],
+    );
+
+    let json = parse_stdout(&out);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(json["status"], "error");
+    assert_eq!(json["error"]["code"], "epic_not_found");
+}
+
+#[test]
 fn sprint_list_emits_array_with_is_current() {
     let dir = tempdir().expect("temp dir should be created");
     let repo_root = dir.path().to_string_lossy().into_owned();

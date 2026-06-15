@@ -1,6 +1,7 @@
 mod config;
 mod constants;
 mod doctor;
+mod epic;
 mod json;
 mod markdown;
 mod model;
@@ -31,6 +32,7 @@ pub use config::{
 };
 pub use constants::*;
 pub use doctor::*;
+pub use epic::*;
 pub use json::*;
 pub use markdown::*;
 pub use model::*;

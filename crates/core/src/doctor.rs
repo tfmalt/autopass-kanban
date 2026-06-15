@@ -1,5 +1,6 @@
 use crate::config::*;
 use crate::constants::*;
+use crate::epic::*;
 use crate::markdown::*;
 use crate::model::*;
 #[allow(unused_imports)]
@@ -9,6 +10,18 @@ use crate::sprint::*;
 use crate::story::*;
 use crate::util::*;
 use crate::validate::*;
+
+fn upsert_epic_frontmatter_file(
+    file_path: &Path,
+    updates: &[(&str, Option<String>)],
+) -> Result<()> {
+    let markdown = fs::read_to_string(file_path)
+        .with_context(|| format!("read epic file {}", file_path.display()))?;
+    let updated = upsert_frontmatter_markdown(&markdown, updates)?;
+    fs::write(file_path, updated)
+        .with_context(|| format!("write epic file {}", file_path.display()))?;
+    Ok(())
+}
 
 pub fn collect_doctor_issues(repo_root: impl AsRef<Path>) -> Result<Vec<DoctorIssue>> {
     collect_doctor_issues_at_date(repo_root, Local::now().date_naive())
@@ -204,6 +217,24 @@ pub fn apply_doctor_fix(
             .with_context(|| format!("write task file {}", task_file.file_path.display()))?;
             Ok(DoctorFixResult {
                 message: "Rewrote task file to canonical heading-delimited format.".to_string(),
+                touched_paths: vec![file_path.clone()],
+            })
+        }
+        "epic-status-lags-active-children" => {
+            let value = input
+                .value
+                .clone()
+                .or_else(|| {
+                    issue
+                        .fix_preview
+                        .as_ref()
+                        .map(|preview| preview.new_value.clone())
+                })
+                .unwrap_or_else(|| "in-progress".to_string());
+            let normalized = normalize_story_status_input(&value)?;
+            upsert_epic_frontmatter_file(&absolute_path, &[("status", Some(normalized.clone()))])?;
+            Ok(DoctorFixResult {
+                message: format!("Set epic status to {normalized}."),
                 touched_paths: vec![file_path.clone()],
             })
         }
@@ -500,6 +531,52 @@ pub(crate) fn collect_doctor_issues_at_date(
         ));
     }
 
+    for epic_file in collect_epic_files(&repository.repo_root)? {
+        let epic = read_epic_file(&epic_file, &repository.repo_root)?;
+        let details = find_epic(
+            &repository.repo_root,
+            epic.frontmatter
+                .get("id")
+                .map(String::as_str)
+                .unwrap_or_default(),
+        )?;
+        let Some(details) = details else {
+            continue;
+        };
+        if let Some(warning) = epic_status_warning(&details) {
+            let suggested_status = if details
+                .stories_by_status
+                .get("in-progress")
+                .is_some_and(|stories| !stories.is_empty())
+            {
+                "in-progress"
+            } else {
+                "ready-for-qa"
+            };
+            findings.push(DoctorIssue {
+                severity: "warning".to_string(),
+                scope: details.epic.relative_path.display().to_string(),
+                file_path: Some(details.epic.relative_path.clone()),
+                story_id: None,
+                sprint_name: None,
+                rule: "epic-status-lags-active-children".to_string(),
+                message: warning,
+                suggestion: "Update the epic status so it reflects the most advanced active child story state.".to_string(),
+                fix_preview: Some(DoctorFixPreview {
+                    field_name: "status".to_string(),
+                    old_value: details.epic.status.clone(),
+                    new_value: suggested_status.to_string(),
+                }),
+                fix_kind: DoctorFixKind::Guided,
+                prompt: DoctorPrompt::Choice {
+                    label: "Epic status".to_string(),
+                    options: CANONICAL_STORY_STATUSES.iter().map(|status| (*status).to_string()).collect(),
+                    default: Some(suggested_status.to_string()),
+                },
+            });
+        }
+    }
+
     Ok(findings)
 }
 
@@ -695,6 +772,18 @@ pub(crate) fn doctor_suggestion_for_validation(
             "Regenerate the selected-user-story section from story frontmatter.".to_string(),
             DoctorFixKind::Automatic,
             DoctorPrompt::None,
+        ),
+        "epic-status-lags-active-children" => (
+            "Set the epic status to reflect that one or more child stories are already active.".to_string(),
+            DoctorFixKind::Guided,
+            DoctorPrompt::Choice {
+                label: "Epic status".to_string(),
+                options: CANONICAL_STORY_STATUSES
+                    .iter()
+                    .map(|status| (*status).to_string())
+                    .collect(),
+                default: Some("in-progress".to_string()),
+            },
         ),
         "orphan-sprint-ref" | "status-without-sprint" => (
             "Inspect and fix the story's sprint assignment manually.".to_string(),
@@ -1146,6 +1235,42 @@ mod tests {
                     .message
                     .contains("README frontmatter is authoritative")
         }));
+    }
+
+    #[test]
+    fn doctor_reports_epic_status_lagging_in_progress_children() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        fs::create_dir_all(
+            temp_root
+                .path()
+                .join("delivery/backlog/phase-1-scaffolding/01.platform"),
+        )
+        .unwrap();
+        fs::write(
+            temp_root
+                .path()
+                .join("delivery/backlog/phase-1-scaffolding/01.platform/EP-F1-01-platform.md"),
+            "---\nid: EP-F1-01\ntype: epic\nstatus: draft\nphase: 1\nowner: Owner\nmilestone: MP1\ncreated: 2026-01-01T00:00:00+0200\nupdated: 2026-01-01T00:00:00+0200\n---\n\n# Epic: Platform\n",
+        )
+        .unwrap();
+        write_story(
+            temp_root.path(),
+            "delivery/backlog/phase-1-scaffolding/01.platform/US-F1-005-secrets.md",
+            "id: US-F1-005\ntype: user-story\nstatus: in-progress\nepic: EP-F1-01\nsprint: S001.foundation\nassignee: Test User <test@example.com>\nstory_points: 5\nwork_started: 2026-01-01T00:00:00+0200\nwork_done:\ncreated: 2026-01-01T00:00:00+0200\nupdated: 2026-01-01T00:00:00+0200\n",
+        );
+
+        let issues = collect_doctor_issues(temp_root.path()).unwrap();
+        let issue = issues
+            .iter()
+            .find(|issue| issue.rule == "epic-status-lags-active-children")
+            .expect("expected epic status lag issue");
+        assert_eq!(issue.severity, "warning");
+        assert!(issue.message.contains("child stories are `in-progress`"));
+        assert_eq!(
+            issue.fix_preview.as_ref().map(|p| p.new_value.as_str()),
+            Some("in-progress")
+        );
     }
 
     #[test]

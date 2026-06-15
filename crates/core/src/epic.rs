@@ -1,0 +1,203 @@
+use crate::markdown::*;
+use crate::model::*;
+#[allow(unused_imports)]
+use crate::prelude::*;
+use crate::repository::*;
+use crate::story::*;
+use crate::util::*;
+
+pub(crate) fn epic_status_warning(details: &EpicDetails) -> Option<String> {
+    let epic_status = normalize_status_alias(&details.epic.status);
+    let has_in_progress = details
+        .stories_by_status
+        .get("in-progress")
+        .is_some_and(|stories| !stories.is_empty());
+    if has_in_progress && matches!(epic_status.as_str(), "draft" | "todo") {
+        Some(format!(
+            "Epic status is `{}` but child stories are `in-progress`. Update the epic status to reflect active work.",
+            details.epic.status
+        ))
+    } else {
+        None
+    }
+}
+
+pub fn find_epic(repo_root: impl AsRef<Path>, epic_id: &str) -> Result<Option<EpicDetails>> {
+    let repo_root = repo_root.as_ref();
+    let repository = read_repository(repo_root)?;
+    let epic = find_epic_source(repo_root, epic_id)?;
+    Ok(epic.map(|epic| epic_details_from_parts(repo_root, &repository, &epic)))
+}
+
+pub fn find_epic_with_source(
+    repo_root: impl AsRef<Path>,
+    epic_id: &str,
+) -> Result<Option<(EpicDetails, Epic)>> {
+    let repo_root = repo_root.as_ref();
+    let repository = read_repository(repo_root)?;
+    let epic = find_epic_source(repo_root, epic_id)?;
+    Ok(epic.map(|epic| {
+        let details = epic_details_from_parts(repo_root, &repository, &epic);
+        (details, epic)
+    }))
+}
+
+fn find_epic_source(repo_root: &Path, epic_id: &str) -> Result<Option<Epic>> {
+    let normalized = epic_id.trim().to_ascii_uppercase();
+    let mut matches = collect_epic_files(repo_root)?
+        .into_iter()
+        .map(|path| read_epic_file(path, repo_root))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|epic| {
+            epic.frontmatter
+                .get("id")
+                .map(|id| id.eq_ignore_ascii_case(&normalized))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+
+    matches.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(matches.into_iter().next())
+}
+
+fn epic_details_from_parts(repo_root: &Path, repository: &Repository, epic: &Epic) -> EpicDetails {
+    let overview = epic_overview(epic);
+    let epic_id = overview.id.clone();
+    let mut child_stories = repository
+        .stories
+        .iter()
+        .filter(|story| {
+            story
+                .frontmatter
+                .get("epic")
+                .map(|value| value.eq_ignore_ascii_case(&epic_id))
+                .unwrap_or(false)
+        })
+        .map(|story| story_overview(repo_root, story))
+        .collect::<Vec<_>>();
+    child_stories.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let mut stories_by_status = BTreeMap::<String, Vec<StoryOverview>>::new();
+    let mut story_ids = Vec::new();
+    for story in &child_stories {
+        story_ids.push(story.id.clone());
+        stories_by_status
+            .entry(normalize_status_alias(&story.status))
+            .or_default()
+            .push(story.clone());
+    }
+    for stories in stories_by_status.values_mut() {
+        stories.sort_by(|left, right| left.id.cmp(&right.id));
+    }
+
+    let mut details = EpicDetails {
+        epic: overview,
+        story_ids,
+        stories_by_status,
+        child_stories,
+        warnings: Vec::new(),
+        body: epic.body.clone(),
+        business_context: extract_markdown_section(&epic.body, "Business Context"),
+        business_value: extract_markdown_section(&epic.body, "Business Value"),
+        scope: extract_markdown_section(&epic.body, "Scope"),
+        acceptance_criteria: extract_markdown_section(&epic.body, "Acceptance Criteria"),
+        non_functional_requirements: extract_markdown_section(
+            &epic.body,
+            "Non-Functional Requirements",
+        ),
+        dependencies: extract_markdown_section(&epic.body, "Dependencies"),
+        definition_of_done: extract_markdown_section(&epic.body, "Definition of Done (Epic Level)")
+            .or_else(|| extract_markdown_section(&epic.body, "Definition of Done")),
+        notes_and_open_questions: extract_markdown_section(&epic.body, "Notes and Open Questions"),
+    };
+    if let Some(warning) = epic_status_warning(&details) {
+        details.warnings.push(warning);
+    }
+    details
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::*;
+
+    #[test]
+    fn find_epic_exposes_child_story_progress_and_sections() {
+        let repo_root = repo_root();
+        let epic = find_epic(&repo_root, "EP-F1-06").unwrap().unwrap();
+
+        assert_eq!(epic.epic.id, "EP-F1-06");
+        assert!(epic.story_ids.contains(&"US-F1-052".to_string()));
+        assert!(
+            epic.stories_by_status
+                .get("done")
+                .into_iter()
+                .flatten()
+                .any(|story| story.id == "US-F1-052")
+        );
+        assert!(
+            epic.acceptance_criteria
+                .as_deref()
+                .unwrap_or_default()
+                .contains("current sprint can be understood")
+        );
+        assert!(epic.warnings.is_empty());
+    }
+
+    #[test]
+    fn find_epic_returns_none_for_unknown_id() {
+        let repo_root = repo_root();
+        assert!(find_epic(&repo_root, "EP-F9-99").unwrap().is_none());
+    }
+
+    #[test]
+    fn epic_status_warning_flags_draft_epic_with_in_progress_children() {
+        let details = EpicDetails {
+            epic: EpicOverview {
+                id: "EP-F1-01".to_string(),
+                title: "Platform".to_string(),
+                status: "draft".to_string(),
+                phase: Some("1".to_string()),
+                owner: None,
+                milestone: None,
+                relative_path: PathBuf::from("delivery/backlog/phase-1/EP-F1-01.md"),
+            },
+            story_ids: vec!["US-F1-005".to_string()],
+            stories_by_status: BTreeMap::from([(
+                "in-progress".to_string(),
+                vec![StoryOverview {
+                    id: "US-F1-005".to_string(),
+                    title: "Secrets".to_string(),
+                    status: "in-progress".to_string(),
+                    epic_id: Some("EP-F1-01".to_string()),
+                    epic_title: Some("Platform".to_string()),
+                    assignee: "TBD".to_string(),
+                    story_points: "5".to_string(),
+                    sprint: Some("S001.test".to_string()),
+                    relative_path: PathBuf::from("delivery/backlog/phase-1/US-F1-005.md"),
+                    task_summary: None,
+                    task_count: 0,
+                    work_started: None,
+                    work_done: None,
+                    planned_start: None,
+                    planned_end: None,
+                }],
+            )]),
+            child_stories: vec![],
+            warnings: Vec::new(),
+            body: String::new(),
+            business_context: None,
+            business_value: None,
+            scope: None,
+            acceptance_criteria: None,
+            non_functional_requirements: None,
+            dependencies: None,
+            definition_of_done: None,
+            notes_and_open_questions: None,
+        };
+
+        let warning = epic_status_warning(&details).expect("warning should exist");
+        assert!(warning.contains("child stories are `in-progress`"));
+    }
+}

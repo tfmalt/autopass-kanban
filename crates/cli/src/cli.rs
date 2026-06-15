@@ -182,6 +182,20 @@ pub(crate) enum PhaseCommand {
 }
 
 #[derive(Subcommand)]
+pub(crate) enum EpicCommand {
+    #[command(
+        about = "Show one epic. Effect: read-only inspection of the canonical epic file plus child story progress and key sections. Side effects: none."
+    )]
+    Show {
+        #[arg(help = "Epic id to inspect, for example EP-F1-06.")]
+        id: String,
+        #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum StoryCommand {
     #[command(
@@ -671,6 +685,13 @@ pub(crate) enum Command {
         command: PhaseCommand,
     },
     #[command(
+        about = "Inspect epics. Effect: read-only inspection of canonical epic files and child story progress. Side effects: none."
+    )]
+    Epic {
+        #[command(subcommand)]
+        command: EpicCommand,
+    },
+    #[command(
         about = "Inspect or move user stories. Effects depend on subcommand; write operations mutate canonical story frontmatter and sprint story table markdown."
     )]
     Story {
@@ -771,6 +792,9 @@ pub(crate) fn command_repo_root(command: &Command) -> Option<&PathBuf> {
         },
         Command::Phase { command } => match command {
             PhaseCommand::Show { repo_root, .. } => Some(repo_root),
+        },
+        Command::Epic { command } => match command {
+            EpicCommand::Show { repo_root, .. } => Some(repo_root),
         },
         Command::Story { command } => match command {
             StoryCommand::Show { repo_root, .. }
@@ -921,6 +945,21 @@ mod tests {
         };
 
         assert_eq!(command_repo_root(&command), Some(&repo_root));
+    }
+
+    #[test]
+    fn epic_show_parses_epic_id() {
+        let args = Args::try_parse_from(["kanban", "epic", "show", "EP-F1-06"]).unwrap();
+
+        match args.command {
+            Command::Epic {
+                command: EpicCommand::Show { id, repo_root },
+            } => {
+                assert_eq!(id, "EP-F1-06");
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
     }
 
     #[test]
