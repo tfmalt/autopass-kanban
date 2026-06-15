@@ -428,6 +428,11 @@ fn normalize_terminal_markdown(content: &str) -> String {
             continue;
         }
 
+        if trimmed == "---" {
+            index += 1;
+            continue;
+        }
+
         if trimmed.starts_with("```") {
             output.push(line.to_string());
             index += 1;
@@ -689,6 +694,17 @@ pub(crate) fn markdown_table_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn markdown_normalizer_drops_thematic_separator_lines() {
+        let normalized = normalize_terminal_markdown(
+            "# Epic: Example\n\n---\n\n## Scope\n\n- Keep output readable\n",
+        );
+
+        assert!(!normalized.contains("---"));
+        assert!(normalized.contains("# Epic: Example"));
+        assert!(normalized.contains("## Scope"));
+    }
 
     #[test]
     fn fenced_gherkin_blocks_are_syntax_highlighted() {
