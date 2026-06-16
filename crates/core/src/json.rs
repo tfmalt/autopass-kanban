@@ -13,9 +13,10 @@ use serde::Serialize;
 use crate::util::{normalize_status_alias, parse_assignee_list};
 use crate::{
     BlockedWorkItem, CompletionItem, ConfigInitResult, ConfigSetResult, CreateSprintResult,
-    DoctorFinding, Epic, EpicDetails, EpicOverview, MoveStoryResult, PhaseOverview,
-    PlanStoryResult, RolloverResult, SprintOverview, Story, StoryDetails, StoryOverview,
-    StoryUpdateResult, Task, TaskListResult, TaskMutationResult, TaskSummary, ValidationReport,
+    DoctorFinding, Epic, EpicDetails, EpicOverview, EpicUpdateResult, MoveStoryResult,
+    PhaseOverview, PlanStoryResult, RolloverResult, SprintOverview, Story, StoryDetails,
+    StoryOverview, StoryUpdateResult, Task, TaskListResult, TaskMutationResult, TaskSummary,
+    ValidationReport,
 };
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -827,6 +828,24 @@ impl StoryUpdateDto {
         Self {
             story_id: r.story_id.clone(),
             story_path: rel_to_root(repo_root, &r.story_path),
+            updated_fields: r.updated_fields.clone(),
+        }
+    }
+}
+
+/// DTO for `epic update` responses.
+#[derive(Debug, Clone, Serialize)]
+pub struct EpicUpdateDto {
+    pub epic_id: String,
+    pub epic_path: String,
+    pub updated_fields: Vec<String>,
+}
+
+impl EpicUpdateDto {
+    pub fn from_result(r: &EpicUpdateResult, repo_root: &Path) -> Self {
+        Self {
+            epic_id: r.epic_id.clone(),
+            epic_path: rel_to_root(repo_root, &r.epic_path),
             updated_fields: r.updated_fields.clone(),
         }
     }

@@ -6,6 +6,7 @@ use crate::model::*;
 use crate::prelude::*;
 use crate::repository::*;
 use crate::sprint::*;
+use crate::story::*;
 use crate::util::*;
 
 pub fn validate_story(story: &Story) -> Vec<ValidationIssue> {
@@ -72,6 +73,13 @@ pub fn validate_story(story: &Story) -> Vec<ValidationIssue> {
         }
     }
 
+    validate_optional_priority_field(
+        &story.relative_path,
+        &story.frontmatter,
+        &story.frontmatter_keys,
+        &mut issues,
+    );
+
     validate_timestamp_field(story, &mut issues, "created", false, true);
     validate_timestamp_field(story, &mut issues, "updated", false, true);
     validate_timestamp_field(story, &mut issues, "work_started", true, false);
@@ -135,6 +143,11 @@ pub fn validate_repository(repo_root: impl AsRef<Path>) -> Result<ValidationRepo
     let config = load_kanban_config(&repository.repo_root)?;
 
     issues.extend(validate_sprint_readmes(&config)?);
+
+    for epic_file in collect_epic_files(&repository.repo_root)? {
+        let epic = read_epic_file(epic_file, &repository.repo_root)?;
+        issues.extend(validate_epic(&epic));
+    }
 
     for story in &repository.stories {
         issues.extend(validate_story(story));
@@ -277,6 +290,40 @@ pub(crate) fn validate_sprint_readmes(config: &KanbanConfig) -> Result<Vec<Valid
     }
 
     Ok(issues)
+}
+
+fn validate_epic(epic: &Epic) -> Vec<ValidationIssue> {
+    let mut issues = Vec::new();
+    validate_optional_priority_field(
+        &epic.relative_path,
+        &epic.frontmatter,
+        &epic.frontmatter_keys,
+        &mut issues,
+    );
+    issues
+}
+
+fn validate_optional_priority_field(
+    file_path: &Path,
+    frontmatter: &BTreeMap<String, String>,
+    frontmatter_keys: &BTreeSet<String>,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    if !frontmatter_keys.contains("priority") {
+        return;
+    }
+
+    let value = frontmatter
+        .get("priority")
+        .map(String::as_str)
+        .unwrap_or_default();
+    if validate_non_negative_integer_frontmatter("priority", value).is_err() {
+        issues.push(ValidationIssue {
+            file_path: file_path.to_path_buf(),
+            rule: "invalid-priority".to_string(),
+            message: "Frontmatter field \"priority\" must be a non-negative integer.".to_string(),
+        });
+    }
 }
 
 pub(crate) fn validate_timestamp_field(
@@ -555,6 +602,56 @@ mod tests {
         let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
         assert!(rules.contains(&"missing-field:assignee"));
+    }
+
+    #[test]
+    fn validate_story_rejects_invalid_priority_value() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = temp_root.path().join(
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-062-invalid-priority.md",
+        );
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-062\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: ~\nassignee: TBD\nstory_points: 3\npriority: -1\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(story_path, temp_root.path()).unwrap();
+        let issues = validate_story(&story);
+        let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+
+        assert!(rules.contains(&"invalid-priority"));
+    }
+
+    #[test]
+    fn validate_repository_rejects_invalid_epic_priority_value() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let epic_path = temp_root.path().join(
+            "delivery/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/EP-F1-062-invalid-priority.md",
+        );
+
+        fs::create_dir_all(epic_path.parent().unwrap()).unwrap();
+        fs::write(
+            &epic_path,
+            "---\nid: EP-F1-062\ntype: epic\nstatus: draft\nphase: 1\npriority: -1\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# Epic: Invalid priority\n",
+        )
+        .unwrap();
+
+        let validation = validate_repository(temp_root.path()).unwrap();
+        assert!(validation
+            .issues
+            .iter()
+            .any(|issue| {
+                issue.rule == "invalid-priority"
+                    && issue.file_path.as_path()
+                        == Path::new(
+                            "delivery/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/EP-F1-062-invalid-priority.md",
+                        )
+            }));
     }
 
     #[test]
