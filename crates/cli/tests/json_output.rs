@@ -20,8 +20,9 @@ fn write_sprint(root: &Path, name: &str, headline: &str) {
     fs::write(&path, content).expect("write sprint file");
 }
 
-fn kanban_in(_dir: &std::path::Path, args: &[&str]) -> Output {
+fn kanban_in(dir: &std::path::Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_kanban"))
+        .current_dir(dir)
         .args(args)
         .output()
         .expect("kanban binary should run")
@@ -1251,6 +1252,114 @@ fn story_update_with_field_emits_updated_fields() {
         "updated_fields should contain assignee; got: {}",
         json["data"]["updated_fields"]
     );
+}
+
+#[test]
+fn epic_update_priority_json_output() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_backlog_and_sprints(root);
+    let epic_rel = "delivery/backlog/phase-1/06.tooling/EP-F1-02-priority-test.md";
+    let frontmatter = "id: EP-F1-02\ntype: epic\nstatus: draft\nphase: 1\ncreated: 2026-01-01T00:00:00+01:00\nupdated: 2026-01-01T00:00:00+01:00\n";
+    write_story(root, epic_rel, frontmatter, "# Epic: Priority test\n");
+
+    let out = kanban_in(
+        root,
+        &[
+            "--format",
+            "json",
+            "epic",
+            "update",
+            "EP-F1-02",
+            "--priority",
+            "10",
+            &repo_root,
+        ],
+    );
+
+    let json = parse_stdout(&out);
+    assert!(
+        out.status.success(),
+        "epic update should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["kind"], "epic.update");
+    let markdown = fs::read_to_string(root.join(epic_rel)).expect("epic file should be readable");
+    assert!(markdown.contains("priority: 10"));
+}
+
+#[test]
+fn story_update_priority_json_output() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_backlog_and_sprints(root);
+    let story_rel = "delivery/backlog/phase-1/01.infra/US-F1-005-priority-test.md";
+    let frontmatter = "id: US-F1-005\ntype: user-story\nstatus: todo\nepic: EP-F1-01\nsprint: ~\nassignee: TBD\nstory_points: 3\nwork_started: ~\nwork_done: ~\ncreated: 2026-01-01T00:00:00+01:00\nupdated: 2026-01-01T00:00:00+01:00\n";
+    write_story(
+        root,
+        story_rel,
+        frontmatter,
+        "# User Story: Priority test\n",
+    );
+
+    let out = kanban_in(
+        root,
+        &[
+            "--format",
+            "json",
+            "story",
+            "update",
+            "US-F1-005",
+            "--priority",
+            "20",
+            &repo_root,
+        ],
+    );
+
+    let json = parse_stdout(&out);
+    assert!(
+        out.status.success(),
+        "story update should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["kind"], "story.update");
+    let markdown = fs::read_to_string(root.join(story_rel)).expect("story file should be readable");
+    assert!(markdown.contains("priority: 20"));
+}
+
+#[test]
+fn epic_update_priority_json_rejects_missing_value() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+
+    init_backlog_and_sprints(root);
+    let epic_rel = "delivery/backlog/phase-1/06.tooling/EP-F1-02-priority-missing-value.md";
+    let frontmatter = "id: EP-F1-02\ntype: epic\nstatus: draft\nphase: 1\ncreated: 2026-01-01T00:00:00+01:00\nupdated: 2026-01-01T00:00:00+01:00\n";
+    write_story(root, epic_rel, frontmatter, "# Epic: Priority test\n");
+
+    let out = kanban_in(
+        root,
+        &[
+            "--format",
+            "json",
+            "epic",
+            "update",
+            "EP-F1-02",
+            "--priority",
+        ],
+    );
+
+    let json = parse_stdout(&out);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(json["status"], "error");
+    assert_eq!(json["kind"], "epic.update");
+    assert_eq!(json["error"]["code"], "invalid_argument");
 }
 
 #[test]
