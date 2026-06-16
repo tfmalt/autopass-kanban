@@ -1,3 +1,4 @@
+use crate::config::*;
 use crate::markdown::*;
 use crate::model::*;
 #[allow(unused_imports)]
@@ -40,6 +41,44 @@ pub fn find_epic_with_source(
         let details = epic_details_from_parts(repo_root, &repository, &epic);
         (details, epic)
     }))
+}
+
+pub fn update_epic_frontmatter(
+    repo_root: impl AsRef<Path>,
+    epic_id: &str,
+    updates: &[(String, String)],
+) -> Result<EpicUpdateResult> {
+    let config = load_kanban_config(repo_root)?;
+    let normalized_epic_id = epic_id.trim().to_ascii_uppercase();
+    if updates.is_empty() {
+        bail!("No epic frontmatter fields were provided.");
+    }
+
+    for (field, value) in updates {
+        if field == "priority" {
+            validate_non_negative_integer_frontmatter(field, value)?;
+        }
+    }
+
+    let epic = find_epic_source(&config.repo_root, &normalized_epic_id)?
+        .ok_or_else(|| anyhow!("Epic not found: {normalized_epic_id}"))?;
+    let update_refs = updates
+        .iter()
+        .map(|(field, value)| (field.as_str(), Some(value.clone())))
+        .collect::<Vec<_>>();
+    let updated = upsert_frontmatter_markdown(&epic.markdown, &update_refs)?;
+    fs::write(&epic.file_path, updated)
+        .with_context(|| format!("write epic file {}", epic.file_path.display()))?;
+
+    Ok(EpicUpdateResult {
+        epic_id: epic
+            .frontmatter
+            .get("id")
+            .cloned()
+            .unwrap_or(normalized_epic_id),
+        epic_path: epic.relative_path,
+        updated_fields: updates.iter().map(|(field, _)| field.clone()).collect(),
+    })
 }
 
 fn find_epic_source(repo_root: &Path, epic_id: &str) -> Result<Option<Epic>> {
@@ -121,6 +160,7 @@ fn epic_details_from_parts(repo_root: &Path, repository: &Repository, epic: &Epi
 mod tests {
     use super::*;
     use crate::testutil::*;
+    use tempfile::tempdir;
 
     #[test]
     fn find_epic_exposes_child_story_progress_and_sections() {
@@ -199,5 +239,65 @@ mod tests {
 
         let warning = epic_status_warning(&details).expect("warning should exist");
         assert!(warning.contains("child stories are `in-progress`"));
+    }
+
+    #[test]
+    fn update_epic_frontmatter_writes_priority() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let epic_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/EP-F1-099-test-epic.md",
+            "id: EP-F1-099\ntype: epic\nstatus: draft\nphase: 1\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let result = update_epic_frontmatter(
+            temp_root.path(),
+            "EP-F1-099",
+            &[("priority".to_string(), "10".to_string())],
+        )
+        .unwrap();
+
+        let markdown = fs::read_to_string(epic_path).unwrap();
+        assert_eq!(result.epic_id, "EP-F1-099");
+        assert_eq!(result.updated_fields, vec!["priority"]);
+        assert!(markdown.contains("priority: 10"));
+    }
+
+    #[test]
+    fn update_epic_frontmatter_rejects_negative_priority() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let epic_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/EP-F1-098-test-epic.md",
+            "id: EP-F1-098\ntype: epic\nstatus: draft\nphase: 1\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let err = update_epic_frontmatter(
+            temp_root.path(),
+            "EP-F1-098",
+            &[("priority".to_string(), "-1".to_string())],
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("non-negative integer"));
+        let markdown = fs::read_to_string(epic_path).unwrap();
+        assert!(!markdown.contains("priority:"));
+    }
+
+    #[test]
+    fn update_epic_frontmatter_returns_error_for_unknown_id() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+
+        let err = update_epic_frontmatter(
+            temp_root.path(),
+            "EP-F1-404",
+            &[("priority".to_string(), "10".to_string())],
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("Epic not found: EP-F1-404"));
     }
 }

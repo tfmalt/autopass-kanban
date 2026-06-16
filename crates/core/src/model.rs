@@ -196,6 +196,13 @@ pub struct StoryUpdateResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpicUpdateResult {
+    pub epic_id: String,
+    pub epic_path: PathBuf,
+    pub updated_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RolloverResult {
     pub from_sprint: String,
     pub to_sprint: String,

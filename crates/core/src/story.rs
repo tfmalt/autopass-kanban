@@ -407,10 +407,13 @@ pub fn update_story_frontmatter(
     let normalized_updates = updates
         .iter()
         .map(|(field, value)| {
-            let value = if field == "assignee" {
-                normalize_story_assignee_value(value)?
-            } else {
-                value.clone()
+            let value = match field.as_str() {
+                "assignee" => normalize_story_assignee_value(value)?,
+                "priority" => {
+                    validate_non_negative_integer_frontmatter(field, value)?;
+                    value.clone()
+                }
+                _ => value.clone(),
             };
             Ok((field.clone(), value))
         })
@@ -574,6 +577,17 @@ pub(crate) fn normalize_story_status_input(status: &str) -> Result<String> {
     }
 }
 
+pub(crate) fn validate_non_negative_integer_frontmatter(
+    field_name: &str,
+    value: &str,
+) -> Result<()> {
+    value
+        .trim()
+        .parse::<u32>()
+        .map(|_| ())
+        .map_err(|_| anyhow!("Frontmatter field \"{field_name}\" must be a non-negative integer."))
+}
+
 pub(crate) fn normalize_task_status_for_write(status: &str) -> Result<String> {
     let normalized = normalize_task_status(status);
     if CANONICAL_TASK_STATUSES.contains(&normalized.as_str()) {
@@ -727,6 +741,28 @@ mod tests {
                 "assignee: Alice Example <alice@example.com>, Bob Berg <bob@example.com>"
             )
         );
+    }
+
+    #[test]
+    fn update_story_frontmatter_rejects_negative_priority() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-097-test-story.md",
+            "id: US-F1-097\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let err = update_story_frontmatter(
+            temp_root.path(),
+            "US-F1-097",
+            &[("priority".to_string(), "-1".to_string())],
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("non-negative integer"));
+        let markdown = fs::read_to_string(story_path).unwrap();
+        assert!(!markdown.contains("priority:"));
     }
 
     #[test]
