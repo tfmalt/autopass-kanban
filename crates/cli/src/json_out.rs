@@ -147,6 +147,49 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
                 KanbanErrorBody::from_anyhow(&error),
             )),
         },
+        Command::Epic {
+            command:
+                EpicCommand::Update {
+                    id,
+                    priority,
+                    repo_root,
+                },
+        } => {
+            let updates = match json_story_frontmatter_updates(&[("priority", priority)]) {
+                Ok(updates) => updates,
+                Err(error) => {
+                    return print_envelope(&JsonEnvelope::<EpicUpdateDto>::error(
+                        "epic.update",
+                        KanbanErrorBody::new(KanbanErrorCode::InvalidArgument, error.to_string()),
+                    ));
+                }
+            };
+            if updates.is_empty() {
+                return invalid_argument_envelope::<EpicUpdateDto>(
+                    "epic.update",
+                    "epic update in --format json requires at least one frontmatter field.",
+                );
+            }
+            let root = match load_kanban_config(repo_root) {
+                Ok(c) => c.repo_root,
+                Err(e) => {
+                    return print_envelope(&JsonEnvelope::<EpicUpdateDto>::error(
+                        "epic.update",
+                        KanbanErrorBody::new(KanbanErrorCode::NotInitialized, e.to_string()),
+                    ));
+                }
+            };
+            match update_epic_frontmatter(&root, id, &updates) {
+                Ok(result) => print_envelope(&JsonEnvelope::ok(
+                    "epic.update",
+                    EpicUpdateDto::from_result(&result, &root),
+                )),
+                Err(e) => print_envelope(&JsonEnvelope::<EpicUpdateDto>::error(
+                    "epic.update",
+                    KanbanErrorBody::from_anyhow(&e),
+                )),
+            }
+        }
         Command::Story {
             command:
                 StoryCommand::List {
@@ -375,6 +418,7 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
                     epic,
                     sprint,
                     story_points,
+                    priority,
                     assignee,
                     activated,
                     work_started,
@@ -392,6 +436,7 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
                 ("epic", epic),
                 ("sprint", sprint),
                 ("story_points", story_points),
+                ("priority", priority),
                 ("assignee", assignee),
                 ("activated", activated),
                 ("work_started", work_started),

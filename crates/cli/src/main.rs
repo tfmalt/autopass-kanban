@@ -309,6 +309,51 @@ fn main() -> Result<()> {
                 Some(details) => print_epic_details(&theme, OutputLayout::for_stdout()?, &details),
                 None => println!("{} {id}", theme.warning("Epic not found:")),
             },
+            EpicCommand::Update {
+                id,
+                priority,
+                repo_root,
+            } => {
+                let mut updates = Vec::new();
+                match priority {
+                    Some(Some(value)) => updates.push(("priority".to_string(), value)),
+                    Some(None) => {
+                        let epic = find_epic_with_source(&repo_root, &id)?
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "Epic not found: {}",
+                                    id.trim().to_ascii_uppercase()
+                                )
+                            })?
+                            .1;
+                        let default = epic
+                            .frontmatter
+                            .get("priority")
+                            .cloned()
+                            .unwrap_or_default();
+                        let value = prompt_with_default("priority", &default)?;
+                        updates.push(("priority".to_string(), value));
+                    }
+                    None => {}
+                }
+
+                if updates.is_empty() {
+                    bail!("No epic frontmatter fields were provided.");
+                }
+
+                let result = update_epic_frontmatter(&repo_root, &id, &updates)?;
+                println!(
+                    "{} {} ({})",
+                    theme.success("Updated"),
+                    theme.id(&result.epic_id),
+                    result.updated_fields.join(", ")
+                );
+                println!(
+                    "{} {}",
+                    theme.label("Epic:"),
+                    theme.path(result.epic_path.display())
+                );
+            }
         },
         Command::Story { command } => match command {
             StoryCommand::Show { id, repo_root } => match find_story(repo_root, &id)? {
@@ -409,6 +454,7 @@ fn main() -> Result<()> {
                 epic,
                 sprint,
                 story_points,
+                priority,
                 assignee,
                 activated,
                 work_started,
@@ -428,6 +474,7 @@ fn main() -> Result<()> {
                     ("epic", epic),
                     ("sprint", sprint),
                     ("story_points", story_points),
+                    ("priority", priority),
                     ("assignee", assignee),
                     ("activated", activated),
                     ("work_started", work_started),

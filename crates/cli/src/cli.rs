@@ -193,6 +193,17 @@ pub(crate) enum EpicCommand {
         #[arg(default_value = ".")]
         repo_root: PathBuf,
     },
+    #[command(
+        about = "Update an epic. Effect: updates canonical epic frontmatter in place. Side effects: no sprint markdown is regenerated."
+    )]
+    Update {
+        #[arg(help = "Epic id to update, for example EP-F1-02.")]
+        id: String,
+        #[arg(long, num_args = 0..=1, value_name = "RANK", help = "Update frontmatter priority (non-negative integer). Omit VALUE to prompt.")]
+        priority: Option<Option<String>>,
+        #[arg(default_value = ".", help = "Repository root to update.")]
+        repo_root: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -291,6 +302,8 @@ pub(crate) enum StoryCommand {
         sprint: Option<Option<String>>,
         #[arg(long, num_args = 0..=1, value_name = "POINTS", help = "Update frontmatter story_points. Omit VALUE to prompt with the current value.")]
         story_points: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "RANK", help = "Update frontmatter priority (non-negative integer). Omit VALUE to prompt with the current value.")]
+        priority: Option<Option<String>>,
         #[arg(long, num_args = 0..=1, value_name = "ASSIGNEE", help = "Update frontmatter assignee. Use `Name <email>` or a comma-separated list. Omit VALUE to prompt with the current value.")]
         assignee: Option<Option<String>>,
         #[arg(long, num_args = 0..=1, value_name = "TIMESTAMP", help = "Update frontmatter activated. Omit VALUE to prompt with the current value.")]
@@ -654,6 +667,7 @@ pub(crate) enum ReportCommand {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Command {
     #[command(
         about = "Initialize `.kanban` in the repository root. Effect: creates default JSON config files in `.kanban/`. Side effects: no backlog files are modified."
@@ -794,7 +808,9 @@ pub(crate) fn command_repo_root(command: &Command) -> Option<&PathBuf> {
             PhaseCommand::Show { repo_root, .. } => Some(repo_root),
         },
         Command::Epic { command } => match command {
-            EpicCommand::Show { repo_root, .. } => Some(repo_root),
+            EpicCommand::Show { repo_root, .. } | EpicCommand::Update { repo_root, .. } => {
+                Some(repo_root)
+            }
         },
         Command::Story { command } => match command {
             StoryCommand::Show { repo_root, .. }
@@ -963,6 +979,29 @@ mod tests {
     }
 
     #[test]
+    fn epic_update_parses_priority() {
+        let args =
+            Args::try_parse_from(["kanban", "epic", "update", "EP-F1-02", "--priority", "10"])
+                .unwrap();
+
+        match args.command {
+            Command::Epic {
+                command:
+                    EpicCommand::Update {
+                        id,
+                        priority,
+                        repo_root,
+                    },
+            } => {
+                assert_eq!(id, "EP-F1-02");
+                assert_eq!(priority, Some(Some("10".to_string())));
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
     fn story_update_parses_direct_frontmatter_values() {
         let args = Args::try_parse_from([
             "kanban",
@@ -982,6 +1021,7 @@ mod tests {
                     StoryCommand::Update {
                         id,
                         story_points,
+                        priority,
                         status,
                         repo_root,
                         ..
@@ -989,6 +1029,7 @@ mod tests {
             } => {
                 assert_eq!(id, "US-F1-099");
                 assert_eq!(story_points, Some(Some("5".to_string())));
+                assert_eq!(priority, None);
                 assert_eq!(status, Some(Some("ready".to_string())));
                 assert_eq!(repo_root, PathBuf::from("."));
             }
