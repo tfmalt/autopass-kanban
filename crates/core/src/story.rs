@@ -446,6 +446,10 @@ pub fn update_story_frontmatter(
         .map(|(field, value)| {
             let value = match field.as_str() {
                 "assignee" => normalize_story_assignee_value(value)?,
+                "sprint" => {
+                    validate_story_sprint_frontmatter(value)?;
+                    value.clone()
+                }
                 "priority" => {
                     validate_non_negative_integer_frontmatter(field, value)?;
                     value.clone()
@@ -625,6 +629,21 @@ pub(crate) fn validate_non_negative_integer_frontmatter(
         .map_err(|_| anyhow!("Frontmatter field \"{field_name}\" must be a non-negative integer."))
 }
 
+pub(crate) fn validate_story_sprint_frontmatter(value: &str) -> Result<()> {
+    let sprint = value.trim();
+    if sprint.is_empty() || sprint == "~" {
+        return Ok(());
+    }
+
+    if parse_sprint_file_name(&format!("{sprint}.md")).is_some() {
+        Ok(())
+    } else {
+        bail!(
+            "Frontmatter field \"sprint\" must be empty, ~, or use <Snnn>.<headline-slug>; got {value:?}."
+        );
+    }
+}
+
 pub(crate) fn normalize_task_status_for_write(status: &str) -> Result<String> {
     let normalized = normalize_task_status(status);
     if CANONICAL_TASK_STATUSES.contains(&normalized.as_str()) {
@@ -800,6 +819,29 @@ mod tests {
         assert!(err.to_string().contains("non-negative integer"));
         let markdown = fs::read_to_string(story_path).unwrap();
         assert!(!markdown.contains("priority:"));
+    }
+
+    #[test]
+    fn update_story_frontmatter_rejects_invalid_sprint_value() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-096-test-story.md",
+            "id: US-F1-096\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let err = update_story_frontmatter(
+            temp_root.path(),
+            "US-F1-096",
+            &[("sprint".to_string(), "/Users/tm".to_string())],
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("<Snnn>.<headline-slug>"));
+        let markdown = fs::read_to_string(story_path).unwrap();
+        assert!(markdown.contains("sprint: ~"));
+        assert!(!markdown.contains("sprint: /Users/tm"));
     }
 
     #[test]

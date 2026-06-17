@@ -90,6 +90,18 @@ pub fn validate_story(story: &Story) -> Vec<ValidationIssue> {
         .get("sprint")
         .is_some_and(|sprint| !sprint.trim().is_empty() && sprint.as_str() != "~")
     {
+        if let Some(sprint) = story.frontmatter.get("sprint")
+            && validate_story_sprint_frontmatter(sprint).is_err()
+        {
+            add_issue(
+                story,
+                &mut issues,
+                "invalid-sprint",
+                format!(
+                    "Story sprint \"{sprint}\" must be empty, ~, or use <Snnn>.<headline-slug>."
+                ),
+            );
+        }
         validate_timestamp_field(story, &mut issues, "activated", true, false);
     }
 
@@ -624,6 +636,28 @@ mod tests {
         let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
         assert!(rules.contains(&"invalid-priority"));
+    }
+
+    #[test]
+    fn validate_story_rejects_invalid_sprint_value() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = temp_root.path().join(
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-063-invalid-sprint.md",
+        );
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-063\ntype: user-story\nstatus: ready\nepic: EP-F1-06\nsprint: /Users/tm\nassignee: Test User <test@example.com>\nstory_points: 3\nwork_started:\nwork_done:\nactivated: 2026-05-28T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(story_path, temp_root.path()).unwrap();
+        let issues = validate_story(&story);
+        let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+
+        assert!(rules.contains(&"invalid-sprint"));
     }
 
     #[test]
