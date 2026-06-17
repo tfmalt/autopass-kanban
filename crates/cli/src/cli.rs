@@ -614,7 +614,7 @@ pub(crate) enum WebCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Stop the local kanban web UI. Effect: sends SIGTERM to the recorded PID and removes stale runtime files. Side effects: no backlog markdown is modified."
+        about = "Stop the local kanban web UI. Effect: sends SIGTERM to the recorded web process and escalates to forced termination if needed, then removes stale runtime files. Side effects: no backlog markdown is modified."
     )]
     Stop {
         #[arg(

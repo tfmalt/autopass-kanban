@@ -405,7 +405,25 @@ pub(crate) fn read_web_process_state(paths: &WebRuntimePaths) -> Result<WebProce
 
 #[cfg(unix)]
 pub(crate) fn process_exists(pid: u32) -> bool {
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    if pid == 0 {
+        return false;
+    }
+
+    (unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }) && !process_is_zombie(pid)
+}
+
+#[cfg(unix)]
+fn process_is_zombie(pid: u32) -> bool {
+    let output = ProcessCommand::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output();
+    match output {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .next()
+            .is_some_and(|stat| stat.starts_with('Z')),
+        _ => false,
+    }
 }
 
 #[cfg(windows)]
@@ -443,17 +461,44 @@ pub(crate) fn process_exists(_pid: u32) -> bool {
 
 #[cfg(unix)]
 pub(crate) fn terminate_process(pid: u32) -> Result<()> {
-    let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-    if result == 0 || !process_exists(pid) {
+    send_signal_to_process(pid, libc::SIGTERM, "SIGTERM")
+}
+
+#[cfg(unix)]
+pub(crate) fn force_kill_process(pid: u32) -> Result<()> {
+    send_signal_to_process(pid, libc::SIGKILL, "SIGKILL")
+}
+
+#[cfg(unix)]
+fn send_signal_to_process(pid: u32, signal: libc::c_int, signal_name: &str) -> Result<()> {
+    if pid == 0 {
+        return Ok(());
+    }
+
+    // `kanban web start` creates a dedicated process group so a stop request
+    // tears down the full web tree in both production and dev mode.
+    let process_group_result = unsafe { libc::kill(-(pid as libc::pid_t), signal) };
+    if process_group_result == 0 || !process_exists(pid) {
+        return Ok(());
+    }
+
+    let process_result = unsafe { libc::kill(pid as libc::pid_t, signal) };
+    if process_result == 0 || !process_exists(pid) {
         Ok(())
     } else {
-        bail!("failed to stop web process {pid}");
+        bail!("failed to send {signal_name} to web process {pid}");
     }
 }
 
 #[cfg(not(unix))]
 #[cfg(not(windows))]
 pub(crate) fn terminate_process(_pid: u32) -> Result<()> {
+    bail!("kanban web stop is not implemented on this platform.")
+}
+
+#[cfg(not(unix))]
+#[cfg(not(windows))]
+pub(crate) fn force_kill_process(_pid: u32) -> Result<()> {
     bail!("kanban web stop is not implemented on this platform.")
 }
 
@@ -484,6 +529,34 @@ pub(crate) fn terminate_process(pid: u32) -> Result<()> {
     } else {
         bail!("failed to stop web process {pid}")
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn force_kill_process(pid: u32) -> Result<()> {
+    terminate_process(pid)
+}
+
+fn wait_for_process_exit(pid: u32, attempts: usize, pause: Duration) -> bool {
+    for _ in 0..attempts {
+        if !process_exists(pid) {
+            return true;
+        }
+        thread::sleep(pause);
+    }
+    !process_exists(pid)
+}
+
+fn finish_stopped_web_process(
+    theme: &Theme,
+    paths: &WebRuntimePaths,
+    pid: u32,
+    quiet: bool,
+) -> Result<bool> {
+    remove_pid_file(paths)?;
+    if !quiet {
+        println!("{} PID {pid}", theme.success("Stopped kanban web UI:"));
+    }
+    Ok(true)
 }
 
 pub(crate) fn remove_pid_file(paths: &WebRuntimePaths) -> Result<()> {
@@ -673,17 +746,16 @@ pub(crate) fn stop_web(theme: &Theme, repo_root: &Path, quiet: bool) -> Result<b
         }
         WebProcessState::Running(pid) => {
             terminate_process(pid)?;
-            for _ in 0..30 {
-                if !process_exists(pid) {
-                    remove_pid_file(&paths)?;
-                    if !quiet {
-                        println!("{} PID {pid}", theme.success("Stopped kanban web UI:"));
-                    }
-                    return Ok(true);
-                }
-                thread::sleep(Duration::from_millis(100));
+            if wait_for_process_exit(pid, 30, Duration::from_millis(100)) {
+                return finish_stopped_web_process(theme, &paths, pid, quiet);
             }
-            bail!("web process {pid} did not stop after SIGTERM");
+
+            force_kill_process(pid)?;
+            if wait_for_process_exit(pid, 10, Duration::from_millis(100)) {
+                return finish_stopped_web_process(theme, &paths, pid, quiet);
+            }
+
+            bail!("web process {pid} did not stop after SIGTERM or SIGKILL");
         }
     }
 }
@@ -833,6 +905,9 @@ pub(crate) fn print_web_log(
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    use std::os::unix::process::CommandExt;
+
     #[test]
     fn web_runtime_paths_live_under_kanban_run() {
         let paths = web_runtime_paths(Path::new("/tmp/repo"));
@@ -932,6 +1007,39 @@ mod tests {
         assert_eq!(build.program, "npm.cmd");
         #[cfg(not(windows))]
         assert_eq!(build.program, "npm");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminate_process_stops_process_group() {
+        let mut child = ProcessCommand::new("sh");
+        child.arg("-c").arg("sleep 30").process_group(0);
+        let mut child = child.spawn().expect("spawn child process");
+        let pid = child.id();
+
+        terminate_process(pid).expect("send SIGTERM");
+
+        assert!(
+            wait_for_process_exit(pid, 30, Duration::from_millis(100)),
+            "process group should exit after SIGTERM"
+        );
+        let _ = child.wait();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn force_kill_process_stops_term_resistant_process_group() {
+        let mut child = ProcessCommand::new("sh");
+        child.arg("-c").arg("sleep 30").process_group(0);
+        let mut child = child.spawn().expect("spawn child process");
+        let pid = child.id();
+
+        force_kill_process(pid).expect("send SIGKILL");
+        assert!(
+            wait_for_process_exit(pid, 10, Duration::from_millis(100)),
+            "process group should exit after SIGKILL"
+        );
+        let _ = child.wait();
     }
 
     #[cfg(windows)]
