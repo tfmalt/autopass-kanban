@@ -296,6 +296,7 @@ pub(crate) enum StoryCommand {
         repo_root: PathBuf,
     },
     #[command(
+        visible_aliases = ["edit"],
         about = "Update a story. With no field options, opens $EDITOR for the story markdown. Field options update frontmatter; omit an option value to be prompted with the current value as default."
     )]
     Update {
