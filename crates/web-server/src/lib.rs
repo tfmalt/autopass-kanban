@@ -179,12 +179,26 @@ struct StoryPointsResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DashboardMetrics {
-    burndown: Vec<Value>,
-    burnup: Vec<Value>,
+    burndown: Vec<BurndownPoint>,
+    burnup: Vec<BurnupPoint>,
     lead_time: Vec<LeadTimePoint>,
     velocity: Vec<VelocityPoint>,
     forecast: Forecast,
     progress: ProjectProgress,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct BurndownPoint {
+    date: String,
+    remaining: i64,
+    ideal: i64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct BurnupPoint {
+    date: String,
+    completed: i64,
+    scope: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -203,7 +217,7 @@ struct VelocityPoint {
     forecast: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Forecast {
     generated_at: String,
@@ -215,7 +229,7 @@ struct Forecast {
     confidence: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ForecastThroughput {
     samples: Vec<i64>,
@@ -224,7 +238,7 @@ struct ForecastThroughput {
     observed_day_count: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ForecastCompletion {
     p50_days: Option<i64>,
@@ -924,14 +938,205 @@ fn compute_progress(stories: &[WebStory]) -> ProjectProgress {
 }
 
 fn compute_metrics(repo: &RepositorySnapshot) -> DashboardMetrics {
+    let progress = compute_progress(&repo.stories);
     DashboardMetrics {
-        burndown: Vec::new(),
-        burnup: Vec::new(),
+        burndown: build_burndown(&repo.sprints),
+        burnup: build_burnup(&repo.stories, &repo.sprints),
         lead_time: build_lead_time(&repo.stories),
         velocity: build_velocity(&repo.sprints),
         forecast: build_forecast(&repo.stories, &repo.sprints),
-        progress: compute_progress(&repo.stories),
+        progress,
     }
+}
+
+fn build_burnup(stories: &[WebStory], sprints: &[WebSprint]) -> Vec<BurnupPoint> {
+    let today = Local::now().date_naive();
+    let mut completed_by_date = BTreeMap::<NaiveDate, i64>::new();
+    for story in stories.iter().filter(|story| story.status == "done") {
+        let Some(date) = story_completion_date(story) else {
+            continue;
+        };
+        *completed_by_date.entry(date).or_default() += story.story_points.unwrap_or(0);
+    }
+
+    let mut scope_changes = BTreeMap::<NaiveDate, i64>::new();
+    let mut sprint_boundaries = BTreeSet::<NaiveDate>::new();
+    for sprint in sprints {
+        let Some(start_date) = sprint.start_date.as_deref().and_then(parse_date_prefix) else {
+            continue;
+        };
+        if start_date > today {
+            continue;
+        }
+        sprint_boundaries.insert(start_date);
+        if let Some(end_date) = sprint.end_date.as_deref().and_then(parse_date_prefix)
+            && end_date <= today
+        {
+            sprint_boundaries.insert(end_date);
+        }
+        *scope_changes.entry(start_date).or_default() += sprint_total_points(sprint);
+    }
+
+    let start_date = stories
+        .iter()
+        .filter_map(story_work_started_date)
+        .min()
+        .or_else(|| completed_by_date.keys().next().copied())
+        .or_else(|| scope_changes.keys().next().copied());
+    let Some(start_date) = start_date else {
+        return Vec::new();
+    };
+
+    let mut rows = Vec::new();
+    let mut cumulative = completed_by_date
+        .range(..start_date)
+        .map(|(_, points)| *points)
+        .sum::<i64>();
+    let mut scope = scope_changes
+        .range(..=start_date)
+        .map(|(_, points)| *points)
+        .sum::<i64>();
+    rows.push(BurnupPoint {
+        date: start_date.to_string(),
+        completed: cumulative,
+        scope,
+    });
+
+    let dates = completed_by_date
+        .keys()
+        .chain(scope_changes.keys())
+        .chain(sprint_boundaries.iter())
+        .copied()
+        .filter(|date| *date >= start_date && *date <= today)
+        .collect::<BTreeSet<_>>();
+    for date in dates {
+        if date > start_date {
+            scope += scope_changes.get(&date).copied().unwrap_or(0);
+            cumulative += completed_by_date.get(&date).copied().unwrap_or(0);
+            rows.push(BurnupPoint {
+                date: date.to_string(),
+                completed: cumulative,
+                scope,
+            });
+            continue;
+        }
+
+        cumulative += completed_by_date.get(&date).copied().unwrap_or(0);
+        if let Some(last) = rows.last_mut() {
+            last.completed = cumulative;
+            last.scope = scope;
+        }
+    }
+
+    if rows.last().is_some_and(|last| last.date != today.to_string()) {
+        rows.push(BurnupPoint {
+            date: today.to_string(),
+            completed: cumulative,
+            scope,
+        });
+    }
+
+    rows
+}
+
+fn build_burndown(sprints: &[WebSprint]) -> Vec<BurndownPoint> {
+    let Some(sprint) = select_burndown_sprint(sprints) else {
+        return Vec::new();
+    };
+    let Some(start_date) = sprint.start_date.as_deref().and_then(parse_date_prefix) else {
+        return Vec::new();
+    };
+    let Some(end_date) = sprint.end_date.as_deref().and_then(parse_date_prefix) else {
+        return Vec::new();
+    };
+    if end_date < start_date {
+        return Vec::new();
+    }
+
+    let planned_points = sprint_total_points(sprint);
+    if planned_points <= 0 {
+        return Vec::new();
+    }
+
+    let today = Local::now().date_naive();
+    let last_date = match sprint.status.as_deref() {
+        Some("closed") => end_date,
+        _ => std::cmp::min(end_date, std::cmp::max(start_date, today)),
+    };
+
+    let mut completed_by_date = BTreeMap::<NaiveDate, i64>::new();
+    for story in sprint.stories_by_status.values().flatten() {
+        if story.status != "done" {
+            continue;
+        }
+        let Some(date) = story_completion_date(story) else {
+            continue;
+        };
+        *completed_by_date.entry(std::cmp::min(date, end_date)).or_default() +=
+            story.story_points.unwrap_or(0);
+    }
+
+    let total_days = (end_date - start_date).num_days();
+    let visible_days = (last_date - start_date).num_days();
+    let mut rows = Vec::new();
+    let mut completed = 0;
+    for offset in 0..=visible_days {
+        let date = start_date + Days::new(offset as u64);
+        completed += completed_by_date.get(&date).copied().unwrap_or(0);
+        let remaining = (planned_points - completed).max(0);
+        let ideal = if total_days <= 0 {
+            0
+        } else {
+            (((planned_points as f64) * (1.0 - (offset as f64 / total_days as f64))).round()
+                as i64)
+                .max(0)
+        };
+        rows.push(BurndownPoint {
+            date: date.to_string(),
+            remaining,
+            ideal,
+        });
+    }
+
+    rows
+}
+
+fn select_burndown_sprint(sprints: &[WebSprint]) -> Option<&WebSprint> {
+    sprints
+        .iter()
+        .find(|sprint| sprint.status.as_deref() == Some("active"))
+        .or_else(|| {
+            sprints.iter().rev().find(|sprint| {
+                sprint.status.as_deref() != Some("closed") && sprint_total_points(sprint) > 0
+            })
+        })
+        .or_else(|| sprints.iter().rev().find(|sprint| sprint_total_points(sprint) > 0))
+        .or_else(|| sprints.last())
+}
+
+fn sprint_total_points(sprint: &WebSprint) -> i64 {
+    sprint
+        .stories_by_status
+        .values()
+        .flatten()
+        .map(|story| story.story_points.unwrap_or(0))
+        .sum()
+}
+
+fn story_work_started_date(story: &WebStory) -> Option<NaiveDate> {
+    story
+        .work_started
+        .as_deref()
+        .and_then(parse_date_prefix)
+}
+
+fn story_completion_date(story: &WebStory) -> Option<NaiveDate> {
+    story
+        .work_done
+        .as_deref()
+        .and_then(parse_date_prefix)
+        .or_else(|| story.updated.as_deref().and_then(parse_date_prefix))
+        .or_else(|| story.created.as_deref().and_then(parse_date_prefix))
 }
 
 fn build_lead_time(stories: &[WebStory]) -> Vec<LeadTimePoint> {
@@ -986,57 +1191,97 @@ fn build_velocity(sprints: &[WebSprint]) -> Vec<VelocityPoint> {
 }
 
 fn build_forecast(stories: &[WebStory], sprints: &[WebSprint]) -> Forecast {
-    let today = Local::now().date_naive();
-    let remaining_points = stories
+    let story_overviews = stories
         .iter()
-        .filter(|story| story.status != "done" && story.status != "dropped")
-        .map(|story| story.story_points.unwrap_or(0))
-        .sum::<i64>();
-    let done_points = stories
+        .map(story_overview_from_web)
+        .collect::<Vec<_>>();
+    let sprint_overviews = sprints
         .iter()
-        .filter(|story| story.status == "done")
-        .map(|story| story.story_points.unwrap_or(0))
-        .sum::<i64>();
-    let completed_sprints = sprints
+        .map(sprint_overview_from_web)
+        .collect::<Vec<_>>();
+    let current_sprint_name = sprints
         .iter()
-        .filter(|sprint| sprint.status.as_deref() == Some("closed"))
-        .count()
-        .max(1) as i64;
-    let average = done_points as f64 / completed_sprints as f64;
-    let days_remaining = if remaining_points == 0 {
-        Some(0)
-    } else if average > 0.0 {
-        Some((remaining_points as f64 / average).ceil() as i64 * 10)
-    } else {
-        None
-    };
-    let date = days_remaining
-        .and_then(|days| today.checked_add_days(Days::new(days as u64)))
-        .map(|date| date.to_string());
-    Forecast {
-        generated_at: Local::now().to_rfc3339(),
-        remaining_points,
-        sprint_duration_weeks: 2,
-        projection_start_date: today.to_string(),
-        throughput: ForecastThroughput {
-            samples: Vec::new(),
-            average,
-            median: average,
-            observed_day_count: 0,
-        },
-        completion: ForecastCompletion {
-            p50_days: days_remaining,
-            p80_days: days_remaining,
-            p90_days: days_remaining,
-            p50_date: date.clone(),
-            p80_date: date.clone(),
-            p90_date: date,
-        },
-        confidence: if average > 0.0 {
-            "low".to_string()
-        } else {
-            "none".to_string()
-        },
+        .find(|sprint| sprint.status.as_deref() == Some("active"))
+        .map(|sprint| sprint.name.as_str());
+    let canonical = ReportForecastDto::build(&story_overviews, &sprint_overviews, current_sprint_name);
+    Forecast::from(canonical)
+}
+
+fn story_overview_from_web(story: &WebStory) -> StoryOverview {
+    StoryOverview {
+        id: story.id.clone(),
+        title: story.title.clone(),
+        status: story.status.clone(),
+        epic_id: story.epic.clone(),
+        epic_title: None,
+        assignee: story.assignee.clone().unwrap_or_default(),
+        story_points: story
+            .story_points
+            .map(|points| points.to_string())
+            .unwrap_or_default(),
+        sprint: story.sprint.clone(),
+        relative_path: PathBuf::from(&story.relative_path),
+        task_summary: Some(TaskSummary {
+            todo: story.task_summary.todo,
+            in_progress: story.task_summary.in_progress,
+            blocked: story.task_summary.blocked,
+            done: story.task_summary.done,
+        }),
+        task_count: story.task_summary.total,
+        work_started: story.work_started.clone(),
+        work_done: story.work_done.clone(),
+        planned_start: None,
+        planned_end: None,
+    }
+}
+
+fn sprint_overview_from_web(sprint: &WebSprint) -> SprintOverview {
+    SprintOverview {
+        sprint_name: sprint.name.clone(),
+        headline: sprint.headline.clone(),
+        sprint_goal: sprint.goal.clone(),
+        start_date: sprint.start_date.clone().unwrap_or_default(),
+        end_date: sprint.end_date.clone().unwrap_or_default(),
+        readme_path: PathBuf::from(format!("delivery/sprints/{}.md", sprint.name)),
+        readme_status: sprint.status.clone(),
+        stories_by_status: sprint
+            .stories_by_status
+            .iter()
+            .map(|(status, stories)| {
+                (
+                    status.clone(),
+                    stories.iter().map(story_overview_from_web).collect::<Vec<_>>(),
+                )
+            })
+            .collect(),
+        blocked_work: Vec::new(),
+        warnings: Vec::new(),
+    }
+}
+
+impl From<ReportForecastDto> for Forecast {
+    fn from(value: ReportForecastDto) -> Self {
+        Self {
+            generated_at: value.generated_at,
+            remaining_points: value.remaining_points,
+            sprint_duration_weeks: value.sprint_duration_weeks as i64,
+            projection_start_date: value.projection_start_date,
+            throughput: ForecastThroughput {
+                samples: value.throughput.samples,
+                average: value.throughput.average,
+                median: value.throughput.median,
+                observed_day_count: value.throughput.observed_day_count,
+            },
+            completion: ForecastCompletion {
+                p50_days: value.completion.p50_days.map(i64::from),
+                p80_days: value.completion.p80_days.map(i64::from),
+                p90_days: value.completion.p90_days.map(i64::from),
+                p50_date: value.completion.p50_date,
+                p80_date: value.completion.p80_date,
+                p90_date: value.completion.p90_date,
+            },
+            confidence: value.confidence,
+        }
     }
 }
 
@@ -1235,9 +1480,13 @@ fn git_branch(repo_root: &Path) -> String {
 }
 
 fn days_between(start: &str, end: &str) -> Option<i64> {
-    let start = NaiveDate::parse_from_str(start.get(..10)?, "%Y-%m-%d").ok()?;
-    let end = NaiveDate::parse_from_str(end.get(..10)?, "%Y-%m-%d").ok()?;
+    let start = parse_date_prefix(start)?;
+    let end = parse_date_prefix(end)?;
     Some((end - start).num_days().max(0))
+}
+
+fn parse_date_prefix(value: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(value.get(..10)?, "%Y-%m-%d").ok()
 }
 
 fn parse_date_or(value: Option<&str>, fallback: NaiveDate) -> Result<NaiveDate> {
@@ -1365,6 +1614,80 @@ fn json_value_to_string(value: Value) -> String {
 mod tests {
     use super::*;
 
+    fn test_story(
+        id: &str,
+        status: &str,
+        story_points: i64,
+        created: Option<&str>,
+        work_done: Option<&str>,
+    ) -> WebStory {
+        WebStory {
+            id: id.to_string(),
+            title: id.to_string(),
+            status: status.to_string(),
+            phase: Some("F1".to_string()),
+            epic: Some("EP-F1-01".to_string()),
+            sprint: Some("S001.current".to_string()),
+            priority: None,
+            story_points: Some(story_points),
+            assignee: None,
+            assignees: Vec::new(),
+            work_started: created.map(str::to_string),
+            work_done: work_done.map(str::to_string),
+            activated: created.map(str::to_string),
+            created: created.map(str::to_string),
+            updated: work_done.map(str::to_string),
+            relative_path: "story.md".to_string(),
+            tasks: Vec::new(),
+            task_summary: WebTaskSummary {
+                todo: 0,
+                in_progress: 0,
+                ready_for_qa: 0,
+                done: 0,
+                blocked: 0,
+                total: 0,
+            },
+            frontmatter: BTreeMap::new(),
+        }
+    }
+
+    fn test_sprint(status: &str, stories: Vec<WebStory>) -> WebSprint {
+        test_sprint_with_start(status, "2026-06-01", stories)
+    }
+
+    fn test_sprint_with_start(status: &str, start_date: &str, stories: Vec<WebStory>) -> WebSprint {
+        test_sprint_with_dates(status, start_date, "2026-06-05", stories)
+    }
+
+    fn test_sprint_with_dates(
+        status: &str,
+        start_date: &str,
+        end_date: &str,
+        stories: Vec<WebStory>,
+    ) -> WebSprint {
+        let mut stories_by_status = BOARD_STATUSES
+            .iter()
+            .map(|name| ((*name).to_string(), Vec::<WebStory>::new()))
+            .collect::<BTreeMap<_, _>>();
+        for story in stories {
+            stories_by_status
+                .get_mut(&story.status)
+                .expect("known status bucket")
+                .push(story);
+        }
+        WebSprint {
+            name: "S001.current".to_string(),
+            id: "S001".to_string(),
+            headline: "current".to_string(),
+            goal: None,
+            start_date: Some(start_date.to_string()),
+            end_date: Some(end_date.to_string()),
+            status: Some(status.to_string()),
+            wip_limit: None,
+            stories_by_status,
+        }
+    }
+
     #[test]
     fn replace_markdown_body_preserves_frontmatter() {
         let markdown = "---\nid: US-F1-001\n---\n# Old\n";
@@ -1376,5 +1699,132 @@ mod tests {
     #[test]
     fn slugify_headline_keeps_ascii_tokens() {
         assert_eq!(slugify("Foundation Sprint!"), "foundation-sprint");
+    }
+
+    #[test]
+    fn build_burnup_starts_at_earliest_work_started_date() {
+        let done = test_story(
+            "US-F1-001",
+            "done",
+            5,
+            Some("2026-06-01T09:00:00+0200"),
+            Some("2026-06-03T12:00:00+0200"),
+        );
+        let todo = test_story("US-F1-002", "todo", 8, Some("2026-06-01T09:00:00+0200"), None);
+        let early_created_only = WebStory {
+            created: Some("2026-03-30T00:00:00+0200".to_string()),
+            activated: Some("2026-03-30T00:00:00+0200".to_string()),
+            work_started: None,
+            ..test_story("US-F2-001", "draft", 5, None, None)
+        };
+
+        let rows = build_burnup(&[done.clone(), todo, early_created_only], &[]);
+
+        assert_eq!(
+            rows,
+            vec![
+                BurnupPoint {
+                    date: "2026-06-01".to_string(),
+                    completed: 0,
+                    scope: 0,
+                },
+                BurnupPoint {
+                    date: "2026-06-03".to_string(),
+                    completed: 5,
+                    scope: 0,
+                },
+                BurnupPoint {
+                    date: Local::now().date_naive().to_string(),
+                    completed: 5,
+                    scope: 0,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn build_burnup_scope_steps_with_sprint_commitments() {
+        let today = Local::now().date_naive();
+        let sprint_zero_start = (today - Days::new(10)).to_string();
+        let sprint_one_start = (today - Days::new(2)).to_string();
+        let work_started = (today - Days::new(9)).to_string();
+        let done = test_story(
+            "US-F1-001",
+            "done",
+            5,
+            Some(&format!("{work_started}T09:00:00+0200")),
+            Some(&format!("{}T12:00:00+0200", (today - Days::new(7)))),
+        );
+        let next = test_story("US-F1-002", "todo", 8, None, None);
+
+        let rows = build_burnup(
+            &[done.clone(), next.clone()],
+            &[
+                test_sprint_with_start("closed", &sprint_zero_start, vec![done]),
+                test_sprint_with_start("active", &sprint_one_start, vec![next]),
+            ],
+        );
+
+        assert_eq!(
+            rows.first(),
+            Some(&BurnupPoint {
+                date: work_started,
+                completed: 0,
+                scope: 5,
+            })
+        );
+        assert!(rows.iter().any(|row| row.date == sprint_one_start && row.scope == 13));
+        assert_eq!(rows.last().map(|row| row.date.clone()), Some(today.to_string()));
+    }
+
+    #[test]
+    fn build_burnup_includes_past_sprint_end_dates_as_scope_anchors() {
+        let today = Local::now().date_naive();
+        let sprint_start = (today - Days::new(6)).to_string();
+        let sprint_end = (today - Days::new(3)).to_string();
+        let work_started = (today - Days::new(5)).to_string();
+        let done = test_story(
+            "US-F1-001",
+            "done",
+            5,
+            Some(&format!("{work_started}T09:00:00+0200")),
+            Some(&format!("{}T12:00:00+0200", (today - Days::new(4)))),
+        );
+        let sprint_story = done.clone();
+
+        let rows = build_burnup(
+            std::slice::from_ref(&done),
+            &[test_sprint_with_dates(
+                "closed",
+                &sprint_start,
+                &sprint_end,
+                vec![sprint_story],
+            )],
+        );
+
+        assert!(rows.iter().any(|row| row.date == sprint_end && row.scope == 5));
+    }
+
+    #[test]
+    fn build_burndown_uses_active_sprint_story_progress() {
+        let done = test_story(
+            "US-F1-001",
+            "done",
+            5,
+            Some("2026-06-01T09:00:00+0200"),
+            Some("2026-06-03T12:00:00+0200"),
+        );
+        let todo = test_story("US-F1-002", "todo", 8, Some("2026-06-01T09:00:00+0200"), None);
+        let rows = build_burndown(&[test_sprint("active", vec![done, todo])]);
+
+        assert_eq!(
+            rows.first(),
+            Some(&BurndownPoint {
+                date: "2026-06-01".to_string(),
+                remaining: 13,
+                ideal: 13,
+            })
+        );
+        assert!(rows.iter().any(|row| row.date == "2026-06-03" && row.remaining == 8));
     }
 }

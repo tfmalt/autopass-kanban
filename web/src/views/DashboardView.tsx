@@ -10,6 +10,7 @@ interface ForecastRow {
   time: number;
   date: string;
   target: number | null;
+  targetProjection: number | null;
   actual: number | null;
   p50: number | null;
   p80: number | null;
@@ -41,6 +42,20 @@ function interpolate(points: BurnupPoint[], date: string, key: "completed" | "sc
   return points.at(-1)![key];
 }
 
+function steppedValue(points: BurnupPoint[], date: string, key: "scope"): number {
+  const first = points[0]!;
+  if (date <= first.date) return first[key];
+
+  let current = first[key];
+  for (let i = 1; i < points.length; i += 1) {
+    const next = points[i]!;
+    if (date < next.date) return current;
+    current = next[key];
+  }
+
+  return current;
+}
+
 function projectedValue(
   date: string,
   endDate: string | null,
@@ -53,6 +68,20 @@ function projectedValue(
   return roundMetric(Math.min(totalPoints, lastCompleted + rate * daysBetween(lastDate, date)));
 }
 
+function projectedTargetValue(
+  date: string,
+  p50EndDate: string | null,
+  lastDate: string,
+  lastScope: number,
+  totalPoints: number,
+): number {
+  if (!p50EndDate || date <= lastDate || totalPoints <= lastScope) return lastScope;
+  if (date >= p50EndDate) return totalPoints;
+  const span = Math.max(1, daysBetween(lastDate, p50EndDate));
+  const elapsed = daysBetween(lastDate, date);
+  return roundMetric(lastScope + ((totalPoints - lastScope) * elapsed) / span);
+}
+
 function buildForecastModel(metrics: DashboardMetrics): ForecastModel {
   const burnup = [...metrics.burnup].sort((a, b) => a.date.localeCompare(b.date));
   if (burnup.length === 0) return { rows: [] };
@@ -60,6 +89,7 @@ function buildForecastModel(metrics: DashboardMetrics): ForecastModel {
   const first = burnup[0]!;
   const last = burnup.at(-1)!;
   const totalPoints = metrics.progress.totalPoints;
+  const lastScope = steppedValue(burnup, last.date, "scope");
   const remaining = Math.max(0, totalPoints - last.completed);
   const p50EndDate = metrics.forecast.completion.p50Date;
   const p80EndDate = metrics.forecast.completion.p80Date;
@@ -86,7 +116,10 @@ function buildForecastModel(metrics: DashboardMetrics): ForecastModel {
     return {
       time,
       date,
-      target: isActual ? roundMetric(interpolate(burnup, date, "scope")) : totalPoints,
+      target: isActual ? roundMetric(steppedValue(burnup, date, "scope")) : null,
+      targetProjection: date >= last.date
+        ? projectedTargetValue(date, p50EndDate, last.date, lastScope, totalPoints)
+        : null,
       actual: isActual ? roundMetric(interpolate(burnup, date, "completed")) : null,
       p50: projectedValue(date, p50EndDate, last.date, last.completed, totalPoints, p50Rate),
       p80: projectedValue(date, p80EndDate, last.date, last.completed, totalPoints, p80Rate),
@@ -170,7 +203,8 @@ export function DashboardView() {
               formatter={(value, name) => [formatTooltipValue(value, m.progress.totalPoints), name]}
             />
             <Legend verticalAlign="top" height={24} />
-            <Line yAxisId="points" name="Target scope" type="linear" dataKey="target" stroke="var(--amber)" dot={false} strokeWidth={2} />
+            <Line yAxisId="points" name="Target scope" type="stepAfter" dataKey="target" stroke="var(--amber)" dot={false} strokeWidth={2} />
+            <Line yAxisId="points" name="Target projection" type="linear" dataKey="targetProjection" stroke="var(--amber)" strokeDasharray="6 4" dot={false} strokeWidth={2} />
             <Line yAxisId="points" name="Completed" type="linear" dataKey="actual" stroke="var(--green)" dot={false} strokeWidth={3} />
             <Line yAxisId="points" name="P50 forecast" type="linear" dataKey="p50" stroke="var(--accent-2)" strokeDasharray="4 4" dot={false} strokeWidth={2} />
             <Line yAxisId="points" name="P80 forecast" type="linear" dataKey="p80" stroke="var(--accent)" strokeDasharray="4 4" dot={false} strokeWidth={2} />
