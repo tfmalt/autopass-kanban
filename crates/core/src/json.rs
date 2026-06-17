@@ -1141,6 +1141,13 @@ fn next_random(seed: &mut u64) -> u64 {
     *seed
 }
 
+fn random_index(seed: &mut u64, len: usize) -> usize {
+    debug_assert!(len > 0);
+    // Use the high bits of the LCG output to avoid low-bit modulo cycles,
+    // especially when the sample count is a power of two.
+    ((next_random(seed) >> 32) as usize) % len
+}
+
 fn percentile(sorted_values: &[u32], percentile: f64) -> Option<u32> {
     if sorted_values.is_empty() {
         return None;
@@ -1225,7 +1232,7 @@ fn simulate_completion_days(remaining_points: i64, samples: &[i64]) -> Vec<u32> 
         let mut remaining = remaining_points;
         let mut days = 0_u32;
         while remaining > 0 && days < MAX_DAYS {
-            let idx = (next_random(&mut seed) as usize) % samples.len();
+            let idx = random_index(&mut seed, samples.len());
             remaining -= samples[idx].max(0);
             days += 1;
         }
@@ -1554,6 +1561,28 @@ mod tests {
         );
 
         assert_eq!(samples, vec![8, 0, 2]);
+    }
+
+    #[test]
+    fn monte_carlo_forecast_spreads_percentiles_for_power_of_two_sample_sets() {
+        let forecast = ReportForecastDto::from_inputs(ForecastInputs {
+            generated_at: "2026-06-17T10:00:00+02:00".to_string(),
+            remaining_points: 906,
+            sprint_duration_weeks: 2,
+            projection_start_date: chrono::NaiveDate::from_ymd_opt(2026, 6, 17).unwrap(),
+            throughput_samples: vec![23, 6, 3, 0, 0, 5, 0, 5, 5, 17, 0, 20, 0, 0, 0, 0],
+        });
+
+        assert!(forecast.completion.p50_days.is_some());
+        assert!(forecast.completion.p80_days.is_some());
+        assert!(forecast.completion.p90_days.is_some());
+
+        let p50 = forecast.completion.p50_days.unwrap();
+        let p80 = forecast.completion.p80_days.unwrap();
+        let p90 = forecast.completion.p90_days.unwrap();
+
+        assert!(p50 < p80, "expected P50 < P80, got {p50} and {p80}");
+        assert!(p80 <= p90, "expected P80 <= P90, got {p80} and {p90}");
     }
 
     #[test]
