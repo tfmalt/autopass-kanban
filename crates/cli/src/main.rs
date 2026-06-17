@@ -626,6 +626,15 @@ fn main() -> Result<()> {
             }
         },
         Command::Web { command } => match command {
+            WebCommand::Serve {
+                repo_root,
+                host,
+                port,
+            } => kanban_web_server::serve_blocking(kanban_web_server::WebServeOptions {
+                repo_root,
+                host,
+                port,
+            })?,
             WebCommand::Start {
                 foreground,
                 open,

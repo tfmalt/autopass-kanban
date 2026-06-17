@@ -87,16 +87,9 @@ pub(crate) fn web_start_json(repo_root: &Path, open: bool, dev: bool) -> Result<
         WebProcessState::Stopped => {}
     }
 
-    if !dev && !web_production_entry(&repo_root).is_file() {
-        bail!(
-            "built web server not found at {}. Run `kanban web start --build` or use `kanban web start --dev`.",
-            web_production_entry(&repo_root).display()
-        );
-    }
-
     let port = resolve_web_port(&config.web.host, config.web.port)?;
     let url = format!("http://{}:{}", config.web.host, port.actual);
-    let spec = build_web_start_command_spec(&repo_root, dev);
+    let spec = build_web_start_command_spec(&repo_root, dev, &config.web.host, port.actual)?;
     write_web_port_file(&paths, port.actual)?;
     let log = OpenOptions::new()
         .create(true)
@@ -229,44 +222,100 @@ pub(crate) fn web_runtime_paths(repo_root: &Path) -> WebRuntimePaths {
     }
 }
 
-pub(crate) fn web_app_dir(repo_root: &Path) -> PathBuf {
-    repo_root.join("tools/kanban-web")
+fn is_kanban_tool_root(path: &Path) -> bool {
+    path.join("Cargo.toml").is_file()
+        && path.join("crates/cli/Cargo.toml").is_file()
+        && path.join("web/package.json").is_file()
 }
 
-pub(crate) fn web_production_entry(repo_root: &Path) -> PathBuf {
-    web_app_dir(repo_root).join("dist/server/index.js")
+pub(crate) fn kanban_tool_root(repo_root: &Path) -> Result<PathBuf> {
+    if let Some(configured) = std::env::var_os("KANBAN_SOURCE_ROOT") {
+        let configured = PathBuf::from(configured);
+        if is_kanban_tool_root(&configured) {
+            return Ok(configured);
+        }
+    }
+
+    for candidate in [repo_root.join("tools/kanban"), repo_root.to_path_buf()] {
+        if is_kanban_tool_root(&candidate) {
+            return Ok(candidate);
+        }
+    }
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        for ancestor in current_exe.ancestors() {
+            if is_kanban_tool_root(ancestor) {
+                return Ok(ancestor.to_path_buf());
+            }
+        }
+    }
+
+    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
+        let manifest_dir = Path::new(manifest_dir);
+        if let Some(tool_root) = manifest_dir.ancestors().nth(2)
+            && is_kanban_tool_root(tool_root)
+        {
+            return Ok(tool_root.to_path_buf());
+        }
+    }
+
+    bail!(
+        "kanban source checkout not found. `kanban web start --dev` and `--build` require a kanban source tree with `web/package.json`."
+    )
 }
 
-pub(crate) fn build_web_start_command_spec(repo_root: &Path, dev: bool) -> WebStartCommandSpec {
-    let web_dir = child_process_path(&web_app_dir(repo_root));
+pub(crate) fn web_app_dir(repo_root: &Path) -> Result<PathBuf> {
+    Ok(kanban_tool_root(repo_root)?.join("web"))
+}
+
+pub(crate) fn build_web_start_command_spec(
+    repo_root: &Path,
+    dev: bool,
+    host: &str,
+    port: u16,
+) -> Result<WebStartCommandSpec> {
+    let web_dir = child_process_path(&web_app_dir(repo_root)?);
     let cwd = child_process_path(repo_root);
     if dev {
-        WebStartCommandSpec {
+        Ok(WebStartCommandSpec {
             program: npm_program(),
             args: vec![
                 "--prefix".to_string(),
                 web_dir.to_string_lossy().into_owned(),
                 "run".to_string(),
-                "dev:server".to_string(),
+                "dev".to_string(),
+                "--".to_string(),
+                "--host".to_string(),
+                host.to_string(),
+                "--port".to_string(),
+                port.to_string(),
             ],
             cwd,
-        }
+        })
     } else {
-        WebStartCommandSpec {
-            program: "node".to_string(),
+        Ok(WebStartCommandSpec {
+            program: std::env::current_exe()
+                .context("resolve current kanban executable")?
+                .to_string_lossy()
+                .into_owned(),
             args: vec![
-                child_process_path(&web_production_entry(repo_root))
-                    .to_string_lossy()
-                    .into_owned(),
+                "web".to_string(),
+                "serve".to_string(),
+                "--repo-root".to_string(),
+                cwd.to_string_lossy().into_owned(),
+                "--host".to_string(),
+                host.to_string(),
+                "--port".to_string(),
+                port.to_string(),
             ],
             cwd,
-        }
+        })
     }
 }
 
-pub(crate) fn build_web_build_command_spec(repo_root: &Path) -> WebStartCommandSpec {
-    let web_dir = child_process_path(&web_app_dir(repo_root));
-    WebStartCommandSpec {
+pub(crate) fn build_web_build_command_spec(repo_root: &Path) -> Result<WebStartCommandSpec> {
+    let web_dir = child_process_path(&web_app_dir(repo_root)?);
+    Ok(WebStartCommandSpec {
         program: npm_program(),
         args: vec![
             "--prefix".to_string(),
@@ -275,7 +324,7 @@ pub(crate) fn build_web_build_command_spec(repo_root: &Path) -> WebStartCommandS
             "build".to_string(),
         ],
         cwd: child_process_path(repo_root),
-    }
+    })
 }
 
 #[cfg(windows)]
@@ -462,7 +511,7 @@ pub(crate) fn write_web_port_file(paths: &WebRuntimePaths, port: u16) -> Result<
 }
 
 pub(crate) fn run_web_build(repo_root: &Path) -> Result<()> {
-    let spec = build_web_build_command_spec(repo_root);
+    let spec = build_web_build_command_spec(repo_root)?;
     let status = process_from_spec(&spec)
         .status()
         .with_context(|| format!("run {} {}", spec.program, spec.args.join(" ")))?;
@@ -538,13 +587,6 @@ pub(crate) fn start_web(
         println!("{}", theme.label("Building kanban web UI..."));
         run_web_build(&repo_root)?;
     }
-    if !dev && !web_production_entry(&repo_root).is_file() {
-        bail!(
-            "built web server not found at {}. Run `kanban web start --build` or use `kanban web start --dev`.",
-            web_production_entry(&repo_root).display()
-        );
-    }
-
     let port = resolve_web_port(&config.web.host, config.web.port)?;
     if port.changed() {
         println!(
@@ -554,7 +596,7 @@ pub(crate) fn start_web(
     }
 
     let url = format!("http://{}:{}", config.web.host, port.actual);
-    let spec = build_web_start_command_spec(&repo_root, dev);
+    let spec = build_web_start_command_spec(&repo_root, dev, &config.web.host, port.actual)?;
     if foreground {
         println!("{} {url}", theme.success("Starting kanban web UI:"));
         if open && let Err(error) = open_browser_url(&url) {
@@ -855,26 +897,37 @@ mod tests {
     fn web_start_specs_select_production_or_dev_command() {
         let repo_root = Path::new("/tmp/repo");
 
-        let production = build_web_start_command_spec(repo_root, false);
-        assert_eq!(production.program, "node");
+        let production = build_web_start_command_spec(repo_root, false, "127.0.0.1", 3000).unwrap();
+        assert!(!production.program.is_empty());
         assert_eq!(production.cwd, PathBuf::from("/tmp/repo"));
-        assert!(
-            production.args[0]
-                .replace('\\', "/")
-                .ends_with("tools/kanban-web/dist/server/index.js")
+        assert_eq!(
+            production.args,
+            [
+                "web",
+                "serve",
+                "--repo-root",
+                "/tmp/repo",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "3000",
+            ]
         );
 
-        let dev = build_web_start_command_spec(repo_root, true);
+        let dev = build_web_start_command_spec(repo_root, true, "127.0.0.1", 3000).unwrap();
         #[cfg(windows)]
         assert_eq!(dev.program, "npm.cmd");
         #[cfg(not(windows))]
         assert_eq!(dev.program, "npm");
         assert_eq!(dev.cwd, PathBuf::from("/tmp/repo"));
         assert_eq!(dev.args[0], "--prefix");
-        assert!(dev.args[1].replace('\\', "/").ends_with("tools/kanban-web"));
-        assert_eq!(&dev.args[2..], ["run", "dev:server"]);
+        assert!(dev.args[1].replace('\\', "/").ends_with("tools/kanban/web"));
+        assert_eq!(
+            &dev.args[2..],
+            ["run", "dev", "--", "--host", "127.0.0.1", "--port", "3000"]
+        );
 
-        let build = build_web_build_command_spec(repo_root);
+        let build = build_web_build_command_spec(repo_root).unwrap();
         #[cfg(windows)]
         assert_eq!(build.program, "npm.cmd");
         #[cfg(not(windows))]
@@ -885,8 +938,8 @@ mod tests {
     #[test]
     fn child_process_path_removes_extended_windows_prefix() {
         assert_eq!(
-            child_process_path(Path::new(r"\\?\C:\repo\tools\kanban-web")),
-            PathBuf::from(r"C:\repo\tools\kanban-web")
+            child_process_path(Path::new(r"\\?\C:\repo\tools\kanban\web")),
+            PathBuf::from(r"C:\repo\tools\kanban\web")
         );
         assert_eq!(
             child_process_path(Path::new(r"\\?\UNC\server\share\repo")),

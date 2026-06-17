@@ -744,6 +744,13 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
             )),
         },
         Command::Web { command } => match command {
+            WebCommand::Serve { .. } => print_envelope(&JsonEnvelope::<NoData>::error(
+                "web.serve",
+                KanbanErrorBody::new(
+                    KanbanErrorCode::InvalidArgument,
+                    "web serve is an internal server command and is not available in --format json mode.",
+                ),
+            )),
             WebCommand::Status { repo_root } => match web_status_json(repo_root) {
                 Ok(status) => print_envelope(&JsonEnvelope::ok("web.status", status)),
                 Err(error) => print_envelope(&JsonEnvelope::<WebStatusDto>::error(

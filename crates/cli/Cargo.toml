@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 kanban-core = { path = "../core" }
+kanban-web-server = { path = "../web-server" }
 clap.workspace = true
 clap_complete.workspace = true
 chrono.workspace = true

@@ -582,8 +582,17 @@ pub(crate) enum DoctorCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum WebCommand {
+    #[command(hide = true, about = "Run the embedded kanban web server.")]
+    Serve {
+        #[arg(long, help = "Repository root to serve.")]
+        repo_root: PathBuf,
+        #[arg(long, help = "Host address to bind.")]
+        host: String,
+        #[arg(long, help = "Port to bind.")]
+        port: u16,
+    },
     #[command(
-        about = "Start the local kanban web UI. Effect: launches tools/kanban-web and writes .kanban/run/web.pid plus .kanban/run/web.log. Side effects: no backlog markdown is modified."
+        about = "Start the local kanban web UI. Effect: launches the embedded Rust web server and writes .kanban/run/web.pid plus .kanban/run/web.log. Side effects: no backlog markdown is modified."
     )]
     Start {
         #[arg(long, help = "Run in the foreground instead of writing a PID file.")]
@@ -593,12 +602,12 @@ pub(crate) enum WebCommand {
             help = "Open the configured web URL in the default browser after start."
         )]
         open: bool,
-        #[arg(long, help = "Run the web server through npm run dev:server.")]
-        dev: bool,
         #[arg(
             long,
-            help = "Build tools/kanban-web before starting in production mode."
+            help = "Run the Vite frontend development server from `web/`. Use a separate `kanban web serve` process for live API requests."
         )]
+        dev: bool,
+        #[arg(long, help = "Build `web/` before starting in production mode.")]
         build: bool,
         #[arg(help = "Repository root to serve. Defaults to the current directory.")]
         #[arg(default_value = ".")]
@@ -623,12 +632,12 @@ pub(crate) enum WebCommand {
             help = "Open the configured web URL in the default browser after restart."
         )]
         open: bool,
-        #[arg(long, help = "Run the web server through npm run dev:server.")]
-        dev: bool,
         #[arg(
             long,
-            help = "Build tools/kanban-web before starting in production mode."
+            help = "Run the Vite frontend development server from `web/`. Use a separate `kanban web serve` process for live API requests."
         )]
+        dev: bool,
+        #[arg(long, help = "Build `web/` before starting in production mode.")]
         build: bool,
         #[arg(help = "Repository root to serve. Defaults to the current directory.")]
         #[arg(default_value = ".")]
@@ -839,6 +848,7 @@ pub(crate) fn command_repo_root(command: &Command) -> Option<&PathBuf> {
         },
         Command::Web { command } => match command {
             WebCommand::Start { repo_root, .. }
+            | WebCommand::Serve { repo_root, .. }
             | WebCommand::Stop { repo_root }
             | WebCommand::Restart { repo_root, .. }
             | WebCommand::Status { repo_root }

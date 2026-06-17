@@ -70,10 +70,10 @@ fn zsh_completion_includes_web_subcommands_and_flags() {
         stdout
             .contains("'--open[Open the configured web URL in the default browser after start.]'")
     );
-    assert!(stdout.contains("'--dev[Run the web server through npm run dev\\:server.]'"));
-    assert!(
-        stdout.contains("'--build[Build tools/kanban-web before starting in production mode.]'")
-    );
+    assert!(stdout.contains(
+        r"'--dev[Run the Vite frontend development server from \`web/\`. Use a separate \`kanban web serve\` process for live API requests.]'"
+    ));
+    assert!(stdout.contains(r"'--build[Build \`web/\` before starting in production mode.]'"));
 }
 
 #[test]
@@ -394,7 +394,9 @@ fn bash_completion_includes_web_subcommands_and_flags() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     assert!(stdout.contains("kanban__subcmd__web)"));
-    assert!(stdout.contains("opts=\"-h --format --help start stop restart status log help\""));
+    assert!(
+        stdout.contains("opts=\"-h --format --help serve start stop restart status log help\"")
+    );
     assert!(stdout.contains("kanban__subcmd__web__subcmd__start)"));
     assert!(
         stdout
