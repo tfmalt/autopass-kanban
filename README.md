@@ -22,6 +22,41 @@ Build the optimized release binary with:
 cargo build -p kanban-cli --release
 ```
 
+The `kanban` binary includes the local web UI server. For a standalone release
+that embeds the full Vite web app, build the CLI normally:
+
+```sh
+cargo build -p kanban-cli --release
+```
+
+Cargo builds the Vite client automatically when `web/dist` is missing or older
+than the web sources. If `web/node_modules` is missing, the build script runs
+`npm install` first. Runtime production use of `kanban web start` does not
+require Node.js or npm; it starts the embedded Rust server from the compiled
+`kanban` executable.
+
+For frontend development, run the API server and Vite separately:
+
+```sh
+cargo run -p kanban-cli -- web serve --repo-root ../.. --host 127.0.0.1 --port 3000
+npm --prefix web run dev
+```
+
+The Vite app lives in `web/` and proxies `/api` to `http://127.0.0.1:3000` by
+default. Override the proxy target with `KANBAN_WEB_API_ORIGIN` when needed.
+
+## Docker
+
+Build and run the standalone CLI plus embedded web UI in a container with:
+
+```sh
+./docker-compose.up.sh
+```
+
+By default the compose file bind-mounts `../..` as `/repo` for this monorepo.
+Set `KANBAN_REPO_PATH=/path/to/project` to serve a different git-backed kanban
+repository without installing `kanban` on the host.
+
 Implemented commands:
 - `kanban init [repo_root]`
 - `kanban config show [repo_root]`
@@ -93,7 +128,8 @@ placed there — the zsh-specific completion syntax will fail. The `eval` approa
 - `crates/core`: shared parsing and validation core
 - `crates/cli`: CLI interface for inspection and lightweight write flows
 - `crates/tui`: reserved for the terminal UI
-- `../kanban-web`: local web interface launched by the CLI
+- `crates/web-server`: embedded Rust web server used by `kanban web start`
+- `web`: Vite/React web app source used for development and release-time embedded assets
 
 Run tests with `cargo test` from this directory.
 
