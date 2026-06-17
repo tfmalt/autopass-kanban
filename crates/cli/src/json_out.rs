@@ -409,6 +409,29 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
             }
         }
         Command::Story {
+            command: StoryCommand::Delete { id, repo_root },
+        } => {
+            let root = match load_kanban_config(repo_root) {
+                Ok(c) => c.repo_root,
+                Err(e) => {
+                    return print_envelope(&JsonEnvelope::<DeleteStoryDto>::error(
+                        "story.delete",
+                        KanbanErrorBody::new(KanbanErrorCode::NotInitialized, e.to_string()),
+                    ));
+                }
+            };
+            match delete_story(&root, id) {
+                Ok(result) => print_envelope(&JsonEnvelope::ok(
+                    "story.delete",
+                    DeleteStoryDto::from_result(&result, &root),
+                )),
+                Err(e) => print_envelope(&JsonEnvelope::<DeleteStoryDto>::error(
+                    "story.delete",
+                    KanbanErrorBody::from_anyhow(&e),
+                )),
+            }
+        }
+        Command::Story {
             command:
                 StoryCommand::Update {
                     id,

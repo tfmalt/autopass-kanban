@@ -534,6 +534,52 @@ fn story_move_emits_result_with_normalized_statuses() {
 }
 
 #[test]
+fn story_rm_alias_deletes_story_and_task_file() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_backlog_and_sprints(root);
+    write_sprint(root, "S001", "foundation");
+
+    let story_rel = "delivery/backlog/phase-1/01.infra/US-F1-001-cluster.md";
+    write_story_in_sprint(root, story_rel, "US-F1-001", "S001.foundation", "todo");
+    let story_path = root.join(story_rel);
+    let task_path = story_path.with_extension("tasks.md");
+    fs::write(
+        &task_path,
+        "# Tasks for US-F1-001\n\nParent User Story: US-F1-001\nSprint: S001.foundation\n",
+    )
+    .expect("write task file");
+
+    let out = kanban_in(
+        root,
+        &["--format", "json", "story", "rm", "US-F1-001", &repo_root],
+    );
+    let json = parse_stdout(&out);
+
+    assert_eq!(
+        json["status"],
+        "ok",
+        "story rm should be ok; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(json["kind"], "story.delete");
+    assert_eq!(json["data"]["story_id"], "US-F1-001");
+    assert_eq!(json["data"]["sprint_name"], "S001.foundation");
+    assert!(
+        json["data"]["task_path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("US-F1-001-cluster.tasks.md")),
+        "task_path should point at deleted task file; got: {}",
+        json["data"]["task_path"]
+    );
+    assert!(!story_path.exists());
+    assert!(!task_path.exists());
+    assert_eq!(out.status.code(), Some(0), "exit code should be 0");
+}
+
+#[test]
 fn sprint_sync_emits_changed_list() {
     let dir = tempdir().expect("temp dir should be created");
     let root = dir.path();

@@ -13,10 +13,10 @@ use serde::Serialize;
 use crate::util::{normalize_status_alias, parse_assignee_list};
 use crate::{
     BlockedWorkItem, CompletionItem, ConfigInitResult, ConfigSetResult, CreateSprintResult,
-    DoctorFinding, Epic, EpicDetails, EpicOverview, EpicUpdateResult, MoveStoryResult,
-    PhaseOverview, PlanStoryResult, RolloverResult, SprintOverview, Story, StoryDetails,
-    StoryOverview, StoryUpdateResult, Task, TaskListResult, TaskMutationResult, TaskSummary,
-    ValidationReport,
+    DeleteStoryResult, DoctorFinding, Epic, EpicDetails, EpicOverview, EpicUpdateResult,
+    MoveStoryResult, PhaseOverview, PlanStoryResult, RolloverResult, SprintOverview, Story,
+    StoryDetails, StoryOverview, StoryUpdateResult, Task, TaskListResult, TaskMutationResult,
+    TaskSummary, ValidationReport,
 };
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -806,6 +806,26 @@ pub struct PlanStoryDto {
 
 impl PlanStoryDto {
     pub fn from_result(r: &PlanStoryResult, repo_root: &Path) -> Self {
+        Self {
+            story_id: r.story_id.clone(),
+            sprint_name: r.sprint_name.clone(),
+            story_path: rel_to_root(repo_root, &r.story_path),
+            task_path: r.task_path.as_deref().map(|p| rel_to_root(repo_root, p)),
+        }
+    }
+}
+
+/// DTO for `story delete` responses.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteStoryDto {
+    pub story_id: String,
+    pub sprint_name: Option<String>,
+    pub story_path: String,
+    pub task_path: Option<String>,
+}
+
+impl DeleteStoryDto {
+    pub fn from_result(r: &DeleteStoryResult, repo_root: &Path) -> Self {
         Self {
             story_id: r.story_id.clone(),
             sprint_name: r.sprint_name.clone(),

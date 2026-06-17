@@ -446,6 +446,29 @@ fn main() -> Result<()> {
                     );
                 }
             }
+            StoryCommand::Delete { id, repo_root } => {
+                let result = delete_story(repo_root, &id)?;
+                println!(
+                    "{} {}",
+                    theme.success("Deleted"),
+                    theme.id(&result.story_id)
+                );
+                println!(
+                    "{} {}",
+                    theme.label("Story:"),
+                    theme.path(result.story_path.display())
+                );
+                if let Some(task_path) = result.task_path {
+                    println!(
+                        "{} {}",
+                        theme.label("Tasks:"),
+                        theme.path(task_path.display())
+                    );
+                }
+                if let Some(sprint_name) = result.sprint_name {
+                    println!("{} {}", theme.label("Updated sprint:"), sprint_name);
+                }
+            }
             StoryCommand::Update {
                 id,
                 frontmatter_id,

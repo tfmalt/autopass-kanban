@@ -219,7 +219,7 @@ pub(crate) fn enhance_zsh_completion(script: &str) -> String {
             "'--sprint=[Update frontmatter sprint. Omit VALUE to prompt with the current value.]:SPRINT:_default'",
             "'--sprint=[Update frontmatter sprint. Omit VALUE to prompt with the current value.]:SPRINT:_kanban_sprint_names'",
         )
-        // Story ID arguments (story show, story move, task add, task update)
+        // Story ID arguments (story show, story move, story delete, task add, task update)
         .replace(
             "':id -- Story id to inspect, for example US-F1-053.:_default'",
             "':id -- Story id to inspect, for example US-F1-053.:_kanban_story_ids'",
@@ -231,6 +231,10 @@ pub(crate) fn enhance_zsh_completion(script: &str) -> String {
         .replace(
             "':id -- Story id to move, for example US-F1-053.:_default'",
             "':id -- Story id to move, for example US-F1-053.:_kanban_story_ids'",
+        )
+        .replace(
+            "':id -- Story id to delete, for example US-F1-053.:_default'",
+            "':id -- Story id to delete, for example US-F1-053.:_kanban_story_ids'",
         )
         .replace(
             "':id -- Backlog story id to plan, for example US-F2-001.:_default'",

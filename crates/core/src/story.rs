@@ -197,6 +197,43 @@ pub fn plan_story_into_sprint(
     })
 }
 
+pub fn delete_story(repo_root: impl AsRef<Path>, story_id: &str) -> Result<DeleteStoryResult> {
+    let config = load_kanban_config(repo_root)?;
+    let repository = read_repository(&config.repo_root)?;
+    let story = find_story_for_write(&repository, story_id)?.clone();
+    let story_id_value = story.frontmatter.get("id").cloned().unwrap_or_default();
+    let sprint_name = story
+        .frontmatter
+        .get("sprint")
+        .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
+        .cloned();
+    let story_path = story.relative_path.clone();
+    let task_path = story
+        .task_file
+        .as_ref()
+        .map(|task_file| task_file.relative_path.clone());
+
+    if let Some(task_file) = story.task_file.as_ref()
+        && task_file.file_path.exists()
+    {
+        fs::remove_file(&task_file.file_path)
+            .with_context(|| format!("delete task file {}", task_file.file_path.display()))?;
+    }
+    fs::remove_file(&story.file_path)
+        .with_context(|| format!("delete story {}", story.file_path.display()))?;
+
+    if let Some(sprint_name) = sprint_name.as_deref() {
+        regenerate_sprint_roster(&config, sprint_name)?;
+    }
+
+    Ok(DeleteStoryResult {
+        story_id: story_id_value,
+        sprint_name,
+        story_path,
+        task_path,
+    })
+}
+
 pub fn add_task_to_story(
     repo_root: impl AsRef<Path>,
     story_id: &str,
@@ -1246,6 +1283,42 @@ mod tests {
         assert!(task_markdown.contains("# Tasks for US-F1-057"));
         assert!(task_markdown.contains("Sprint: ~"));
         assert!(task_markdown.contains("## TASK-US-F1-057-001 - Plan taskable backlog stories"));
+    }
+
+    #[test]
+    fn story_delete_removes_story_task_file_and_updates_sprint_roster() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "Foundation",
+            "2026-06-01",
+            "2026-06-12",
+            "active",
+        );
+        let story_path = write_story_with_task_file(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-057-complete-kanban-cli-task-crud-for-story-task-logs.md",
+            "id: US-F1-057\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 1\nwork_started:\nwork_done:\ncreated: 2026-06-09T10:18:05+0200\nupdated: 2026-06-09T10:18:05+0200\n",
+        );
+
+        regenerate_sprint_roster(
+            &load_kanban_config(temp_root.path()).unwrap(),
+            "S001.foundation",
+        )
+        .unwrap();
+        let result = delete_story(temp_root.path(), "US-F1-057").unwrap();
+
+        assert_eq!(result.story_id, "US-F1-057");
+        assert_eq!(result.sprint_name.as_deref(), Some("S001.foundation"));
+        assert_eq!(temp_root.path().join(&result.story_path), story_path);
+        assert!(!story_path.exists());
+        assert!(!story_path.with_extension("tasks.md").exists());
+        let sprint_markdown =
+            fs::read_to_string(temp_root.path().join("delivery/sprints/S001.foundation.md"))
+                .unwrap();
+        assert!(!sprint_markdown.contains("US-F1-057"));
     }
 
     #[test]

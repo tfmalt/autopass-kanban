@@ -166,6 +166,14 @@ pub struct PlanStoryResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteStoryResult {
+    pub story_id: String,
+    pub sprint_name: Option<String>,
+    pub story_path: PathBuf,
+    pub task_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskMutationResult {
     pub story_id: String,
     pub task_id: String,

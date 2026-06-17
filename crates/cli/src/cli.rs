@@ -285,6 +285,17 @@ pub(crate) enum StoryCommand {
         repo_root: PathBuf,
     },
     #[command(
+        visible_aliases = ["remove", "rm"],
+        about = "Delete a story. Effect: removes the canonical story markdown and its sibling .tasks.md file if present, then regenerates the sprint story table when the story belongs to a sprint."
+    )]
+    Delete {
+        #[arg(help = "Story id to delete, for example US-F1-053.")]
+        id: String,
+        #[arg(help = "Repository root to update. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
         about = "Update a story. With no field options, opens $EDITOR for the story markdown. Field options update frontmatter; omit an option value to be prompted with the current value as default."
     )]
     Update {
@@ -817,6 +828,7 @@ pub(crate) fn command_repo_root(command: &Command) -> Option<&PathBuf> {
             | StoryCommand::List { repo_root, .. }
             | StoryCommand::Move { repo_root, .. }
             | StoryCommand::Plan { repo_root, .. }
+            | StoryCommand::Delete { repo_root, .. }
             | StoryCommand::Update { repo_root, .. } => Some(repo_root),
         },
         Command::Task { command } => match command {
