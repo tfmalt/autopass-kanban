@@ -1,0 +1,15 @@
+{
+  "name": "kanban-workspace",
+  "version": "26.6.1705",
+  "private": true,
+  "packageManager": "npm@11.9.0",
+  "scripts": {
+    "web:install": "npm --prefix web install",
+    "web:dev": "npm --prefix web run dev",
+    "web:test": "npm --prefix web run test",
+    "web:typecheck": "npm --prefix web run typecheck",
+    "web:build": "npm --prefix web run build",
+    "docker:up": "./docker-compose.up.sh",
+    "docker:shell": "./docker-compose.bash.sh"
+  }
+}

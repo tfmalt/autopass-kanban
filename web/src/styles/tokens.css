@@ -1,0 +1,29 @@
+:root {
+  --bg: #f4f6fa;
+  --surface: #ffffff;
+  --surface-2: #e9edf3;
+  --border: #dde3ec;
+  --text: #1f2733;
+  --text-muted: #5b6472;
+  --text-faint: #8a93a3;
+  --accent: #2f5fd0;
+  --accent-2: #4f86f7;
+  --accent-soft: #e3ebfb;
+  --green: #2f8a46;
+  --green-2: #46b463;
+  --green-soft: #e8f6ec;
+  --amber: #c98a16;
+  --amber-soft: #fdf0dd;
+  --red: #b4453a;
+  --red-soft: #fbecec;
+  --chart-muted: #c3cede;
+  --overlay: rgba(20, 30, 50, 0.25);
+  --on-accent: #ffffff;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(20, 30, 50, 0.05);
+  font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+button, input, select { font: inherit; }

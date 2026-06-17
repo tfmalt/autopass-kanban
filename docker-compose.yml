@@ -1,0 +1,31 @@
+# Run from this directory:  docker compose up --build -d aup-kanban-web
+# Or use:                   ./docker-compose.up.sh
+#
+# The served repository is bind-mounted to /repo so the server can:
+#  - find the git root via git rev-parse
+#  - read .kanban/paths.json for backlog/sprints locations
+#  - read and write delivery/backlog/** and delivery/sprints/**
+
+name: aup-kanban-web
+
+services:
+  aup-kanban-web:
+    image: ip2-kanban-web:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aup-kanban-web-1
+    init: true
+    user: "${KANBAN_UID:-1000}:${KANBAN_GID:-1000}"
+    working_dir: /repo
+    ports:
+      - "${KANBAN_WEB_PORT:-3000}:${KANBAN_WEB_PORT:-3000}"
+    volumes:
+      - type: bind
+        source: ${KANBAN_REPO_PATH:-../..}
+        target: /repo
+    environment:
+      KANBAN_WEB_HOST: "0.0.0.0"
+      KANBAN_WEB_PORT: "${KANBAN_WEB_PORT:-3000}"
+      KANBAN_REPO_ROOT: "/repo"
+    restart: always

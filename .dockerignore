@@ -1,0 +1,7 @@
+.git
+**/.DS_Store
+web/node_modules
+web/dist
+target
+**/.kanban/run
+doc/**/*.docx
