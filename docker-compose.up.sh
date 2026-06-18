@@ -17,7 +17,10 @@ if ! docker compose -f "$compose_file" config --services | grep -qx "$service_na
   exit 1
 fi
 
-docker compose -f "$compose_file" build --progress plain --no-cache "$service_name"
+docker rm -f aup-kanban-1
+docker-compose -f "$compose_file" down --remove-orphans
+
+# docker compose -f "$compose_file" build --progress plain --no-cache "$service_name"
 docker compose -f "$compose_file" up -d --remove-orphans "$service_name"
 printf 'Press Enter to open a shell in %s... ' "$service_name"
 read -r _
