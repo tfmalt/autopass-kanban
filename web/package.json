@@ -1,6 +1,6 @@
 {
   "name": "kanban-web",
-  "version": "26.6.1705",
+  "version": "26.6.1801",
   "private": true,
   "type": "module",
   "scripts": {
