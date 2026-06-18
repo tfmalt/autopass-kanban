@@ -72,6 +72,21 @@ html, body, #root { height: 100%; }
   color: var(--text-muted);
   margin-left: 6px;
 }
+.epic-description-toggle {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 10.5px;
+  padding: 2px 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.epic-description-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .sortable-drop-above { border-top: 2px solid var(--accent); }
 .sortable-drop-below { border-bottom: 2px solid var(--accent); }
 .sprint-goal-field { min-height: 7.5rem; min-width: 100%; resize: both; }

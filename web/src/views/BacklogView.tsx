@@ -321,21 +321,25 @@ function EpicDragOverlay({ epic }: { epic: Epic }) {
 function SortableEpicSection({
   epic,
   stories,
-  collapsed,
+  storiesCollapsed,
+  descriptionExpanded,
   backlogReorderDisabled,
   targetSprint,
   planPending,
-  onToggle,
+  onToggleStories,
+  onToggleDescription,
   onPlan,
   onOpen,
 }: {
   epic: Epic;
   stories: Story[];
-  collapsed: boolean;
+  storiesCollapsed: boolean;
+  descriptionExpanded: boolean;
   backlogReorderDisabled: boolean;
   targetSprint: string;
   planPending: boolean;
-  onToggle: () => void;
+  onToggleStories: () => void;
+  onToggleDescription: () => void;
   onPlan: (storyId: string) => void;
   onOpen: (story: Story) => void;
 }) {
@@ -367,7 +371,7 @@ function SortableEpicSection({
         </span>
         <button
           type="button"
-          onClick={onToggle}
+          onClick={onToggleStories}
           style={{
             display: "flex",
             alignItems: "center",
@@ -380,31 +384,39 @@ function SortableEpicSection({
             padding: 0,
             cursor: "pointer",
           }}
-          aria-expanded={!collapsed}
+          aria-expanded={!storiesCollapsed}
+          aria-label={`${storiesCollapsed ? "expand" : "collapse"} user stories for ${epic.id}`}
         >
-          <EpicChevron expanded={!collapsed} />
+          <EpicChevron expanded={!storiesCollapsed} />
           <span style={{ fontWeight: 700, color: "var(--text)" }}>{epic.id}</span>
           <span style={{ color: "var(--text-muted)" }}>{epic.title}</span>
-          {collapsed && <span className="epic-story-count">({stories.length} stories)</span>}
+          {storiesCollapsed && <span className="epic-story-count">({stories.length} stories)</span>}
+        </button>
+        <button
+          type="button"
+          onClick={onToggleDescription}
+          className="epic-description-toggle"
+          aria-expanded={descriptionExpanded}
+          aria-label={descriptionExpanded ? `hide epic description ${epic.id}` : `show epic description ${epic.id}`}
+        >
+          {descriptionExpanded ? "Hide description" : "Description"}
         </button>
       </div>
-      {!collapsed && (
-        <>
-          <EpicContext epicId={epic.id} />
-          <SortableContext items={stories.map((story) => story.id)} strategy={verticalListSortingStrategy}>
-            {stories.map((story) => (
-              <BacklogStoryCard
-                key={story.id}
-                story={story}
-                disabled={!targetSprint || planPending}
-                onPlan={() => onPlan(story.id)}
-                onOpen={onOpen}
-                sourceContext={epic.id}
-                sortable={!backlogReorderDisabled}
-              />
-            ))}
-          </SortableContext>
-        </>
+      {descriptionExpanded && <EpicContext epicId={epic.id} />}
+      {!storiesCollapsed && (
+        <SortableContext items={stories.map((story) => story.id)} strategy={verticalListSortingStrategy}>
+          {stories.map((story) => (
+            <BacklogStoryCard
+              key={story.id}
+              story={story}
+              disabled={!targetSprint || planPending}
+              onPlan={() => onPlan(story.id)}
+              onOpen={onOpen}
+              sourceContext={epic.id}
+              sortable={!backlogReorderDisabled}
+            />
+          ))}
+        </SortableContext>
       )}
     </div>
   );
@@ -420,6 +432,7 @@ export function BacklogView() {
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState<Story | null>(null);
   const [collapsedEpics, setCollapsedEpics] = useState<Set<string>>(new Set());
+  const [expandedEpicDescriptions, setExpandedEpicDescriptions] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
   const dragActivatedRef = useRef(false);
 
@@ -477,6 +490,15 @@ export function BacklogView() {
 
   const toggleEpic = (epicId: string) => {
     setCollapsedEpics((current) => {
+      const next = new Set(current);
+      if (next.has(epicId)) next.delete(epicId);
+      else next.add(epicId);
+      return next;
+    });
+  };
+
+  const toggleEpicDescription = (epicId: string) => {
+    setExpandedEpicDescriptions((current) => {
       const next = new Set(current);
       if (next.has(epicId)) next.delete(epicId);
       else next.add(epicId);
@@ -588,11 +610,13 @@ export function BacklogView() {
                 key={epic.id}
                 epic={epic}
                 stories={storiesByEpic.get(epic.id) ?? []}
-                collapsed={collapsedEpics.has(epic.id)}
+                storiesCollapsed={collapsedEpics.has(epic.id)}
+                descriptionExpanded={expandedEpicDescriptions.has(epic.id)}
                 backlogReorderDisabled={backlogReorderDisabled}
                 targetSprint={targetSprint}
                 planPending={plan.isPending}
-                onToggle={() => toggleEpic(epic.id)}
+                onToggleStories={() => toggleEpic(epic.id)}
+                onToggleDescription={() => toggleEpicDescription(epic.id)}
                 onPlan={planStory}
                 onOpen={handleOpen}
               />

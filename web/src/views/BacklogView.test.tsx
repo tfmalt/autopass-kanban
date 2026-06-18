@@ -255,22 +255,41 @@ describe("BacklogView", () => {
     expect(storyIdsIn(dropTarget)).toEqual(["US-F2-050", "US-F2-051"]);
   });
 
-  it("shows the epic title and collapses then expands epic context on click", async () => {
+  it("defaults to collapsed descriptions and visible user stories, and keeps the two controls independent", async () => {
     renderWithClient(<BacklogView />);
-    const epicButton = await screen.findByRole("button", { name: /EP-F2-01.*Platform Epic/i });
-    expect(epicButton).toBeInTheDocument();
-    expect(await screen.findByText("Forretningskontekst")).toBeInTheDocument();
 
-    fireEvent.click(epicButton);
-    await waitFor(() => expect(screen.queryByText("Forretningskontekst")).not.toBeInTheDocument());
-    expect(epicButton).toHaveTextContent("(2 stories)");
+    const epicSection = await screen.findByTestId("epic-section-EP-F2-01");
 
-    fireEvent.click(epicButton);
-    expect(await screen.findByText("Forretningskontekst")).toBeInTheDocument();
-    expect(screen.getByText("viktigste")).toBeInTheDocument();
-    expect(screen.getByText("Forretningsverdi")).toBeInTheDocument();
-    expect(screen.getByText("Synlig kontekst")).toBeInTheDocument();
-    expect(screen.getByText("Bevart formatering")).toBeInTheDocument();
+    expect(within(epicSection).getByText("US-F2-001")).toBeInTheDocument();
+    expect(within(epicSection).queryByText("Forretningskontekst")).not.toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining("/api/epics/EP-F2-01"), expect.anything());
+
+    const descriptionButton = within(epicSection).getByRole("button", { name: /show epic description EP-F2-01/i });
+    fireEvent.click(descriptionButton);
+
+    expect(await within(epicSection).findByText("Forretningskontekst")).toBeInTheDocument();
+    expect(within(epicSection).getByText("viktigste")).toBeInTheDocument();
+    expect(within(epicSection).getByText("Forretningsverdi")).toBeInTheDocument();
+    expect(within(epicSection).getByText("Synlig kontekst")).toBeInTheDocument();
+    expect(within(epicSection).getByText("Bevart formatering")).toBeInTheDocument();
+
+    const hideDescriptionButton = within(epicSection).getByRole("button", { name: /hide epic description EP-F2-01/i });
+    fireEvent.click(hideDescriptionButton);
+    await waitFor(() => expect(within(epicSection).queryByText("Forretningskontekst")).not.toBeInTheDocument());
+
+    const storyButton = within(epicSection).getByRole("button", { name: /collapse user stories for EP-F2-01/i });
+    fireEvent.click(storyButton);
+
+    await waitFor(() => expect(within(epicSection).queryByText("US-F2-001")).not.toBeInTheDocument());
+    expect(within(epicSection).getByText("(2 stories)")).toBeInTheDocument();
+
+    fireEvent.click(within(epicSection).getByRole("button", { name: /show epic description EP-F2-01/i }));
+    expect(await within(epicSection).findByText("Forretningskontekst")).toBeInTheDocument();
+    expect(within(epicSection).queryByText("US-F2-001")).not.toBeInTheDocument();
+
+    fireEvent.click(within(epicSection).getByRole("button", { name: /expand user stories for EP-F2-01/i }));
+    expect(await within(epicSection).findByText("US-F2-001")).toBeInTheDocument();
+    expect(within(epicSection).getByText("Forretningskontekst")).toBeInTheDocument();
   });
 
   it("disables backlog drag reorder while search is active without disabling the plus button", async () => {
