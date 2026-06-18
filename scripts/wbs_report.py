@@ -33,6 +33,7 @@ from pathlib import Path
 try:
     import openpyxl
     from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
 except ImportError:
     print("ERROR: openpyxl is required. Install with: pip3 install openpyxl", file=sys.stderr)
     sys.exit(1)
@@ -44,6 +45,7 @@ COLOUR_TITLE_BG            = "FF0D1F40"
 COLOUR_HEADER_BG           = "FF1A3060"
 COLOUR_PHASE_BG            = "FF1F3864"
 COLOUR_EPIC_BG             = "FF2E5EAA"
+COLOUR_EPIC_DONE_BG        = "FF2E6E45"  # dark green matching epic-blue luminance
 COLOUR_STORY_BG            = "FFFFFFFF"
 COLOUR_STORY_INPROGRESS_BG = "FFE6D0FF"  # soft purple
 COLOUR_STORY_DONE_BG       = "FFD0F0D0"  # soft green
@@ -74,16 +76,16 @@ COL_WBS                = 1   # A: hierarchical WBS number (1.1.2)
 COL_ID                 = 2   # B: ID (phase code / EP-* / US-*)
 COL_TITLE              = 3   # C: Title
 COL_MILESTONE          = 4   # D: Milestone
-COL_PERIOD             = 5   # E: Planned period
-COL_PRIORITY           = 6   # F: Priority
-COL_STATUS             = 7   # G: Status
-COL_POINTS             = 8   # H: Story Points (SUM formula for epic/phase)
-COL_HOURS              = 9   # I: Est Hours
+COL_PRIORITY           = 5   # E: Priority
+COL_STATUS             = 6   # F: Status
+COL_POINTS             = 7   # G: Story Points (SUM formula for epic/phase)
+COL_HOURS              = 8   # H: Est Hours
+COL_PERIOD             = 9   # I: Planned Period
 COL_PLANNED_START_DATE = 10  # J: Planned Start Date
 COL_PLANNED_END_DATE   = 11  # K: Planned End Date
-COL_ACTUAL_START_DATE  = 12  # L: Actual Start Date
-COL_ACTUAL_END_DATE    = 13  # M: Actual End Date
-COL_ACTUAL_PERIOD      = 14  # N: Actual Period
+COL_ACTUAL_PERIOD      = 12  # L: Actual Period
+COL_ACTUAL_START_DATE  = 13  # M: Actual Start Date
+COL_ACTUAL_END_DATE    = 14  # N: Actual End Date
 COL_NOTES              = 15  # O: Notes
 TOTAL_COLS             = 15
 
@@ -92,16 +94,16 @@ WBS_COLUMN_WIDTHS = {
     "B": 14,   # ID
     "C": 55,   # Title
     "D": 28,   # Milestone
-    "E": 16,   # Planned Period
-    "F": 12,   # Priority
-    "G": 15,   # Status
-    "H": 11,   # Story Pts
-    "I": 11,   # Est Hours
+    "E": 12,   # Priority
+    "F": 15,   # Status
+    "G": 11,   # Story Pts
+    "H": 11,   # Est Hours
+    "I": 16,   # Period
     "J": 18,   # Planned Start Date
     "K": 18,   # Planned End Date
-    "L": 17,   # Actual Start Date
-    "M": 17,   # Actual End Date
-    "N": 15,   # Actual Period
+    "L": 17,   # Actual Period
+    "M": 17,   # Actual Start Date
+    "N": 15,   # Actual End Date
     "O": 35,   # Notes
 }
 
@@ -486,12 +488,23 @@ def build_wbs_sheet(ws, hierarchy: list, estimates: dict,
         ws.column_dimensions[col_letter].width = width
     ws.sheet_properties.outlinePr.summaryBelow = False
 
+    # Hide all columns beyond the data range (P onwards) as a single XML span
+    _first_hidden = TOTAL_COLS + 1          # 16 → column P
+    _hidden_dim   = ws.column_dimensions[get_column_letter(_first_hidden)]
+    _hidden_dim.hidden = True
+    _hidden_dim.min    = _first_hidden
+    _hidden_dim.max    = 16_384             # last Excel column (XFD)
+
+    # Place the cursor on the first data cell when the sheet is opened
+    ws.sheet_view.selection[0].activeCell = "A1"
+    ws.sheet_view.selection[0].sqref      = "A1"
+
     report_date = date.fromisoformat(generated_at[:10])
     _write_title_row(ws, 1, f"AutoPASS IP 2.0 – WBS – Report {report_date.strftime('%Y-%m-%d')}")
     _write_header_row(ws, 2, [
-        "WBS No", "ID", "Title", "Milestone", "Period", "Priority",
-        "Status", "Story Pts", "Est Hours", "Planned Start Date", "Planned End Date",
-        "Actual Start Date", "Actual End Date", "Actual Period", "Notes",
+        "WBS No", "ID", "Title", "Milestone", "Priority",
+        "Status", "Story Pts", "Est Hours", "Planned Period", "Planned Start Date", "Planned End Date",
+        "Actual Period", "Actual Start Date", "Actual End Date", "Notes",
     ])
 
     row    = 3
@@ -536,6 +549,10 @@ def build_wbs_sheet(ws, hierarchy: list, estimates: dict,
                            if last_story_row >= first_story_row else 0)
             ws.cell(epic_row, COL_POINTS).value = pts_formula
             apply_row_style(ws, epic_row, level=3)
+            if ep_status == "DONE":
+                done_fill = _fill(COLOUR_EPIC_DONE_BG)
+                for col in range(1, TOTAL_COLS + 1):
+                    ws.cell(row=epic_row, column=col).fill = done_fill
 
         all_phase_stories = [s for ep in phase["epics"] for s in ep["stories"]]
         ph_planned_start, ph_planned_end = _group_planned_dates(all_phase_stories)
@@ -762,16 +779,16 @@ def build_legend_sheet(ws):
             (None, "ID",         "Artifact ID — Fn / EP-Fn-* / US-Fn-*"),
             (None, "Title",      "Phase, epic, or story title"),
             (None, "Milestone",  "Delivery milestone (MP1–MP5)"),
-            (None, "Period",     "Planned quarter or period derived from planned dates when present"),
             (None, "Priority",   "Critical / High / Medium / Low"),
             (None, "Status",     "Current workflow status"),
             (None, "Story Pts",  "Estimated story points; SUM for epic/phase rows"),
             (None, "Est Hours",  "Estimated hours (throughput-based)"),
+            (None, "Planned Period", "Planned quarter or period derived from planned dates when present"),
             (None, "Planned Start Date", "Stored markdown baseline start date; never recalculated from velocity"),
             (None, "Planned End Date",   "Stored markdown baseline end date; blank when no baseline exists"),
+            (None, "Actual Period",      "Quarter or period derived from actual lifecycle dates"),
             (None, "Actual Start Date",  "Lifecycle start date from work_started"),
             (None, "Actual End Date",    "Lifecycle completion date from work_done"),
-            (None, "Actual Period",      "Quarter or period derived from actual lifecycle dates"),
             (None, "Notes",              "Missing planned baseline or other report remarks"),
         ]),
     ]
