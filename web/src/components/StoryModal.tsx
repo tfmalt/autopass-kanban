@@ -100,7 +100,7 @@ export function StoryModal({ story, onClose }: Props) {
   );
 
   const assigneeOptions = useMemo(() => {
-    const options = new Set(team.data ?? []);
+    const options = new Set((team.data ?? []).map((m) => m.label));
     currentAssigneeList.forEach((assignee) => options.add(assignee));
     return [...options].sort();
   }, [team.data, currentAssigneeList]);

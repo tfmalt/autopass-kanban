@@ -1,6 +1,6 @@
 {
   "name": "kanban-workspace",
-  "version": "26.6.1801",
+  "version": "26.6.1902",
   "private": true,
   "packageManager": "npm@11.9.0",
   "scripts": {

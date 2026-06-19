@@ -1,4 +1,4 @@
-import type { ConfigResponse, DashboardMetrics, EpicDetail, RepositorySnapshot, StoryDetail } from "@shared/types.js";
+import type { ConfigResponse, DashboardMetrics, EpicDetail, RepositorySnapshot, StoryDetail, TeamMember } from "@shared/types.js";
 
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -49,7 +49,7 @@ async function patchJson(url: string, body: unknown): Promise<void> {
 export const fetchRepository = () => getJson<RepositorySnapshot>("/api/repository");
 export const fetchMetrics = () => getJson<DashboardMetrics>("/api/metrics");
 export const fetchConfig = () => getJson<ConfigResponse>("/api/config");
-export const fetchTeam = () => getJson<string[]>("/api/team");
+export const fetchTeam = () => getJson<TeamMember[]>("/api/team");
 export const fetchEpic = (id: string) => getJson<EpicDetail>(`/api/epics/${encodeURIComponent(id)}`);
 export const fetchStory = (id: string) => getJson<StoryDetail>(`/api/stories/${encodeURIComponent(id)}`);
 

@@ -37,7 +37,10 @@ function renderWithClient(ui: ReactNode) {
 }
 
 beforeEach(() => {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(snapshot()), { status: 200 })));
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url === "/api/team") return new Response(JSON.stringify([]), { status: 200 });
+    return new Response(JSON.stringify(snapshot()), { status: 200 });
+  }));
 });
 
 describe("BoardView", () => {
@@ -46,8 +49,9 @@ describe("BoardView", () => {
     expect(await screen.findByText("US-F1-061")).toBeInTheDocument();
     expect(screen.getByText("In Progress")).toBeInTheDocument();
     expect(screen.getByText("2/4 done")).toBeInTheDocument();
-    expect(screen.getByText("Sondre")).toBeInTheDocument();
-    expect(screen.getByText("Erik")).toBeInTheDocument();
+    // Avatar initials fallback: first 2 chars uppercased (no team roster in test)
+    expect(screen.getByTitle("Sondre Bjerkerud <sondre@example.com>")).toBeInTheDocument();
+    expect(screen.getByTitle("Erik Itland <erik@example.com>")).toBeInTheDocument();
     expect(screen.getByLabelText("sprint")).toHaveValue("S000.start");
     expect(screen.queryByText("US-F1-062")).not.toBeInTheDocument();
   });

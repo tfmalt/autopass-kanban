@@ -193,6 +193,13 @@ export interface EpicDetail extends Epic {
   body: string;
 }
 
+export interface TeamMember {
+  name: string;
+  email: string;
+  label: string;
+  avatarUrl?: string;
+}
+
 export interface ConfigResponse {
   port: number;
   host: string;

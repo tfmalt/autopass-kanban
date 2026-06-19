@@ -1,7 +1,59 @@
 import { useSortable } from "@dnd-kit/sortable";
-import { abbreviateAssignee, type Story, type StoryStatus } from "@shared/types.js";
+import { useMemo, type CSSProperties } from "react";
+import { type Story, type StoryStatus, type TeamMember } from "@shared/types.js";
+import { useTeam } from "../api/hooks.js";
+
+const AVATAR_PALETTE = [
+  { bg: "#FDE68A", fg: "#92400E" },
+  { bg: "#A7F3D0", fg: "#065F46" },
+  { bg: "#BFDBFE", fg: "#1E40AF" },
+  { bg: "#FBCFE8", fg: "#9D174D" },
+  { bg: "#DDD6FE", fg: "#5B21B6" },
+  { bg: "#FED7AA", fg: "#9A3412" },
+  { bg: "#99F6E4", fg: "#115E59" },
+  { bg: "#FECACA", fg: "#991B1B" },
+  { bg: "#D9F99D", fg: "#3F6212" },
+  { bg: "#F5D0FE", fg: "#86198F" },
+];
+
+function pickColor(key: string): { bg: string; fg: string } {
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash << 5) - hash + key.charCodeAt(i);
+  }
+  return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length]!;
+}
+
+function avatarColors(email: string): { bgStyle: CSSProperties; fgStyle: CSSProperties } {
+  const c = pickColor(email || "default");
+  return {
+    bgStyle: { backgroundColor: c.bg },
+    fgStyle: { color: c.fg },
+  };
+}
+
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+}
+
+function useAssigneeMap(): Map<string, TeamMember> {
+  const team = useTeam();
+  return useMemo(() => {
+    const m = new Map<string, TeamMember>();
+    for (const member of team.data ?? []) {
+      m.set(member.email, member);
+    }
+    return m;
+  }, [team.data]);
+}
 
 function CardContent({ story }: { story: Story }) {
+  const assigneeMap = useAssigneeMap();
   return (
     <>
       <div className="tid">{story.id}</div>
@@ -13,11 +65,24 @@ function CardContent({ story }: { story: Story }) {
             {story.taskSummary.done}/{story.taskSummary.total} done
           </span>
         )}
-        {story.assignees.map((assignee) => (
-          <span key={assignee} className="story-chip story-chip--assignee" title={assignee}>
-            {abbreviateAssignee(assignee)}
-          </span>
-        ))}
+        <div className="assignee-avatars">
+        {story.assignees.map((assignee) => {
+          const email = assignee.match(/<([^>]+)>/)?.[1] ?? "";
+          const member = assigneeMap.get(email);
+          const url = member?.avatarUrl;
+          const letter = member ? initials(member.name) : assignee.slice(0, 2).toUpperCase();
+          const { bgStyle, fgStyle } = avatarColors(email);
+          return (
+            <span key={assignee} className="assignee-avatar" title={assignee} style={bgStyle}>
+              {url ? (
+                <img src={url} alt={member!.name} className="assignee-avatar-img" />
+              ) : (
+                <span className="assignee-avatar-initials" style={fgStyle}>{letter}</span>
+              )}
+            </span>
+          );
+        })}
+      </div>
       </div>
     </>
   );

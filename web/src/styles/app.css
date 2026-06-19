@@ -40,7 +40,7 @@ html, body, #root { height: 100%; }
 .column.blocked { background: var(--red-soft); }
 .column.is-over { outline: 2px solid var(--accent); }
 .column h4 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); display: flex; justify-content: space-between; gap: 10px; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; margin-bottom: 8px; box-shadow: var(--shadow); cursor: grab; }
+.card { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; margin-bottom: 8px; box-shadow: var(--shadow); cursor: grab; }
 .card--ghost { opacity: 0.35; cursor: grabbing; }
 .card--overlay { box-shadow: 0 8px 24px rgba(20,30,50,0.18), 0 2px 8px rgba(20,30,50,0.10); border-color: var(--accent); cursor: grabbing; rotate: 1.5deg; }
 .card-placeholder { height: 70px; border: 2px dashed var(--accent); border-radius: 8px; background: var(--accent-soft); margin-bottom: 8px; opacity: 0.7; }
@@ -52,6 +52,11 @@ html, body, #root { height: 100%; }
 .pts { background: var(--accent-soft); color: var(--accent); }
 .story-chip--done { background: var(--green-soft); border-color: transparent; color: var(--green); }
 .story-chip--assignee { background: var(--amber-soft); border-color: transparent; color: var(--amber); }
+.assignee-avatars { margin-left: auto; display: inline-flex; flex-direction: row-reverse; vertical-align: middle; }
+.assignee-avatar { width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--surface); margin-left: -8px; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+.assignee-avatar:last-child { margin-left: 0; }
+.assignee-avatar-img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.assignee-avatar-initials { line-height: 1; }
 .button-primary { background: var(--accent); color: var(--on-accent); border: none; border-radius: 8px; padding: 8px 14px; cursor: pointer; }
 .button-primary:disabled { cursor: not-allowed; opacity: 0.55; }
 .button-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; cursor: pointer; }

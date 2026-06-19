@@ -158,6 +158,16 @@ struct RepositorySnapshot {
     progress: ProjectProgress,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebTeamMember {
+    name: String,
+    email: String,
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar_url: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ConfigResponse {
@@ -330,6 +340,7 @@ pub async fn serve(options: WebServeOptions) -> Result<()> {
         .route("/api/metrics", get(api_metrics))
         .route("/api/config", get(api_config))
         .route("/api/team", get(api_team))
+        .route("/api/team/avatars/{*path}", get(api_team_avatar))
         .route("/api/epics/{id}", get(api_epic))
         .route("/api/epics/{id}/fields", patch(api_update_epic_fields))
         .route(
@@ -426,8 +437,41 @@ async fn api_config(
     }))
 }
 
-async fn api_team(State(state): State<Arc<AppState>>) -> Result<Json<Vec<String>>, ApiResponse> {
+async fn api_team(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<WebTeamMember>>, ApiResponse> {
     Ok(Json(load_team(&state.repo_root)?))
+}
+
+async fn api_team_avatar(
+    State(state): State<Arc<AppState>>,
+    AxumPath(path): AxumPath<String>,
+) -> Result<Response, ApiResponse> {
+    if path.contains("..") || path.starts_with('/') || path.contains("\\") {
+        return Err(ApiResponse::not_found("invalid path"));
+    }
+    let avatars_dir = state.repo_root.join(".kanban").join("team_avatars");
+    let file_path = avatars_dir.join(&path);
+
+    let canonical = file_path
+        .canonicalize()
+        .map_err(|_| ApiResponse::not_found("not found"))?;
+    if !canonical.starts_with(&avatars_dir) {
+        return Err(ApiResponse::not_found("invalid path"));
+    }
+    if !canonical.is_file() {
+        return Err(ApiResponse::not_found("not found"));
+    }
+
+    let data = fs::read(&canonical).map_err(|_| ApiResponse::not_found("not found"))?;
+    let mime = mime_guess::from_path(&path).first_or_octet_stream();
+    let mut response = Body::from(data).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(mime.as_ref())
+            .unwrap_or(HeaderValue::from_static("application/octet-stream")),
+    );
+    Ok(response)
 }
 
 async fn api_story(
@@ -1028,7 +1072,10 @@ fn build_burnup(stories: &[WebStory], sprints: &[WebSprint]) -> Vec<BurnupPoint>
         }
     }
 
-    if rows.last().is_some_and(|last| last.date != today.to_string()) {
+    if rows
+        .last()
+        .is_some_and(|last| last.date != today.to_string())
+    {
         rows.push(BurnupPoint {
             date: today.to_string(),
             completed: cumulative,
@@ -1072,8 +1119,9 @@ fn build_burndown(sprints: &[WebSprint]) -> Vec<BurndownPoint> {
         let Some(date) = story_completion_date(story) else {
             continue;
         };
-        *completed_by_date.entry(std::cmp::min(date, end_date)).or_default() +=
-            story.story_points.unwrap_or(0);
+        *completed_by_date
+            .entry(std::cmp::min(date, end_date))
+            .or_default() += story.story_points.unwrap_or(0);
     }
 
     let total_days = (end_date - start_date).num_days();
@@ -1087,8 +1135,7 @@ fn build_burndown(sprints: &[WebSprint]) -> Vec<BurndownPoint> {
         let ideal = if total_days <= 0 {
             0
         } else {
-            (((planned_points as f64) * (1.0 - (offset as f64 / total_days as f64))).round()
-                as i64)
+            (((planned_points as f64) * (1.0 - (offset as f64 / total_days as f64))).round() as i64)
                 .max(0)
         };
         rows.push(BurndownPoint {
@@ -1110,7 +1157,12 @@ fn select_burndown_sprint(sprints: &[WebSprint]) -> Option<&WebSprint> {
                 sprint.status.as_deref() != Some("closed") && sprint_total_points(sprint) > 0
             })
         })
-        .or_else(|| sprints.iter().rev().find(|sprint| sprint_total_points(sprint) > 0))
+        .or_else(|| {
+            sprints
+                .iter()
+                .rev()
+                .find(|sprint| sprint_total_points(sprint) > 0)
+        })
         .or_else(|| sprints.last())
 }
 
@@ -1124,10 +1176,7 @@ fn sprint_total_points(sprint: &WebSprint) -> i64 {
 }
 
 fn story_work_started_date(story: &WebStory) -> Option<NaiveDate> {
-    story
-        .work_started
-        .as_deref()
-        .and_then(parse_date_prefix)
+    story.work_started.as_deref().and_then(parse_date_prefix)
 }
 
 fn story_completion_date(story: &WebStory) -> Option<NaiveDate> {
@@ -1203,7 +1252,8 @@ fn build_forecast(stories: &[WebStory], sprints: &[WebSprint]) -> Forecast {
         .iter()
         .find(|sprint| sprint.status.as_deref() == Some("active"))
         .map(|sprint| sprint.name.as_str());
-    let canonical = ReportForecastDto::build(&story_overviews, &sprint_overviews, current_sprint_name);
+    let canonical =
+        ReportForecastDto::build(&story_overviews, &sprint_overviews, current_sprint_name);
     Forecast::from(canonical)
 }
 
@@ -1250,7 +1300,10 @@ fn sprint_overview_from_web(sprint: &WebSprint) -> SprintOverview {
             .map(|(status, stories)| {
                 (
                     status.clone(),
-                    stories.iter().map(story_overview_from_web).collect::<Vec<_>>(),
+                    stories
+                        .iter()
+                        .map(story_overview_from_web)
+                        .collect::<Vec<_>>(),
                 )
             })
             .collect(),
@@ -1285,37 +1338,71 @@ impl From<ReportForecastDto> for Forecast {
     }
 }
 
-fn load_team(repo_root: &Path) -> Result<Vec<String>> {
+fn load_team(repo_root: &Path) -> Result<Vec<WebTeamMember>> {
     let team_file = repo_root.join(".kanban/team.json");
     if let Ok(raw) = fs::read_to_string(&team_file)
-        && let Ok(values) = serde_json::from_str::<Vec<BTreeMap<String, String>>>(&raw)
+        && let Ok(values) = serde_json::from_str::<Vec<serde_json::Value>>(&raw)
     {
+        let avatars_prefix = "/api/team/avatars/".to_string();
         return Ok(values
             .into_iter()
-            .filter_map(|mut item| {
-                let name = item.remove("name")?;
-                let email = item.remove("email")?;
-                (!name.trim().is_empty() && !email.trim().is_empty())
-                    .then(|| format!("{} <{}>", name.trim(), email.trim()))
+            .filter_map(|item| {
+                let obj = item.as_object()?;
+                let name = obj.get("name")?.as_str()?.trim().to_string();
+                let email = obj.get("email")?.as_str()?.trim().to_string();
+                if name.is_empty() || email.is_empty() {
+                    return None;
+                }
+                let label = format!("{name} <{email}>");
+                let avatar_url = obj
+                    .get("avatarUrl")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        obj.get("avatarPath")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                            .map(|path| format!("{avatars_prefix}{}", path.trim_start_matches('/')))
+                    });
+                Some(WebTeamMember {
+                    name,
+                    email,
+                    label,
+                    avatar_url,
+                })
             })
             .collect());
     }
 
     let repository = read_repository(repo_root)?;
-    let mut seen = BTreeSet::new();
+    let mut seen: BTreeMap<String, (String, String)> = BTreeMap::new();
     for story in repository.stories {
         if let Some(assignee) = story.frontmatter.get("assignee") {
             for person in parse_assignees(assignee) {
                 if person.contains('<')
                     && person.contains('@')
                     && !person.eq_ignore_ascii_case("Name <email@example.com>")
+                    && let Some((name, email)) = person.split_once('<')
                 {
-                    seen.insert(person);
+                    let name = name.trim().to_string();
+                    let email = email.trim_end_matches('>').trim().to_string();
+                    if !name.is_empty() && !email.is_empty() {
+                        seen.entry(email.clone()).or_insert((name, email));
+                    }
                 }
             }
         }
     }
-    Ok(seen.into_iter().collect())
+    Ok(seen
+        .into_values()
+        .map(|(name, email)| WebTeamMember {
+            label: format!("{name} <{email}>"),
+            avatar_url: None,
+            name,
+            email,
+        })
+        .collect())
 }
 
 fn update_sprint_file(repo_root: &Path, name: &str, input: UpdateSprintInput) -> Result<Value> {
@@ -1710,7 +1797,13 @@ mod tests {
             Some("2026-06-01T09:00:00+0200"),
             Some("2026-06-03T12:00:00+0200"),
         );
-        let todo = test_story("US-F1-002", "todo", 8, Some("2026-06-01T09:00:00+0200"), None);
+        let todo = test_story(
+            "US-F1-002",
+            "todo",
+            8,
+            Some("2026-06-01T09:00:00+0200"),
+            None,
+        );
         let early_created_only = WebStory {
             created: Some("2026-03-30T00:00:00+0200".to_string()),
             activated: Some("2026-03-30T00:00:00+0200".to_string()),
@@ -1773,8 +1866,14 @@ mod tests {
                 scope: 5,
             })
         );
-        assert!(rows.iter().any(|row| row.date == sprint_one_start && row.scope == 13));
-        assert_eq!(rows.last().map(|row| row.date.clone()), Some(today.to_string()));
+        assert!(
+            rows.iter()
+                .any(|row| row.date == sprint_one_start && row.scope == 13)
+        );
+        assert_eq!(
+            rows.last().map(|row| row.date.clone()),
+            Some(today.to_string())
+        );
     }
 
     #[test]
@@ -1802,7 +1901,10 @@ mod tests {
             )],
         );
 
-        assert!(rows.iter().any(|row| row.date == sprint_end && row.scope == 5));
+        assert!(
+            rows.iter()
+                .any(|row| row.date == sprint_end && row.scope == 5)
+        );
     }
 
     #[test]
@@ -1814,7 +1916,13 @@ mod tests {
             Some("2026-06-01T09:00:00+0200"),
             Some("2026-06-03T12:00:00+0200"),
         );
-        let todo = test_story("US-F1-002", "todo", 8, Some("2026-06-01T09:00:00+0200"), None);
+        let todo = test_story(
+            "US-F1-002",
+            "todo",
+            8,
+            Some("2026-06-01T09:00:00+0200"),
+            None,
+        );
         let rows = build_burndown(&[test_sprint("active", vec![done, todo])]);
 
         assert_eq!(
@@ -1825,6 +1933,9 @@ mod tests {
                 ideal: 13,
             })
         );
-        assert!(rows.iter().any(|row| row.date == "2026-06-03" && row.remaining == 8));
+        assert!(
+            rows.iter()
+                .any(|row| row.date == "2026-06-03" && row.remaining == 8)
+        );
     }
 }

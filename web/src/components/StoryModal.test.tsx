@@ -70,8 +70,8 @@ describe("StoryModal", () => {
     });
     hooks.useTeam.mockReturnValue({
       data: [
-        "Erik Itland <erik.vardal.itland@vegvesen.no>",
-        "Sondre Bjerkerud <sondre.bjerkerud@vegvesen.no>",
+        { name: "Erik Itland", email: "erik.vardal.itland@vegvesen.no", label: "Erik Itland <erik.vardal.itland@vegvesen.no>" },
+        { name: "Sondre Bjerkerud", email: "sondre.bjerkerud@vegvesen.no", label: "Sondre Bjerkerud <sondre.bjerkerud@vegvesen.no>" },
       ],
     });
     hooks.useStory.mockReturnValue({
