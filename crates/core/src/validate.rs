@@ -126,7 +126,7 @@ pub fn validate_story(story: &Story) -> Vec<ValidationIssue> {
             story,
             &mut issues,
             "missing-field:assignee",
-            "Stories outside draft/todo must have assignee set.".to_string(),
+            "Stories outside draft/ready/todo must have assignee set.".to_string(),
         );
     }
 
@@ -383,7 +383,7 @@ pub(crate) fn validate_timestamp_field(
 pub(crate) fn assignee_required(story: &Story) -> bool {
     !matches!(
         story.frontmatter.get("status").map(String::as_str),
-        Some("draft" | "todo")
+        Some("draft" | "todo" | "ready")
     )
 }
 
