@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+compose_file="$repo_root/tools/kanban-container/docker-compose.kanban.yml"
+service_name="aup-kanban"
+kanban_uid="$(id -u)"
+kanban_gid="$(id -g)"
+
+if ! command -v docker >/dev/null 2>&1; then
+  printf 'Error: docker is required to run kanban in-container.\n' >&2
+  exit 1
+fi
+
+if [[ ! -f "$compose_file" ]]; then
+  printf 'Error: missing compose file: %s\n' "$compose_file" >&2
+  exit 1
+fi
+
+if ! KANBAN_UID="$kanban_uid" KANBAN_GID="$kanban_gid" docker compose -f "$compose_file" config --services | grep -qx "$service_name"; then
+  printf 'Error: service "%s" not found in %s\n' "$service_name" "$compose_file" >&2
+  exit 1
+fi
+
+KANBAN_UID="$kanban_uid" KANBAN_GID="$kanban_gid" docker compose -f "$compose_file" up -d "$service_name" >/dev/null
+
+if [[ -t 0 && -t 1 ]]; then
+  exec env KANBAN_UID="$kanban_uid" KANBAN_GID="$kanban_gid" docker compose -f "$compose_file" exec "$service_name" kanban "$@"
+fi
+
+exec env KANBAN_UID="$kanban_uid" KANBAN_GID="$kanban_gid" docker compose -f "$compose_file" exec -T "$service_name" kanban "$@"
