@@ -3,10 +3,10 @@
 Generate WBS Excel report from AutoPASS IP 2.0 kanban data.
 
 Usage:
-    kanban --format json report wbs | python3 tools/kanban/scripts/wbs_report.py
+    kanban --format json report wbs | python3 ../autopass-kanban/scripts/wbs_report.py
 
     # explicit output path
-    kanban --format json report wbs | python3 tools/kanban/scripts/wbs_report.py \
+    kanban --format json report wbs | python3 ../autopass-kanban/scripts/wbs_report.py \
         --output delivery/reports/2026-06-07.001.autopass_ip_2.0_wbs_report.xlsx
 
 Default output is delivery/reports/<date>.<nnn>.autopass_ip_2.0_wbs_report.xlsx

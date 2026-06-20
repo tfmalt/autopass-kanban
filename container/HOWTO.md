@@ -11,18 +11,19 @@ The `kanban` CLI runs inside a long-lived Docker container so the binary is neve
 | Docker Engine | 24.x | `docker --version` |
 | Docker Compose plugin | v2 | `docker compose version` |
 | Bash | 5.x | `bash --version` |
-| Repo cloned at | `/git/ip-2.0` | `ls /git/ip-2.0/AGENTS.md` |
+| Kanban repo cloned at | `/git/autopass-kanban` | `ls /git/autopass-kanban/Cargo.toml` |
+| AutoPASS IP 2.0 repo cloned at | `/git/ip-2.0` | `ls /git/ip-2.0/AGENTS.md` |
 
-> **Why a fixed path?** The wrapper script hard-codes `/git/ip-2.0` as the repo root so the container volume mount is always consistent across users.
+> **Default project path:** the compose file mounts sibling checkout `../ip-2.0` by default. Set `KANBAN_REPO_PATH=/path/to/project` to use another markdown backlog repository.
 
 ---
 
 ## Step 1 — Build the image
 
-Run this **once** (or after changes to `tools/kanban/`):
+Run this **once** (or after changes to the kanban source):
 
 ```bash
-cd /git/ip-2.0/tools/kanban-container
+cd /git/autopass-kanban/container
 ./docker-compose.up.sh
 ```
 
@@ -34,9 +35,9 @@ This script:
 To build without entering the shell:
 
 ```bash
-docker compose -f /git/ip-2.0/tools/kanban-container/docker-compose.kanban.yml \
+docker compose -f /git/autopass-kanban/container/docker-compose.kanban.yml \
   build --progress plain aup-kanban
-docker compose -f /git/ip-2.0/tools/kanban-container/docker-compose.kanban.yml \
+docker compose -f /git/autopass-kanban/container/docker-compose.kanban.yml \
   up -d aup-kanban
 ```
 
@@ -48,8 +49,8 @@ Add one block to `~/.bashrc` (or `~/.zshrc`):
 
 ```bash
 # IP2_KANBAN_CONTAINER_PATH
-if [[ -d /git/ip-2.0/tools/kanban-container ]]; then
-  export PATH="/git/ip-2.0/tools/kanban-container:$PATH"
+if [[ -d /git/autopass-kanban/container ]]; then
+  export PATH="/git/autopass-kanban/container:$PATH"
 fi
 ```
 
@@ -62,8 +63,8 @@ source ~/.bashrc
 Verify:
 
 ```bash
-which kanban        # /git/ip-2.0/tools/kanban-container/kanban
-which kb            # /git/ip-2.0/tools/kanban-container/kb
+which kanban        # /git/autopass-kanban/container/kanban
+which kb            # /git/autopass-kanban/container/kb
 kanban --version    # kanban 26.6.801
 ```
 
@@ -78,10 +79,10 @@ kanban board
 kb sprint sync      # kb is a short alias for kanban
 ```
 
-The wrapper (`tools/kanban-container/kanban`) automatically:
+The wrapper (`container/kanban`) automatically:
 - Starts `aup-kanban-1` if it is not running (`docker compose up -d`)
 - Forwards all arguments and flags to the binary inside the container
-- Mounts the repo root (`/git/ip-2.0`) as `/workspace` inside the container so all backlog file reads/writes go to the real checkout
+- Mounts the AutoPASS IP 2.0 repo (`/git/ip-2.0` by default) as `/workspace` inside the container so all backlog file reads/writes go to the real checkout
 
 ---
 
@@ -96,7 +97,7 @@ docker ps --filter name=aup-kanban-1
 ### Open a shell inside the container
 
 ```bash
-/git/ip-2.0/tools/kanban-container/docker-compose.bash.sh
+/git/autopass-kanban/container/docker-compose.bash.sh
 # or directly:
 docker exec -it aup-kanban-1 /bin/bash
 ```
@@ -104,7 +105,7 @@ docker exec -it aup-kanban-1 /bin/bash
 ### Rebuild after Rust source changes
 
 ```bash
-cd /git/ip-2.0/tools/kanban-container
+cd /git/autopass-kanban/container
 ./docker-compose.up.sh
 ```
 
@@ -113,7 +114,7 @@ The script passes `--no-cache` to ensure a clean rebuild.
 ### Stop the container
 
 ```bash
-docker compose -f /git/ip-2.0/tools/kanban-container/docker-compose.kanban.yml down
+docker compose -f /git/autopass-kanban/container/docker-compose.kanban.yml down
 ```
 
 The container is configured with `restart: always`, so it restarts automatically on Docker daemon startup. Stop it explicitly only when needed.
@@ -124,19 +125,19 @@ The container is configured with `restart: always`, so it restarts automatically
 
 ```
 ~/.bashrc PATH entry
-  └─ /git/ip-2.0/tools/kanban-container/kanban   (wrapper script)
+  └─ /git/autopass-kanban/container/kanban   (wrapper script)
        └─ docker compose exec aup-kanban-1 kanban  (binary inside container)
             └─ /workspace  ←──── volume mount ────  /git/ip-2.0
 ```
 
 | File | Purpose |
 |---|---|
-| `tools/kanban-container/Dockerfile.kanban` | Multi-stage build: Rust builder → `debian:bookworm-slim` runtime |
-| `tools/kanban-container/docker-compose.kanban.yml` | Compose service; sets `restart: always`, user UID/GID passthrough, volume mount |
-| `tools/kanban-container/kanban` | Wrapper script; starts container if needed, execs `kanban` inside it |
-| `tools/kanban-container/kb` | Thin alias — delegates to `kanban "$@"` |
-| `tools/kanban-container/docker-compose.up.sh` | Build + start helper; drops into container shell |
-| `tools/kanban-container/docker-compose.bash.sh` | Opens a shell in the already-running container |
+| `container/Dockerfile.kanban` | Multi-stage build: Rust builder → `debian:bookworm-slim` runtime |
+| `container/docker-compose.kanban.yml` | Compose service; sets `restart: always`, user UID/GID passthrough, volume mount |
+| `container/kanban` | Wrapper script; starts container if needed, execs `kanban` inside it |
+| `container/kb` | Thin alias — delegates to `kanban "$@"` |
+| `container/docker-compose.up.sh` | Build + start helper; drops into container shell |
+| `container/docker-compose.bash.sh` | Opens a shell in the already-running container |
 | `bin/kanban` | **Original local runner** — runs the local debug binary or `cargo run`; used by team members not using Docker |
 
 ---
@@ -153,7 +154,7 @@ Check that the container mounts the live repo checkout:
 
 ```bash
 docker inspect aup-kanban-1 | grep -A3 Mounts
-# Source should be /git/ip-2.0
+# Source should be /git/ip-2.0 unless KANBAN_REPO_PATH overrides it
 ```
 
 ### Container exits immediately
@@ -161,7 +162,7 @@ docker inspect aup-kanban-1 | grep -A3 Mounts
 The image uses `ENTRYPOINT ["sleep"] CMD ["infinity"]`. If the container is not running:
 
 ```bash
-docker compose -f /git/ip-2.0/tools/kanban-container/docker-compose.kanban.yml up -d
+docker compose -f /git/autopass-kanban/container/docker-compose.kanban.yml up -d
 docker ps --filter name=aup-kanban-1
 ```
 
@@ -172,8 +173,8 @@ docker ps --filter name=aup-kanban-1
 **Automatic fix:** The container's entrypoint script automatically corrects `/workspace` ownership to match the running user when the container starts. **No manual action required** — just ensure the container is fresh:
 
 ```bash
-docker compose -f /git/ip-2.0/tools/kanban-container/docker-compose.kanban.yml down
-docker compose -f /git/ip-2.0/tools/kanban-container/docker-compose.kanban.yml up -d aup-kanban
+docker compose -f /git/autopass-kanban/container/docker-compose.kanban.yml down
+docker compose -f /git/autopass-kanban/container/docker-compose.kanban.yml up -d aup-kanban
 ```
 
 **Manual fix (if needed):** If the container is still unable to write:
@@ -182,4 +183,4 @@ docker compose -f /git/ip-2.0/tools/kanban-container/docker-compose.kanban.yml u
 sudo chown -R "$(id -u):$(id -g)" /git/ip-2.0
 ```
 
-The container passes your UID/GID via `KANBAN_UID`/`KANBAN_GID` environment variables in the wrapper script (`tools/kanban-container/kanban`).
+The container passes your UID/GID via `KANBAN_UID`/`KANBAN_GID` environment variables in the wrapper script (`container/kanban`).

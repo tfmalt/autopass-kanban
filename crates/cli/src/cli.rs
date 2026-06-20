@@ -431,7 +431,7 @@ by the separate Python script that reads the JSON from stdin.
 
 GENERATE THE EXCEL REPORT
   kanban --format json report wbs \\
-    | python3 tools/kanban/scripts/wbs_report.py \\
+    | python3 ../autopass-kanban/scripts/wbs_report.py \\
         --template delivery/backlog/2026-03-31.autopass_ip_2.0_wbs.xlsx \\
         --output   delivery/backlog/wbs_report.xlsx
 

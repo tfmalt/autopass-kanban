@@ -1,7 +1,7 @@
 # Kanban Tool Agent Guide
 
-This directory contains the Rust workspace for the markdown-first backlog tooling.
-These instructions apply to all files under `tools/kanban/`.
+This repository contains the Rust workspace for the markdown-first backlog tooling.
+These instructions apply to all files in this repository.
 
 ## Scope
 
@@ -23,7 +23,7 @@ These instructions apply to all files under `tools/kanban/`.
 
 ## Versioning
 
-- The kanban workspace version is defined in `tools/kanban/Cargo.toml` under `[workspace.package]`.
+- The kanban workspace version is defined in `Cargo.toml` under `[workspace.package]`.
 - Always update the version when finished with a task.
 - Use this SemVer scheme:
   - `MAJOR` is the last two digits of the current year, for example `26` for 2026.
@@ -32,7 +32,7 @@ These instructions apply to all files under `tools/kanban/`.
 
 ## Verification
 
-Run commands from `tools/kanban/` unless noted otherwise:
+Run commands from the repository root unless noted otherwise:
 
 - `cargo fmt --all -- --check`
 - `cargo test`
@@ -41,7 +41,7 @@ Run commands from `tools/kanban/` unless noted otherwise:
 
 For changes that modify markdown parsing or writing behavior, also run:
 
-- `cargo run -p kanban-cli -- validate ../..`
-- `cargo run -p kanban-cli -- doctor ../..`
+- `cargo run -p kanban-cli -- validate ../ip-2.0`
+- `cargo run -p kanban-cli -- doctor ../ip-2.0`
 
 If a command cannot be run, report the reason and what remains unverified.

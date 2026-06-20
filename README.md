@@ -1,6 +1,6 @@
 # Kanban
 
-Rust workspace for repository-local, markdown-first kanban tooling.
+Rust workspace for markdown-first kanban tooling used by AutoPASS IP 2.0.
 
 CLI binary name:
 - `kanban`
@@ -38,7 +38,7 @@ require Node.js or npm; it starts the embedded Rust server from the compiled
 For frontend development, run the API server and Vite separately:
 
 ```sh
-cargo run -p kanban-cli -- web serve --repo-root ../.. --host 127.0.0.1 --port 3000
+cargo run -p kanban-cli -- web serve --repo-root ../ip-2.0 --host 127.0.0.1 --port 3000
 npm --prefix web run dev
 ```
 
@@ -53,7 +53,7 @@ Build and run the standalone CLI plus embedded web UI in a container with:
 ./docker-compose.up.sh
 ```
 
-By default the compose file bind-mounts `../..` as `/repo` for this monorepo.
+By default the compose file bind-mounts sibling checkout `../ip-2.0` as `/repo`.
 Set `KANBAN_REPO_PATH=/path/to/project` to serve a different git-backed kanban
 repository without installing `kanban` on the host.
 
@@ -169,4 +169,4 @@ used when `validate` or `doctor` finish successfully but find issues. Human
 output remains the default when `--format` is omitted.
 
 Full per-command schema documentation:
-`docs/superpowers/specs/2026-06-03-kanban-json-output-design.md` (repo-root-relative).
+`docs/superpowers/specs/2026-06-03-kanban-json-output-design.md` in the served project repository.

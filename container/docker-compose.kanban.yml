@@ -4,8 +4,8 @@ services:
   aup-kanban:
     image: ip2-kanban-cli:local
     build:
-      context: ../..
-      dockerfile: tools/kanban-container/Dockerfile.kanban
+      context: ..
+      dockerfile: container/Dockerfile.kanban
     restart: always
     container_name: aup-kanban-1
     network_mode: "bridge"
@@ -15,4 +15,4 @@ services:
     user: "${KANBAN_UID:-1000}:${KANBAN_GID:-1000}"
     working_dir: /workspace
     volumes:
-      - ../..:/workspace
+      - ${KANBAN_REPO_PATH:-../ip-2.0}:/workspace

@@ -751,7 +751,7 @@ fn main() -> Result<()> {
                     theme.paint(Style::Muted, "To generate an Excel report, run:")
                 );
                 println!(
-                    "  {} --format json | python3 tools/kanban/scripts/wbs_report.py \\",
+                    "  {} --format json | python3 ../autopass-kanban/scripts/wbs_report.py \\",
                     theme.id("kanban report wbs")
                 );
                 println!(

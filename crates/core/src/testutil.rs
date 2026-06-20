@@ -2,8 +2,12 @@ use crate::config::*;
 use crate::prelude::*;
 
 pub(crate) fn repo_root() -> PathBuf {
+    if let Some(repo_root) = std::env::var_os("KANBAN_TEST_REPO_ROOT") {
+        return PathBuf::from(repo_root).canonicalize().unwrap();
+    }
+
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../../")
+        .join("../../../ip-2.0")
         .canonicalize()
         .unwrap()
 }

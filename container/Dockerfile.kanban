@@ -1,11 +1,11 @@
 FROM node:24-bookworm-slim AS web-builder
 
-WORKDIR /src/tools/kanban
+WORKDIR /src
 
-COPY tools/kanban/web/package*.json ./web/
+COPY web/package*.json ./web/
 RUN npm --prefix web ci
 
-COPY tools/kanban/web ./web
+COPY web ./web
 RUN npm --prefix web run build
 
 FROM rust:slim-bookworm AS builder
@@ -14,11 +14,11 @@ WORKDIR /src
 
 ENV CARGO_TARGET_DIR=/src/target
 
-COPY tools/kanban ./tools/kanban
-COPY --from=web-builder /src/tools/kanban/web/dist ./tools/kanban/web/dist
+COPY . .
+COPY --from=web-builder /src/web/dist ./web/dist
 
 # Fail fast on dependency or compile errors while producing a release binary.
-RUN cargo build --locked --release -p kanban-cli --manifest-path tools/kanban/Cargo.toml
+RUN cargo build --locked --release -p kanban-cli --manifest-path Cargo.toml
 
 FROM debian:bookworm-slim AS runtime
 
@@ -29,7 +29,7 @@ RUN apt-get update \
 COPY --from=builder /src/target/release/kanban /usr/local/bin/kanban
 RUN ln -s /usr/local/bin/kanban /usr/local/bin/kb
 
-COPY tools/kanban-container/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY container/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 WORKDIR /workspace

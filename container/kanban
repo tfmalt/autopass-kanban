@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-compose_file="$repo_root/tools/kanban-container/docker-compose.kanban.yml"
+tool_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+compose_file="$tool_root/container/docker-compose.kanban.yml"
 service_name="aup-kanban"
 kanban_uid="$(id -u)"
 kanban_gid="$(id -g)"

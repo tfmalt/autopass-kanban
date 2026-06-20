@@ -8,12 +8,13 @@ The kanban web server runs in a long-lived Docker container with the embedded Ru
 |---|---|---|
 | Docker Engine | 24.x | `docker --version` |
 | Docker Compose plugin | v2 | `docker compose version` |
-| Kanban repo cloned at | `/git/ip-2.0/tools/kanban` | `ls /git/ip-2.0/tools/kanban/Cargo.toml` |
+| Kanban repo cloned at | `/git/autopass-kanban` | `ls /git/autopass-kanban/Cargo.toml` |
+| AutoPASS IP 2.0 repo cloned at | `/git/ip-2.0` | `ls /git/ip-2.0/.kanban/paths.json` |
 
 ## Start the web UI
 
 ```bash
-cd /git/ip-2.0/tools/kanban
+cd /git/autopass-kanban
 ./docker-compose.up.sh
 ```
 
@@ -21,15 +22,15 @@ Open `http://localhost:3000`.
 
 The script:
 
-1. Builds `ip2-kanban-web:local` from `tools/kanban/Dockerfile`.
+1. Builds `ip2-kanban-web:local` from `Dockerfile`.
 2. Starts `aup-kanban-web-1` with `restart: always`.
-3. Mounts `${KANBAN_REPO_PATH:-../..}` as `/repo` so reads and writes use the live checkout.
+3. Mounts `${KANBAN_REPO_PATH:-../ip-2.0}` as `/repo` so reads and writes use the live AutoPASS IP 2.0 checkout.
 4. Runs the container with your UID/GID so markdown edits are owned by you.
 
 To use cached layers:
 
 ```bash
-cd /git/ip-2.0/tools/kanban
+cd /git/autopass-kanban
 KANBAN_UID="$(id -u)" KANBAN_GID="$(id -g)" docker compose up -d aup-kanban-web
 ```
 
@@ -50,13 +51,13 @@ docker logs -f aup-kanban-web-1
 Open a shell:
 
 ```bash
-/git/ip-2.0/tools/kanban/docker-compose.bash.sh
+/git/autopass-kanban/docker-compose.bash.sh
 ```
 
 Stop the container:
 
 ```bash
-docker compose -f /git/ip-2.0/tools/kanban/docker-compose.yml down
+docker compose -f /git/autopass-kanban/docker-compose.yml down
 ```
 
 ## Architecture in brief
@@ -85,7 +86,7 @@ Change both the host port and server port for this run:
 
 ```bash
 KANBAN_UID="$(id -u)" KANBAN_GID="$(id -g)" KANBAN_WEB_PORT=3001 \
-  docker compose -f /git/ip-2.0/tools/kanban/docker-compose.yml up -d aup-kanban-web
+  docker compose -f /git/autopass-kanban/docker-compose.yml up -d aup-kanban-web
 ```
 
 Then open `http://localhost:3001`.
@@ -95,7 +96,7 @@ Then open `http://localhost:3001`.
 Restart with UID/GID passthrough:
 
 ```bash
-cd /git/ip-2.0/tools/kanban
+cd /git/autopass-kanban
 docker compose down
 KANBAN_UID="$(id -u)" KANBAN_GID="$(id -g)" docker compose up -d aup-kanban-web
 ```

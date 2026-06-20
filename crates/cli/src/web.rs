@@ -236,7 +236,12 @@ pub(crate) fn kanban_tool_root(repo_root: &Path) -> Result<PathBuf> {
         }
     }
 
-    for candidate in [repo_root.join("tools/kanban"), repo_root.to_path_buf()] {
+    let mut candidates = vec![repo_root.to_path_buf()];
+    if let Some(parent) = repo_root.parent() {
+        candidates.push(parent.join("autopass-kanban"));
+    }
+
+    for candidate in candidates {
         if is_kanban_tool_root(&candidate) {
             return Ok(candidate);
         }
@@ -996,7 +1001,7 @@ mod tests {
         assert_eq!(dev.program, "npm");
         assert_eq!(dev.cwd, PathBuf::from("/tmp/repo"));
         assert_eq!(dev.args[0], "--prefix");
-        assert!(dev.args[1].replace('\\', "/").ends_with("tools/kanban/web"));
+        assert!(dev.args[1].replace('\\', "/").ends_with("/web"));
         assert_eq!(
             &dev.args[2..],
             ["run", "dev", "--", "--host", "127.0.0.1", "--port", "3000"]
