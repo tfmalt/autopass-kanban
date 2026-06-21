@@ -47,7 +47,6 @@ pub(crate) fn ensure_sprints_enabled_json(repo_root: &Path) -> anyhow::Result<()
     Ok(())
 }
 
-#[allow(dead_code)]
 pub(crate) fn ensure_epics_enabled_json(repo_root: &Path) -> anyhow::Result<()> {
     let config = load_kanban_config(repo_root)?;
     if !config.features().epics {
@@ -233,23 +232,31 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
         },
         Command::Epic {
             command: EpicCommand::Show { id, repo_root },
-        } => match find_epic_with_source(repo_root, id) {
-            Ok(Some((details, source))) => {
-                let dto = EpicShowDto::from_details_and_source(&details, &source);
-                print_envelope(&JsonEnvelope::ok("epic.show", dto))
+        } => {
+            if let Err(error) = ensure_epics_enabled_json(repo_root) {
+                return print_envelope(&JsonEnvelope::<EpicShowDto>::error(
+                    "epic.show",
+                    KanbanErrorBody::from_anyhow(&error),
+                ));
             }
-            Ok(None) => {
-                let body = KanbanErrorBody::new(
-                    KanbanErrorCode::EpicNotFound,
-                    format!("No epic matches id '{id}'"),
-                );
-                print_envelope(&JsonEnvelope::<EpicShowDto>::error("epic.show", body))
+            match find_epic_with_source(repo_root, id) {
+                Ok(Some((details, source))) => {
+                    let dto = EpicShowDto::from_details_and_source(&details, &source);
+                    print_envelope(&JsonEnvelope::ok("epic.show", dto))
+                }
+                Ok(None) => {
+                    let body = KanbanErrorBody::new(
+                        KanbanErrorCode::EpicNotFound,
+                        format!("No epic matches id '{id}'"),
+                    );
+                    print_envelope(&JsonEnvelope::<EpicShowDto>::error("epic.show", body))
+                }
+                Err(error) => print_envelope(&JsonEnvelope::<EpicShowDto>::error(
+                    "epic.show",
+                    KanbanErrorBody::from_anyhow(&error),
+                )),
             }
-            Err(error) => print_envelope(&JsonEnvelope::<EpicShowDto>::error(
-                "epic.show",
-                KanbanErrorBody::from_anyhow(&error),
-            )),
-        },
+        }
         Command::Epic {
             command:
                 EpicCommand::Update {
@@ -258,6 +265,12 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
                     repo_root,
                 },
         } => {
+            if let Err(error) = ensure_epics_enabled_json(repo_root) {
+                return print_envelope(&JsonEnvelope::<EpicUpdateDto>::error(
+                    "epic.update",
+                    KanbanErrorBody::from_anyhow(&error),
+                ));
+            }
             let updates = match json_story_frontmatter_updates(&[("priority", priority)]) {
                 Ok(updates) => updates,
                 Err(error) => {

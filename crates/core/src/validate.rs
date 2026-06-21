@@ -172,9 +172,11 @@ pub fn validate_repository(repo_root: impl AsRef<Path>) -> Result<ValidationRepo
         issues.extend(validate_sprint_readmes(&config)?);
     }
 
-    for epic_file in collect_epic_files(&repository.repo_root)? {
-        let epic = read_epic_file(epic_file, &repository.repo_root)?;
-        issues.extend(validate_epic(&epic));
+    if features.epics {
+        for epic_file in collect_epic_files(&repository.repo_root)? {
+            let epic = read_epic_file(epic_file, &repository.repo_root)?;
+            issues.extend(validate_epic(&epic));
+        }
     }
 
     for story in &repository.stories {
@@ -820,6 +822,34 @@ mod tests {
                 .any(|rule| rule.starts_with("missing-sprint-readme-field")
                     || *rule == "invalid-sprint-readme-status"),
             "sprint readme validation must be skipped when sprints are disabled"
+        );
+    }
+
+    #[test]
+    fn validate_story_skips_epic_field_when_epics_feature_disabled() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        set_config_value(temp_root.path(), "features.epics", "false").unwrap();
+
+        let story_path = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-091-no-epic.md");
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-091\ntype: user-story\nstatus: todo\nsprint: S001.foundation\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(story_path, temp_root.path()).unwrap();
+        let config = load_kanban_config(temp_root.path()).unwrap();
+        let features = config.features();
+        assert!(!features.epics);
+        let issues = validate_story(&story, &features);
+        let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+        assert!(
+            !rules.contains(&"missing-field:epic"),
+            "epic must not be required when the epics feature is off"
         );
     }
 }

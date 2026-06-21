@@ -325,15 +325,21 @@ fn main() -> Result<()> {
             }
         },
         Command::Epic { command } => match command {
-            EpicCommand::Show { id, repo_root } => match find_epic(repo_root, &id)? {
-                Some(details) => print_epic_details(&theme, OutputLayout::for_stdout()?, &details),
-                None => println!("{} {id}", theme.warning("Epic not found:")),
-            },
+            EpicCommand::Show { id, repo_root } => {
+                ensure_epics_enabled(&repo_root)?;
+                match find_epic(repo_root, &id)? {
+                    Some(details) => {
+                        print_epic_details(&theme, OutputLayout::for_stdout()?, &details)
+                    }
+                    None => println!("{} {id}", theme.warning("Epic not found:")),
+                }
+            }
             EpicCommand::Update {
                 id,
                 priority,
                 repo_root,
             } => {
+                ensure_epics_enabled(&repo_root)?;
                 let mut updates = Vec::new();
                 match priority {
                     Some(Some(value)) => updates.push(("priority".to_string(), value)),
@@ -935,7 +941,6 @@ fn ensure_sprints_enabled(repo_root: impl AsRef<Path>) -> Result<()> {
     ensure_feature_enabled(repo_root, "sprints", &config.features())
 }
 
-#[allow(dead_code)]
 fn ensure_epics_enabled(repo_root: impl AsRef<Path>) -> Result<()> {
     let config = kanban_core::load_kanban_config(repo_root.as_ref())?;
     ensure_feature_enabled(repo_root, "epics", &config.features())
