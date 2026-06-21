@@ -129,7 +129,7 @@ pub fn plan_story_into_sprint(
     let config = load_kanban_config(repo_root)?;
     if !config.features().sprints {
         bail!(
-            "Sprints are disabled in .kanban/paths.json. Run `kanban features enable sprints` to re-enable them."
+            "Sprints are disabled in .kanban/settings.json. Run `kanban features enable sprints` to re-enable them."
         );
     }
     let repo_root = config.repo_root.clone();

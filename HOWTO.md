@@ -9,7 +9,7 @@ The kanban web server runs in a long-lived Docker container with the embedded Ru
 | Docker Engine | 24.x | `docker --version` |
 | Docker Compose plugin | v2 | `docker compose version` |
 | Kanban repo cloned at | `/git/autopass-kanban` | `ls /git/autopass-kanban/Cargo.toml` |
-| AutoPASS IP 2.0 repo cloned at | `/git/ip-2.0` | `ls /git/ip-2.0/.kanban/paths.json` |
+| AutoPASS IP 2.0 repo cloned at | `/git/ip-2.0` | `ls /git/ip-2.0/.kanban/settings.json` |
 
 ## Start the web UI
 

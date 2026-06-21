@@ -113,7 +113,7 @@ pub fn ensure_sprints_enabled_for_repo(repo_root: impl AsRef<Path>) -> Result<()
     let config = load_kanban_config(repo_root)?;
     if !config.features().sprints {
         bail!(
-            "Sprints are disabled in .kanban/paths.json. Run `kanban features enable sprints` to re-enable them."
+            "Sprints are disabled in .kanban/settings.json. Run `kanban features enable sprints` to re-enable them."
         );
     }
     Ok(())

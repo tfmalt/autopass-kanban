@@ -88,7 +88,7 @@ pub(crate) enum SprintCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "List sprint files. Effect: read-only inspection of the configured sprint path from `.kanban/paths.json`. Side effects: none."
+        about = "List sprint files. Effect: read-only inspection of the configured sprint path from `.kanban/settings.json`. Side effects: none."
     )]
     List {
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
@@ -110,8 +110,8 @@ pub(crate) enum SprintCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Create a sprint file. Effect: writes one S###.slug.md file under the configured sprint path from `.kanban/paths.json`. Side effects: prompts for metadata unless --non-interactive or at least one of --number/--headline/--start/--end is supplied.",
-        long_about = "Create a sprint file. Effect: writes one S###.slug.md file under the configured sprint path from `.kanban/paths.json`. Side effects: prompts for metadata unless --non-interactive or at least one of --number/--headline/--start/--end is supplied.\n\nNon-interactive behavior:\n  `--headline` is required whenever flags are used to build the sprint without prompts.\n  `--number` defaults to the next suggested sprint number.\n  `--start` defaults to the suggested next start date, or today if no sprint history exists.\n  `--end` defaults to the suggested next end date, or a derived end date from the chosen start date.\n\nExample:\n  kanban sprint create --non-interactive --headline foundation --start 2026-06-01 --end 2026-06-12"
+        about = "Create a sprint file. Effect: writes one S###.slug.md file under the configured sprint path from `.kanban/settings.json`. Side effects: prompts for metadata unless --non-interactive or at least one of --number/--headline/--start/--end is supplied.",
+        long_about = "Create a sprint file. Effect: writes one S###.slug.md file under the configured sprint path from `.kanban/settings.json`. Side effects: prompts for metadata unless --non-interactive or at least one of --number/--headline/--start/--end is supplied.\n\nNon-interactive behavior:\n  `--headline` is required whenever flags are used to build the sprint without prompts.\n  `--number` defaults to the next suggested sprint number.\n  `--start` defaults to the suggested next start date, or today if no sprint history exists.\n  `--end` defaults to the suggested next end date, or a derived end date from the chosen start date.\n\nExample:\n  kanban sprint create --non-interactive --headline foundation --start 2026-06-01 --end 2026-06-12"
     )]
     Create {
         #[arg(
@@ -569,7 +569,7 @@ pub(crate) enum FeatureName {
 #[derive(Subcommand)]
 pub(crate) enum FeaturesCommand {
     #[command(
-        about = "List enabled and disabled optional features. Effect: read-only inspection of `.kanban/paths.json`. Side effects: none."
+        about = "List enabled and disabled optional features. Effect: read-only inspection of `.kanban/settings.json`. Side effects: none."
     )]
     List {
         #[arg(help = "Repository path to inspect. Defaults to the current directory.")]
@@ -577,7 +577,7 @@ pub(crate) enum FeaturesCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Enable an optional feature. Effect: edits `.kanban/paths.json`. Side effects: re-enables subcommands and validation rules for the feature."
+        about = "Enable an optional feature. Effect: edits `.kanban/settings.json`. Side effects: re-enables subcommands and validation rules for the feature."
     )]
     Enable {
         #[arg(help = "Feature to enable: sprints, epics, or phases.")]
@@ -587,7 +587,7 @@ pub(crate) enum FeaturesCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Disable an optional feature. Effect: edits `.kanban/paths.json`. Side effects: hides subcommands and skips validation rules for the feature."
+        about = "Disable an optional feature. Effect: edits `.kanban/settings.json`. Side effects: hides subcommands and skips validation rules for the feature."
     )]
     Disable {
         #[arg(help = "Feature to disable: sprints, epics, or phases.")]
@@ -837,7 +837,7 @@ pub(crate) enum Command {
         command: ReportCommand,
     },
     #[command(
-        about = "Toggle optional backlog features (phases, sprints, epics). Effect: edits `.kanban/paths.json`. Side effects: changes which subcommands and validation rules apply."
+        about = "Toggle optional backlog features (phases, sprints, epics). Effect: edits `.kanban/settings.json`. Side effects: changes which subcommands and validation rules apply."
     )]
     Features {
         #[command(subcommand)]

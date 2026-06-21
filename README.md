@@ -88,11 +88,11 @@ Implemented commands:
 
 ## Repository configuration
 
-Run `kanban init` once per repository. This creates `.kanban/` in the git root with:
+Run `kanban init` once per repository. This creates `.kanban/settings.json` in the git root with:
 
-- `paths.json` for backlog and sprint file locations, defaulting to `delivery/backlog` and `delivery/sprints`
-- `theme.json` for terminal color behavior
-- `story-points.json` for allowed values and alias conversion
+- backlog and sprint file locations, defaulting to `delivery/backlog` and `delivery/sprints`
+- terminal color behavior
+- allowed story point values and alias conversion
 
 If `.kanban/` is missing, operational commands fail with a prompt to run `kanban init`.
 
@@ -102,7 +102,7 @@ The phases, sprints, and epics concepts are all optional. Each can be disabled
 when the repository does not organize work that way. Disable features at init
 time with `kanban init --no-sprints --no-epics --no-phases`, or toggle them
 later with `kanban features disable <sprints|epics|phases>`. The current state
-is recorded in `.kanban/paths.json` under the `features` block.
+is recorded in `.kanban/settings.json` under the `paths.features` block.
 
 When a feature is disabled:
 

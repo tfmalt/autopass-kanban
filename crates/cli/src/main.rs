@@ -930,7 +930,7 @@ fn ensure_feature_enabled(
     };
     if !enabled {
         bail!(
-            "Feature '{feature}' is disabled in .kanban/paths.json. Run `kanban features enable {feature}` to re-enable it. (repo: {})",
+            "Feature '{feature}' is disabled in .kanban/settings.json. Run `kanban features enable {feature}` to re-enable it. (repo: {})",
             repo_root.as_ref().display()
         );
     }

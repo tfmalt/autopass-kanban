@@ -43,6 +43,6 @@ For changes that modify markdown parsing or writing behavior, also run:
 - `cargo run -p kanban-cli -- validate .`
 - `cargo run -p kanban-cli -- doctor .`
 
-The `.` argument tells the CLI to use the current directory as the target repository root, reading backlog configuration from `.kanban/paths.json`. To verify against a different backlog, replace `.` with the path to that repository's root.
+The `.` argument tells the CLI to use the current directory as the target repository root, reading backlog configuration from `.kanban/settings.json`. To verify against a different backlog, replace `.` with the path to that repository's root.
 
 If a command cannot be run, report the reason and what remains unverified.

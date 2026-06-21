@@ -34,7 +34,7 @@ pub(crate) fn invalid_argument_envelope<T: Serialize>(
 
 fn feature_disabled_error(feature: &str, repo_root: &Path) -> anyhow::Error {
     anyhow::anyhow!(
-        "Feature '{feature}' is disabled in .kanban/paths.json. Run `kanban features enable {feature}` to re-enable it. (repo: {})",
+        "Feature '{feature}' is disabled in .kanban/settings.json. Run `kanban features enable {feature}` to re-enable it. (repo: {})",
         repo_root.display()
     )
 }
