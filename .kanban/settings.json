@@ -3,8 +3,8 @@
     "backlog": "delivery/backlog",
     "features": {
       "epics": true,
-      "phases": true,
-      "sprints": true
+      "phases": false,
+      "sprints": false
     },
     "sprints": "delivery/sprints"
   },
@@ -35,5 +35,10 @@
     "host": "127.0.0.1",
     "port": 3000,
     "style": "calm-light"
+  },
+  "team": {
+    "name": "Thomas Malt",
+    "email": "thomas.malt@vegvesen.no",
+    "avatarUrl": "https://ca.slack-edge.com/T09DFLSTHFF-U09KQUG0DTN-1782ec94ce12-512"
   }
 }
