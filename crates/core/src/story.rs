@@ -27,7 +27,9 @@ pub fn move_story_to_status_with_assignee(
     target_status: &str,
     assignee_override: Option<&str>,
 ) -> Result<MoveStoryResult> {
-    let repository = read_repository(repo_root)?;
+    let config = load_kanban_config(repo_root)?;
+    let sprints_enabled = config.features().sprints;
+    let repository = read_repository(&config.repo_root)?;
     let normalized_story_id = story_id.trim().to_ascii_uppercase();
     let normalized_status = normalize_story_status_input(target_status)?;
     let assignee_override = match assignee_override {
@@ -50,12 +52,16 @@ pub fn move_story_to_status_with_assignee(
         .cloned()
         .ok_or_else(|| anyhow!("Story not found: {normalized_story_id}"))?;
 
-    let sprint_name = story
-        .frontmatter
-        .get("sprint")
-        .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
-        .cloned()
-        .ok_or_else(|| anyhow!("Story {normalized_story_id} is not assigned to a sprint."))?;
+    let sprint_name = if sprints_enabled {
+        story
+            .frontmatter
+            .get("sprint")
+            .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
+            .cloned()
+            .ok_or_else(|| anyhow!("Story {normalized_story_id} is not assigned to a sprint."))?
+    } else {
+        String::new()
+    };
     let current_status = story.frontmatter.get("status").cloned().unwrap_or_default();
 
     let assignee_update = if normalized_status == "in-progress" {
@@ -98,7 +104,9 @@ pub fn move_story_to_status_with_assignee(
     )?;
     fs::write(&story.file_path, story_markdown)
         .with_context(|| format!("rewrite story {}", story.file_path.display()))?;
-    regenerate_sprint_roster(&load_kanban_config(&repository.repo_root)?, &sprint_name)?;
+    if sprints_enabled {
+        regenerate_sprint_roster(&load_kanban_config(&repository.repo_root)?, &sprint_name)?;
+    }
 
     Ok(MoveStoryResult {
         story_id: normalized_story_id,
@@ -119,6 +127,11 @@ pub fn plan_story_into_sprint(
     sprint_name: &str,
 ) -> Result<PlanStoryResult> {
     let config = load_kanban_config(repo_root)?;
+    if !config.features().sprints {
+        bail!(
+            "Sprints are disabled in .kanban/paths.json. Run `kanban features enable sprints` to re-enable them."
+        );
+    }
     let repo_root = config.repo_root.clone();
     let normalized_story_id = story_id.trim().to_ascii_uppercase();
 

@@ -154,12 +154,16 @@ pub fn read_story_file(file_path: impl AsRef<Path>, repo_root: impl AsRef<Path>)
         .with_context(|| format!("read story file {}", file_path.display()))?;
     let parsed = parse_frontmatter(&markdown);
     let location = story_location(&file_path, &config);
-    let sprint_name = parsed
-        .frontmatter
-        .get("sprint")
-        .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
-        .cloned()
-        .or(location.sprint_name.clone());
+    let sprint_name = if config.features().sprints {
+        parsed
+            .frontmatter
+            .get("sprint")
+            .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
+            .cloned()
+            .or(location.sprint_name.clone())
+    } else {
+        None
+    };
     let sibling_task_file_path = file_path.with_extension("tasks.md");
     let referenced_task_file_path = parsed
         .frontmatter

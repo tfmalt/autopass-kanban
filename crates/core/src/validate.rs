@@ -9,7 +9,16 @@ use crate::sprint::*;
 use crate::story::*;
 use crate::util::*;
 
-pub fn validate_story(story: &Story) -> Vec<ValidationIssue> {
+/// Returns whether a given story frontmatter field is required, given the active feature flags.
+fn field_required_when_features(field_name: &str, features: &FeaturesConfig) -> bool {
+    match field_name {
+        "sprint" => features.sprints,
+        "epic" => features.epics,
+        _ => true,
+    }
+}
+
+pub fn validate_story(story: &Story, features: &FeaturesConfig) -> Vec<ValidationIssue> {
     let config = story
         .file_path
         .parent()
@@ -17,6 +26,9 @@ pub fn validate_story(story: &Story) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
     for field_name in REQUIRED_STORY_FIELDS {
+        if !field_required_when_features(field_name, features) {
+            continue;
+        }
         if !story.frontmatter_keys.contains(field_name) {
             add_issue(
                 story,
@@ -85,10 +97,11 @@ pub fn validate_story(story: &Story) -> Vec<ValidationIssue> {
     validate_timestamp_field(story, &mut issues, "work_started", true, false);
     validate_timestamp_field(story, &mut issues, "work_done", true, false);
 
-    if story
-        .frontmatter
-        .get("sprint")
-        .is_some_and(|sprint| !sprint.trim().is_empty() && sprint.as_str() != "~")
+    if features.sprints
+        && story
+            .frontmatter
+            .get("sprint")
+            .is_some_and(|sprint| !sprint.trim().is_empty() && sprint.as_str() != "~")
     {
         if let Some(sprint) = story.frontmatter.get("sprint")
             && validate_story_sprint_frontmatter(sprint).is_err()
@@ -154,7 +167,10 @@ pub fn validate_repository(repo_root: impl AsRef<Path>) -> Result<ValidationRepo
     let mut issues = Vec::new();
     let config = load_kanban_config(&repository.repo_root)?;
 
-    issues.extend(validate_sprint_readmes(&config)?);
+    let features = config.features();
+    if features.sprints {
+        issues.extend(validate_sprint_readmes(&config)?);
+    }
 
     for epic_file in collect_epic_files(&repository.repo_root)? {
         let epic = read_epic_file(epic_file, &repository.repo_root)?;
@@ -162,7 +178,7 @@ pub fn validate_repository(repo_root: impl AsRef<Path>) -> Result<ValidationRepo
     }
 
     for story in &repository.stories {
-        issues.extend(validate_story(story));
+        issues.extend(validate_story(story, &features));
         if let Some(task_file) = &story.task_file
             && !task_file.exists
             && story.frontmatter.get("status").map(String::as_str) != Some("todo")
@@ -424,7 +440,7 @@ mod tests {
         );
 
         let story = read_story_file(story_path, temp_root.path()).unwrap();
-        assert!(validate_story(&story).is_empty());
+        assert!(validate_story(&story, &FeaturesConfig::default()).is_empty());
     }
 
     #[test]
@@ -443,7 +459,7 @@ mod tests {
         .unwrap();
 
         let story = read_story_file(story_path, temp_root.path()).unwrap();
-        let issues = validate_story(&story);
+        let issues = validate_story(&story, &FeaturesConfig::default());
         let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
         assert!(!rules.contains(&"missing-field:assignee"));
@@ -467,7 +483,7 @@ mod tests {
         .unwrap();
 
         let story = read_story_file(story_path, temp_root.path()).unwrap();
-        let issues = validate_story(&story);
+        let issues = validate_story(&story, &FeaturesConfig::default());
         let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
         assert!(!rules.contains(&"non-canonical-status"));
@@ -490,7 +506,7 @@ mod tests {
             .unwrap();
 
             let story = read_story_file(story_path, temp_root.path()).unwrap();
-            let issues = validate_story(&story);
+            let issues = validate_story(&story, &FeaturesConfig::default());
             let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
             assert!(!rules.contains(&"invalid-timestamp:work_started"));
@@ -521,7 +537,7 @@ mod tests {
             .unwrap();
 
             let story = read_story_file(story_path, temp_root.path()).unwrap();
-            let issues = validate_story(&story);
+            let issues = validate_story(&story, &FeaturesConfig::default());
             let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
             assert!(!rules.contains(&"invalid-timestamp:work_done"));
@@ -544,7 +560,7 @@ mod tests {
         .unwrap();
 
         let story = read_story_file(story_path, temp_root.path()).unwrap();
-        let issues = validate_story(&story);
+        let issues = validate_story(&story, &FeaturesConfig::default());
         let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
         assert!(rules.contains(&"invalid-timestamp:work_done"));
@@ -566,7 +582,7 @@ mod tests {
         .unwrap();
 
         let story = read_story_file(story_path, temp_root.path()).unwrap();
-        let issues = validate_story(&story);
+        let issues = validate_story(&story, &FeaturesConfig::default());
         let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
         assert!(!rules.contains(&"missing-field:assignee"));
@@ -588,7 +604,7 @@ mod tests {
         .unwrap();
 
         let story = read_story_file(story_path, temp_root.path()).unwrap();
-        let issues = validate_story(&story);
+        let issues = validate_story(&story, &FeaturesConfig::default());
         let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
         assert!(rules.contains(&"missing-field:assignee"));
@@ -610,7 +626,7 @@ mod tests {
         .unwrap();
 
         let story = read_story_file(story_path, temp_root.path()).unwrap();
-        let issues = validate_story(&story);
+        let issues = validate_story(&story, &FeaturesConfig::default());
         let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
         assert!(rules.contains(&"missing-field:assignee"));
@@ -632,7 +648,7 @@ mod tests {
         .unwrap();
 
         let story = read_story_file(story_path, temp_root.path()).unwrap();
-        let issues = validate_story(&story);
+        let issues = validate_story(&story, &FeaturesConfig::default());
         let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
         assert!(rules.contains(&"invalid-priority"));
@@ -654,7 +670,7 @@ mod tests {
         .unwrap();
 
         let story = read_story_file(story_path, temp_root.path()).unwrap();
-        let issues = validate_story(&story);
+        let issues = validate_story(&story, &FeaturesConfig::default());
         let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
         assert!(rules.contains(&"invalid-sprint"));
@@ -748,5 +764,62 @@ mod tests {
 
         assert_eq!(story.sprint_name.as_deref(), Some("S001.foundation"));
         assert!(validation.issues.is_empty());
+    }
+
+    #[test]
+    fn validate_story_skips_sprint_field_when_sprints_feature_disabled() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        set_config_value(temp_root.path(), "features.sprints", "false").unwrap();
+        set_config_value(temp_root.path(), "paths.sprints", "").unwrap();
+
+        let story_path = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-090-no-sprint.md");
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-090\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(story_path, temp_root.path()).unwrap();
+        let config = load_kanban_config(temp_root.path()).unwrap();
+        let features = config.features();
+        assert!(!features.sprints);
+        assert!(story.sprint_name.is_none());
+        let issues = validate_story(&story, &features);
+        let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+        assert!(
+            !rules.contains(&"missing-field:sprint"),
+            "sprint must not be required when the sprints feature is off"
+        );
+    }
+
+    #[test]
+    fn validate_repository_skips_sprint_readmes_when_feature_disabled() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        set_config_value(temp_root.path(), "features.sprints", "false").unwrap();
+        set_config_value(temp_root.path(), "paths.sprints", "").unwrap();
+
+        // A stale sprint file is left on disk to prove the validator ignores it.
+        let stale_sprint = temp_root.path().join("delivery/sprints/S001.foundation.md");
+        fs::create_dir_all(stale_sprint.parent().unwrap()).unwrap();
+        fs::write(
+            &stale_sprint,
+            "---\nsprint: S001\nheadline: foundation\nstart_date: 2099-06-01\nend_date: 2099-06-12\nstatus: not-a-real-status\nwip_limit: ~\n---\n# S001\n",
+        )
+        .unwrap();
+
+        let report = validate_repository(temp_root.path()).unwrap();
+        let rules: Vec<&str> = report.issues.iter().map(|i| i.rule.as_str()).collect();
+        assert!(
+            !rules
+                .iter()
+                .any(|rule| rule.starts_with("missing-sprint-readme-field")
+                    || *rule == "invalid-sprint-readme-status"),
+            "sprint readme validation must be skipped when sprints are disabled"
+        );
     }
 }

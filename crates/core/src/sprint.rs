@@ -109,6 +109,16 @@ pub fn list_stories_in_sprint(
     Ok(flatten_sprint_stories(&sprint))
 }
 
+pub fn ensure_sprints_enabled_for_repo(repo_root: impl AsRef<Path>) -> Result<()> {
+    let config = load_kanban_config(repo_root)?;
+    if !config.features().sprints {
+        bail!(
+            "Sprints are disabled in .kanban/paths.json. Run `kanban features enable sprints` to re-enable them."
+        );
+    }
+    Ok(())
+}
+
 pub fn suggested_next_sprint_number(repo_root: impl AsRef<Path>) -> Result<u32> {
     let config = load_kanban_config(repo_root)?;
     let specs = discover_sprint_folder_specs(&config)?;

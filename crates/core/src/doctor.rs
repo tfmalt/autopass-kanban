@@ -366,7 +366,12 @@ pub(crate) fn collect_doctor_issues_at_date(
     let repository = read_repository(repo_root)?;
     let validation = validate_repository(&repository.repo_root)?;
     let config = load_kanban_config(&repository.repo_root)?;
-    let sprint_specs = discover_sprint_folder_specs(&config)?;
+    let sprints_enabled = config.features().sprints;
+    let sprint_specs = if sprints_enabled {
+        discover_sprint_folder_specs(&config)?
+    } else {
+        Vec::new()
+    };
     let mut findings = Vec::new();
 
     let stories_by_path = repository
@@ -410,63 +415,115 @@ pub(crate) fn collect_doctor_issues_at_date(
         });
     }
 
-    let sprint_names = sprint_specs
-        .iter()
-        .map(|spec| spec.sprint_name.clone())
-        .collect::<BTreeSet<_>>();
+    if sprints_enabled {
+        let sprint_names = sprint_specs
+            .iter()
+            .map(|spec| spec.sprint_name.clone())
+            .collect::<BTreeSet<_>>();
 
-    for story in &repository.stories {
-        let story_id = story.frontmatter.get("id").cloned();
-        let sprint_name = story
-            .frontmatter
-            .get("sprint")
-            .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
-            .cloned();
-        let status = story
-            .frontmatter
-            .get("status")
-            .map(String::as_str)
-            .unwrap_or_default();
+        for story in &repository.stories {
+            let story_id = story.frontmatter.get("id").cloned();
+            let sprint_name = story
+                .frontmatter
+                .get("sprint")
+                .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
+                .cloned();
+            let status = story
+                .frontmatter
+                .get("status")
+                .map(String::as_str)
+                .unwrap_or_default();
 
-        if let Some(sprint_name) = sprint_name.as_ref()
-            && !sprint_names.contains(sprint_name)
-        {
-            findings.push(DoctorIssue {
-                severity: "error".to_string(),
-                scope: story.relative_path.display().to_string(),
-                file_path: Some(story.relative_path.clone()),
-                story_id: story_id.clone(),
-                sprint_name: Some(sprint_name.clone()),
-                rule: "orphan-sprint-ref".to_string(),
-                message: format!(
-                    "Story references sprint `{sprint_name}`, but no matching sprint file exists."
-                ),
-                suggestion: "Update the story `sprint` field or create the missing sprint file."
-                    .to_string(),
-                fix_preview: None,
-                fix_kind: DoctorFixKind::ManualOnly,
-                prompt: DoctorPrompt::None,
-            });
-        }
-
-        if matches!(
-            status,
-            "todo" | "in-progress" | "ready-for-qa" | "done" | "blocked"
-        ) && sprint_name.is_none()
-        {
-            findings.push(DoctorIssue {
-                severity: "error".to_string(),
-                scope: story.relative_path.display().to_string(),
-                file_path: Some(story.relative_path.clone()),
-                story_id: story_id.clone(),
-                sprint_name: None,
-                rule: "status-without-sprint".to_string(),
-                message: format!(
-                    "Story is in board status `{status}` but has no sprint assignment."
-                ),
-                suggestion:
-                    "Assign the story to a sprint or move it back to a backlog-only status."
+            if let Some(sprint_name) = sprint_name.as_ref()
+                && !sprint_names.contains(sprint_name)
+            {
+                findings.push(DoctorIssue {
+                    severity: "error".to_string(),
+                    scope: story.relative_path.display().to_string(),
+                    file_path: Some(story.relative_path.clone()),
+                    story_id: story_id.clone(),
+                    sprint_name: Some(sprint_name.clone()),
+                    rule: "orphan-sprint-ref".to_string(),
+                    message: format!(
+                        "Story references sprint `{sprint_name}`, but no matching sprint file exists."
+                    ),
+                    suggestion: "Update the story `sprint` field or create the missing sprint file."
                         .to_string(),
+                    fix_preview: None,
+                    fix_kind: DoctorFixKind::ManualOnly,
+                    prompt: DoctorPrompt::None,
+                });
+            }
+
+            if matches!(
+                status,
+                "todo" | "in-progress" | "ready-for-qa" | "done" | "blocked"
+            ) && sprint_name.is_none()
+            {
+                findings.push(DoctorIssue {
+                    severity: "error".to_string(),
+                    scope: story.relative_path.display().to_string(),
+                    file_path: Some(story.relative_path.clone()),
+                    story_id: story_id.clone(),
+                    sprint_name: None,
+                    rule: "status-without-sprint".to_string(),
+                    message: format!(
+                        "Story is in board status `{status}` but has no sprint assignment."
+                    ),
+                    suggestion:
+                        "Assign the story to a sprint or move it back to a backlog-only status."
+                            .to_string(),
+                    fix_preview: None,
+                    fix_kind: DoctorFixKind::ManualOnly,
+                    prompt: DoctorPrompt::None,
+                });
+            }
+        }
+    }
+
+    if sprints_enabled {
+        let current_by_date: Vec<_> = sprint_specs
+            .iter()
+            .filter(|spec| date_in_range(today, spec.start_date, spec.end_date))
+            .collect();
+
+        if current_by_date.is_empty() {
+            findings.push(DoctorIssue {
+                severity: "warning".to_string(),
+                scope: "sprints".to_string(),
+                file_path: None,
+                story_id: None,
+                sprint_name: None,
+                rule: "missing-current-sprint".to_string(),
+                message: format!(
+                    "No sprint folder date range includes {}. Current sprint detection cannot succeed until sprint dates are corrected.",
+                    today.format("%Y-%m-%d")
+                ),
+                suggestion: "Select the sprint that should be current and update its README dates or status.".to_string(),
+                fix_preview: None,
+                fix_kind: DoctorFixKind::ManualOnly,
+                prompt: DoctorPrompt::None,
+            });
+        }
+
+        if current_by_date.len() > 1 {
+            findings.push(DoctorIssue {
+                severity: "error".to_string(),
+                scope: "sprints".to_string(),
+                file_path: None,
+                story_id: None,
+                sprint_name: None,
+                rule: "multiple-current-sprints".to_string(),
+                message: format!(
+                    "Multiple sprint folders include {}: {}.",
+                    today.format("%Y-%m-%d"),
+                    current_by_date
+                        .iter()
+                        .map(|spec| spec.sprint_name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                suggestion: "Choose which sprint should stay current, then update the other sprint README dates so only one range includes today.".to_string(),
                 fix_preview: None,
                 fix_kind: DoctorFixKind::ManualOnly,
                 prompt: DoctorPrompt::None,
@@ -474,61 +531,15 @@ pub(crate) fn collect_doctor_issues_at_date(
         }
     }
 
-    let current_by_date: Vec<_> = sprint_specs
-        .iter()
-        .filter(|spec| date_in_range(today, spec.start_date, spec.end_date))
-        .collect();
-
-    if current_by_date.is_empty() {
-        findings.push(DoctorIssue {
-            severity: "warning".to_string(),
-            scope: "sprints".to_string(),
-            file_path: None,
-            story_id: None,
-            sprint_name: None,
-            rule: "missing-current-sprint".to_string(),
-            message: format!(
-                "No sprint folder date range includes {}. Current sprint detection cannot succeed until sprint dates are corrected.",
-                today.format("%Y-%m-%d")
-            ),
-            suggestion: "Select the sprint that should be current and update its README dates or status.".to_string(),
-            fix_preview: None,
-            fix_kind: DoctorFixKind::ManualOnly,
-            prompt: DoctorPrompt::None,
-        });
-    }
-
-    if current_by_date.len() > 1 {
-        findings.push(DoctorIssue {
-            severity: "error".to_string(),
-            scope: "sprints".to_string(),
-            file_path: None,
-            story_id: None,
-            sprint_name: None,
-            rule: "multiple-current-sprints".to_string(),
-            message: format!(
-                "Multiple sprint folders include {}: {}.",
-                today.format("%Y-%m-%d"),
-                current_by_date
-                    .iter()
-                    .map(|spec| spec.sprint_name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            suggestion: "Choose which sprint should stay current, then update the other sprint README dates so only one range includes today.".to_string(),
-            fix_preview: None,
-            fix_kind: DoctorFixKind::ManualOnly,
-            prompt: DoctorPrompt::None,
-        });
-    }
-
-    for spec in sprint_specs {
-        findings.extend(doctor_findings_for_sprint(
-            &repository.repo_root,
-            &repository,
-            &spec,
-            today,
-        ));
+    if sprints_enabled {
+        for spec in sprint_specs {
+            findings.extend(doctor_findings_for_sprint(
+                &repository.repo_root,
+                &repository,
+                &spec,
+                today,
+            ));
+        }
     }
 
     for epic_file in collect_epic_files(&repository.repo_root)? {
@@ -1270,6 +1281,37 @@ mod tests {
         assert_eq!(
             issue.fix_preview.as_ref().map(|p| p.new_value.as_str()),
             Some("in-progress")
+        );
+    }
+
+    #[test]
+    fn doctor_skips_sprint_rules_when_sprints_feature_disabled() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        set_config_value(temp_root.path(), "features.sprints", "false").unwrap();
+        set_config_value(temp_root.path(), "paths.sprints", "").unwrap();
+
+        // Story in board status with no sprint — would normally trigger
+        // status-without-sprint, but the feature is off.
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-099-orphan.md",
+            "id: US-F1-099\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let issues = collect_doctor_issues(temp_root.path()).unwrap();
+        let rules: Vec<&str> = issues.iter().map(|i| i.rule.as_str()).collect();
+        assert!(
+            !rules.contains(&"status-without-sprint"),
+            "status-without-sprint must not fire when sprints are disabled"
+        );
+        assert!(
+            !rules.contains(&"missing-current-sprint"),
+            "missing-current-sprint must not fire when sprints are disabled"
+        );
+        assert!(
+            !rules.contains(&"multiple-current-sprints"),
+            "multiple-current-sprints must not fire when sprints are disabled"
         );
     }
 

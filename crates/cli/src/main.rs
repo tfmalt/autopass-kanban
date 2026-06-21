@@ -178,10 +178,12 @@ fn main() -> Result<()> {
         },
         Command::Sprint { command } => match command {
             SprintCommand::Current { repo_root } => {
+                ensure_sprints_enabled(&repo_root)?;
                 let sprint = summarize_current_sprint(repo_root)?;
                 print_sprint_overview(&theme, OutputLayout::for_stdout()?, &sprint);
             }
             SprintCommand::List { repo_root } => {
+                ensure_sprints_enabled(&repo_root)?;
                 let sprints = summarize_sprints(repo_root)?;
                 for sprint in sprints {
                     println!(
@@ -202,6 +204,7 @@ fn main() -> Result<()> {
                 short,
                 repo_root,
             } => {
+                ensure_sprints_enabled(&repo_root)?;
                 let sprint = if let Some(name) = name {
                     summarize_sprint(repo_root, &name)?
                 } else {
@@ -221,6 +224,7 @@ fn main() -> Result<()> {
                 non_interactive,
                 repo_root,
             } => {
+                ensure_sprints_enabled(&repo_root)?;
                 let any_flag =
                     number.is_some() || headline.is_some() || start.is_some() || end.is_some();
                 let input = if non_interactive || any_flag {
@@ -273,6 +277,7 @@ fn main() -> Result<()> {
                 );
             }
             SprintCommand::Rollover { name, repo_root } => {
+                ensure_sprints_enabled(&repo_root)?;
                 let sprint = summarize_sprint(&repo_root, &name)?;
                 let current_end = NaiveDate::parse_from_str(&sprint.end_date, "%Y-%m-%d")?;
                 let (suggested_start, suggested_end) = suggested_sprint_dates(current_end);
@@ -298,6 +303,7 @@ fn main() -> Result<()> {
                 print_rollover_result(&theme, &result);
             }
             SprintCommand::Sync { repo_root } => {
+                ensure_sprints_enabled(&repo_root)?;
                 let changed = sync_sprint_rosters(repo_root)?;
                 if changed.is_empty() {
                     println!(
@@ -902,6 +908,43 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn ensure_feature_enabled(
+    repo_root: impl AsRef<Path>,
+    feature: &str,
+    config: &kanban_core::FeaturesConfig,
+) -> Result<()> {
+    let enabled = match feature {
+        "sprints" => config.sprints,
+        "epics" => config.epics,
+        "phases" => config.phases,
+        _ => true,
+    };
+    if !enabled {
+        bail!(
+            "Feature '{feature}' is disabled in .kanban/paths.json. Run `kanban features enable {feature}` to re-enable it. (repo: {})",
+            repo_root.as_ref().display()
+        );
+    }
+    Ok(())
+}
+
+fn ensure_sprints_enabled(repo_root: impl AsRef<Path>) -> Result<()> {
+    let config = kanban_core::load_kanban_config(repo_root.as_ref())?;
+    ensure_feature_enabled(repo_root, "sprints", &config.features())
+}
+
+#[allow(dead_code)]
+fn ensure_epics_enabled(repo_root: impl AsRef<Path>) -> Result<()> {
+    let config = kanban_core::load_kanban_config(repo_root.as_ref())?;
+    ensure_feature_enabled(repo_root, "epics", &config.features())
+}
+
+#[allow(dead_code)]
+fn ensure_phases_enabled(repo_root: impl AsRef<Path>) -> Result<()> {
+    let config = kanban_core::load_kanban_config(repo_root.as_ref())?;
+    ensure_feature_enabled(repo_root, "phases", &config.features())
 }
 
 #[cfg(test)]

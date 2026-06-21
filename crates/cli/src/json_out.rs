@@ -32,6 +32,39 @@ pub(crate) fn invalid_argument_envelope<T: Serialize>(
     ))
 }
 
+fn feature_disabled_error(feature: &str, repo_root: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Feature '{feature}' is disabled in .kanban/paths.json. Run `kanban features enable {feature}` to re-enable it. (repo: {})",
+        repo_root.display()
+    )
+}
+
+pub(crate) fn ensure_sprints_enabled_json(repo_root: &Path) -> anyhow::Result<()> {
+    let config = load_kanban_config(repo_root)?;
+    if !config.features().sprints {
+        return Err(feature_disabled_error("sprints", repo_root));
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub(crate) fn ensure_epics_enabled_json(repo_root: &Path) -> anyhow::Result<()> {
+    let config = load_kanban_config(repo_root)?;
+    if !config.features().epics {
+        return Err(feature_disabled_error("epics", repo_root));
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub(crate) fn ensure_phases_enabled_json(repo_root: &Path) -> anyhow::Result<()> {
+    let config = load_kanban_config(repo_root)?;
+    if !config.features().phases {
+        return Err(feature_disabled_error("phases", repo_root));
+    }
+    Ok(())
+}
+
 pub(crate) fn completion_output(target: CompletionTarget) -> CompletionDto {
     let mut command = Args::command();
     if let Some(generator) = target.generator() {
@@ -297,14 +330,16 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
         }
         Command::Sprint {
             command: SprintCommand::Current { repo_root },
-        } => match summarize_current_sprint(repo_root) {
+        } => match ensure_sprints_enabled_json(repo_root)
+            .and_then(|_| summarize_current_sprint(repo_root))
+        {
             Ok(overview) => print_envelope(&JsonEnvelope::ok(
                 "sprint.current",
                 SprintOverviewDto::from_overview(&overview),
             )),
             Err(error) => print_envelope(&JsonEnvelope::<SprintOverviewDto>::error(
                 "sprint.current",
-                KanbanErrorBody::new(KanbanErrorCode::SprintNotFound, error.to_string()),
+                KanbanErrorBody::from_anyhow(&error),
             )),
         },
         Command::Sprint {
@@ -315,6 +350,12 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
                     repo_root,
                 },
         } => {
+            if let Err(error) = ensure_sprints_enabled_json(repo_root) {
+                return print_envelope(&JsonEnvelope::<SprintOverviewDto>::error(
+                    "sprint.show",
+                    KanbanErrorBody::from_anyhow(&error),
+                ));
+            }
             let sprint_result = match name {
                 Some(name) => summarize_sprint(repo_root, name),
                 None => summarize_current_sprint(repo_root),
@@ -332,19 +373,27 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
         }
         Command::Sprint {
             command: SprintCommand::List { repo_root },
-        } => match summarize_sprints(repo_root) {
-            Ok(sprints) => {
-                let current = summarize_current_sprint(repo_root)
-                    .ok()
-                    .map(|c| c.sprint_name);
-                let dto = SprintListDto::new(&sprints, current.as_deref());
-                print_envelope(&JsonEnvelope::ok("sprint.list", dto))
+        } => {
+            if let Err(error) = ensure_sprints_enabled_json(repo_root) {
+                return print_envelope(&JsonEnvelope::<SprintListDto>::error(
+                    "sprint.list",
+                    KanbanErrorBody::from_anyhow(&error),
+                ));
             }
-            Err(e) => print_envelope(&JsonEnvelope::<SprintListDto>::error(
-                "sprint.list",
-                KanbanErrorBody::from_anyhow(&e),
-            )),
-        },
+            match summarize_sprints(repo_root) {
+                Ok(sprints) => {
+                    let current = summarize_current_sprint(repo_root)
+                        .ok()
+                        .map(|c| c.sprint_name);
+                    let dto = SprintListDto::new(&sprints, current.as_deref());
+                    print_envelope(&JsonEnvelope::ok("sprint.list", dto))
+                }
+                Err(e) => print_envelope(&JsonEnvelope::<SprintListDto>::error(
+                    "sprint.list",
+                    KanbanErrorBody::from_anyhow(&e),
+                )),
+            }
+        }
         Command::Phase {
             command: PhaseCommand::Show { phase, repo_root },
         } => match summarize_phase(repo_root, phase) {
