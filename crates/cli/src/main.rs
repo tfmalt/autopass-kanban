@@ -396,22 +396,34 @@ fn main() -> Result<()> {
             } => {
                 let (scope, stories) = if all {
                     ("all stories".to_string(), list_all_stories(repo_root)?)
-                } else if next {
-                    let (sprint_name, stories) = list_next_sprint_stories(repo_root)?;
-                    (format!("next sprint ({sprint_name})"), stories)
-                } else if let Some(sprint_name) = sprint {
-                    (
-                        format!("sprint {sprint_name}"),
-                        list_stories_in_sprint(repo_root, &sprint_name)?,
-                    )
                 } else {
-                    let (sprint_name, stories) = list_current_sprint_stories(repo_root)?;
-                    let label = if current {
-                        format!("current sprint ({sprint_name})")
+                    let config = kanban_core::load_kanban_config(&repo_root)?;
+                    let sprints_enabled = config.features().sprints;
+                    if next {
+                        if !sprints_enabled {
+                            ensure_sprints_enabled(&repo_root)?;
+                        }
+                        let (sprint_name, stories) = list_next_sprint_stories(repo_root)?;
+                        (format!("next sprint ({sprint_name})"), stories)
+                    } else if let Some(sprint_name) = sprint {
+                        if !sprints_enabled {
+                            ensure_sprints_enabled(&repo_root)?;
+                        }
+                        (
+                            format!("sprint {sprint_name}"),
+                            list_stories_in_sprint(repo_root, &sprint_name)?,
+                        )
+                    } else if !sprints_enabled {
+                        ("all stories".to_string(), list_all_stories(repo_root)?)
                     } else {
-                        format!("active sprint ({sprint_name})")
-                    };
-                    (label, stories)
+                        let (sprint_name, stories) = list_current_sprint_stories(repo_root)?;
+                        let label = if current {
+                            format!("current sprint ({sprint_name})")
+                        } else {
+                            format!("active sprint ({sprint_name})")
+                        };
+                        (label, stories)
+                    }
                 };
                 print_story_list(&theme, &scope, &stories);
             }

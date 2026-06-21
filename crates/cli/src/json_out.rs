@@ -318,15 +318,43 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
             // Resolve scope label and story list; current/next return (name, stories) tuples.
             let list_result: Result<(String, Vec<StoryOverview>), _> = if *all {
                 list_all_stories(repo_root).map(|stories| ("all".to_string(), stories))
-            } else if *next {
-                list_next_sprint_stories(repo_root)
-                    .map(|(_name, stories)| ("next".to_string(), stories))
-            } else if let Some(sprint_id) = sprint {
-                list_stories_in_sprint(repo_root, sprint_id)
-                    .map(|stories| (format!("sprint:{sprint_id}"), stories))
             } else {
-                list_current_sprint_stories(repo_root)
-                    .map(|(_name, stories)| ("current".to_string(), stories))
+                let config = match load_kanban_config(repo_root) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return print_envelope(&JsonEnvelope::<StoryListDto>::error(
+                            "story.list",
+                            KanbanErrorBody::new(KanbanErrorCode::NotInitialized, e.to_string()),
+                        ));
+                    }
+                };
+                let sprints_enabled = config.features().sprints;
+                if *next {
+                    if !sprints_enabled {
+                        let err = feature_disabled_error("sprints", &config.repo_root);
+                        return print_envelope(&JsonEnvelope::<StoryListDto>::error(
+                            "story.list",
+                            KanbanErrorBody::from_anyhow(&err),
+                        ));
+                    }
+                    list_next_sprint_stories(&config.repo_root)
+                        .map(|(_name, stories)| ("next".to_string(), stories))
+                } else if let Some(sprint_id) = sprint {
+                    if !sprints_enabled {
+                        let err = feature_disabled_error("sprints", &config.repo_root);
+                        return print_envelope(&JsonEnvelope::<StoryListDto>::error(
+                            "story.list",
+                            KanbanErrorBody::from_anyhow(&err),
+                        ));
+                    }
+                    list_stories_in_sprint(&config.repo_root, sprint_id)
+                        .map(|stories| (format!("sprint:{sprint_id}"), stories))
+                } else if !sprints_enabled {
+                    list_all_stories(&config.repo_root).map(|stories| ("all".to_string(), stories))
+                } else {
+                    list_current_sprint_stories(&config.repo_root)
+                        .map(|(_name, stories)| ("current".to_string(), stories))
+                }
             };
             match list_result {
                 Ok((scope, stories)) => {
