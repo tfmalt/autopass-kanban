@@ -1,23 +1,17 @@
 {
   "paths": {
     "backlog": "delivery/backlog",
+    "sprints": "delivery/sprints",
     "features": {
-      "epics": true,
       "phases": false,
-      "sprints": false
-    },
-    "sprints": "delivery/sprints"
+      "sprints": false,
+      "epics": true
+    }
+  },
+  "theme": {
+    "color_mode": "auto"
   },
   "story_points": {
-    "aliases": {
-      "L": "8",
-      "M": "5",
-      "S": "3",
-      "XL": "13",
-      "XS": "2",
-      "XXL": "21",
-      "XXS": "1"
-    },
     "allowed_values": [
       "1",
       "13",
@@ -26,19 +20,20 @@
       "3",
       "5",
       "8"
-    ]
-  },
-  "theme": {
-    "color_mode": "auto"
+    ],
+    "aliases": {
+      "L": "8",
+      "M": "5",
+      "S": "3",
+      "XL": "13",
+      "XS": "2",
+      "XXL": "21",
+      "XXS": "1"
+    }
   },
   "web": {
-    "host": "127.0.0.1",
     "port": 3000,
+    "host": "127.0.0.1",
     "style": "calm-light"
-  },
-  "team": {
-    "name": "Thomas Malt",
-    "email": "thomas.malt@vegvesen.no",
-    "avatarUrl": "https://ca.slack-edge.com/T09DFLSTHFF-U09KQUG0DTN-1782ec94ce12-512"
   }
 }
