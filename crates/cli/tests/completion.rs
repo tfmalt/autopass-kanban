@@ -451,8 +451,9 @@ fn sprint_create_help_explains_non_interactive_flags() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
-    assert!(stdout.contains("at least one of"));
-    assert!(stdout.contains("--number/--headline/--start/--end is supplied"));
+    let normalized_stdout = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(normalized_stdout.contains("at least one of"));
+    assert!(normalized_stdout.contains("--number/--headline/--start/--end is supplied"));
     assert!(stdout.contains("Non-interactive behavior:"));
     assert!(stdout.contains("`--headline` is required whenever flags are used"));
     assert!(stdout.contains("kanban sprint create --non-interactive --headline foundation"));
