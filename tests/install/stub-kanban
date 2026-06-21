@@ -1,0 +1,25 @@
+#!/bin/sh
+case "${1:-}" in
+	--version|version)
+		echo "kanban 26.6.0"
+		;;
+	completion)
+		case "${2:-}" in
+			bash)
+				echo "# stub kanban bash completion"
+				echo "complete -F _kanban kanban"
+				;;
+			zsh)
+				echo "#compdef kanban"
+				echo "# stub kanban zsh completion"
+				;;
+			*)
+				echo "kanban: unknown completion shell '${2:-}'" >&2
+				exit 1
+				;;
+		esac
+		;;
+	*)
+		echo "kanban 26.6.0"
+		;;
+esac
