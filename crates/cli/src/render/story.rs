@@ -9,10 +9,25 @@ use crate::{
 use kanban_core::*;
 
 pub(crate) fn print_story_list(theme: &Theme, scope: &str, stories: &[StoryOverview]) {
-    print!("{}", render_story_list(theme, scope, stories));
+    let layout = OutputLayout::for_stdout().unwrap_or(OutputLayout { width: 80 });
+    print!("{}", render_story_list(theme, layout, scope, stories));
 }
 
-pub(crate) fn render_story_list(theme: &Theme, scope: &str, stories: &[StoryOverview]) -> String {
+fn normalize_story_status(status: &str) -> String {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "backlog" => "ready".to_string(),
+        "to do" => "todo".to_string(),
+        "in progress" => "in-progress".to_string(),
+        other => other.to_string(),
+    }
+}
+
+pub(crate) fn render_story_list(
+    theme: &Theme,
+    layout: OutputLayout,
+    scope: &str,
+    stories: &[StoryOverview],
+) -> String {
     let mut output = String::new();
     output.push_str(&format!(
         "{} {}\n",
@@ -20,18 +35,67 @@ pub(crate) fn render_story_list(theme: &Theme, scope: &str, stories: &[StoryOver
         theme.count(stories.len())
     ));
     output.push_str(&format!("{} {scope}\n", theme.label("Scope:")));
+
+    let story_table_width = sprint_story_table_width(layout.width);
+
+    let status_order = [
+        "draft",
+        "ready",
+        "todo",
+        "in-progress",
+        "ready-for-qa",
+        "done",
+        "blocked",
+        "dropped",
+    ];
+    let mut by_status: BTreeMap<&str, Vec<&StoryOverview>> = BTreeMap::new();
     for story in stories {
-        let sprint = story.sprint.as_deref().unwrap_or("~");
-        output.push_str(&format!(
-            "- {} [{}] sprint={} assignee={} {} {}\n",
-            theme.id(&story.id),
-            theme.status(&story.status),
-            sprint,
-            story.assignee,
-            theme.story_points(format_story_points(&story.story_points)),
-            story.title
-        ));
+        let normalized = normalize_story_status(&story.status);
+        let key = status_order
+            .iter()
+            .find(|&&s| s == normalized)
+            .copied()
+            .unwrap_or("ready");
+        by_status.entry(key).or_default().push(story);
     }
+
+    let all_stories_points_width = story_points_column_width(stories.iter());
+
+    let mut has_previous_section = false;
+    for status in status_order {
+        let Some(bucket) = by_status.get(status) else {
+            continue;
+        };
+        if bucket.is_empty() {
+            continue;
+        }
+        if has_previous_section {
+            push_line(&mut output, "");
+        }
+        has_previous_section = true;
+
+        let icon_label = theme.status_text(status, format!("{} {status}", status_icon(status)));
+        let bucket_points = sum_story_points(bucket.iter().copied());
+        let points_label = theme.story_points(format_story_points(bucket_points));
+        let story_count = format_story_count(bucket.len());
+        push_inset_line(
+            &mut output,
+            &format!(
+                "{icon_label}   {}   {points_label}",
+                theme.count(story_count)
+            ),
+        );
+
+        let stories_ref: Vec<StoryOverview> = bucket.iter().map(|&s| s.clone()).collect();
+        push_story_table(
+            &mut output,
+            theme,
+            story_table_width,
+            &stories_ref,
+            all_stories_points_width,
+        );
+    }
+
     output
 }
 
@@ -546,12 +610,17 @@ mod tests {
             planned_end: None,
         }];
 
-        let output = render_story_list(&theme, "active sprint (S000.getting-started)", &stories);
+        let output = render_story_list(
+            &theme,
+            OutputLayout { width: 80 },
+            "active sprint (S000.getting-started)",
+            &stories,
+        );
 
         assert!(output.contains("Stories: 1"));
         assert!(output.contains("Scope: active sprint (S000.getting-started)"));
-        assert!(output.contains("US-F1-010 [in-progress] sprint=S000.getting-started"));
-        assert!(output.contains("◈3"));
+        assert!(output.contains("US-F1-010 ◈3"));
+        assert!(output.contains("CI pipeline"));
     }
 
     #[test]
