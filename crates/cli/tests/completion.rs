@@ -383,8 +383,13 @@ fn bash_completion_includes_dynamic_config_completion() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     assert!(stdout.contains("kanban__subcmd__config__subcmd__get"));
-    assert!(stdout.contains("config_keys=\"paths.backlog paths.sprints theme.color_mode"));
+    assert!(
+        stdout.contains(
+            "config_keys=\"paths.backlog paths.sprints features.sprints features.epics features.phases theme.color_mode"
+        )
+    );
     assert!(stdout.contains("color_modes=\"auto always never\""));
+    assert!(stdout.contains("feature_flags=\"true false on off yes no 1 0\""));
 }
 
 #[test]

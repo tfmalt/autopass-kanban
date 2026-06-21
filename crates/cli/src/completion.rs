@@ -16,6 +16,9 @@ _kanban_config_keys() {
     keys=(
         paths.backlog
         paths.sprints
+        features.sprints
+        features.epics
+        features.phases
         theme.color_mode
         story_points.allowed_values
         story_points.aliases.XS
@@ -31,6 +34,9 @@ _kanban_config_values() {
     case "$key" in
         theme.color_mode)
             compadd auto always never
+            ;;
+        features.sprints|features.epics|features.phases)
+            compadd true false on off yes no 1 0
             ;;
         paths.backlog|paths.sprints)
             _files -/
@@ -673,7 +679,7 @@ pub(crate) fn inject_bash_config_get(script: &str) -> String {
             return 0"#;
     let new = r#"        kanban__subcmd__config__subcmd__get)
             opts="-h --format --help <KEY> [REPO_ROOT]"
-            config_keys="paths.backlog paths.sprints theme.color_mode story_points.allowed_values story_points.aliases.XS story_points.aliases.S story_points.aliases.M story_points.aliases.L story_points.aliases.XL"
+            config_keys="paths.backlog paths.sprints features.sprints features.epics features.phases theme.color_mode story_points.allowed_values story_points.aliases.XS story_points.aliases.S story_points.aliases.M story_points.aliases.L story_points.aliases.XL"
             if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
                 COMPREPLY=( $(compgen -W "${config_keys}" -- "${cur}") )
                 return 0
@@ -716,8 +722,9 @@ pub(crate) fn inject_bash_config_set(script: &str) -> String {
             return 0"#;
     let new = r#"        kanban__subcmd__config__subcmd__set)
             opts="-h --format --help <KEY> <VALUE> [REPO_ROOT]"
-            config_keys="paths.backlog paths.sprints theme.color_mode story_points.allowed_values story_points.aliases.XS story_points.aliases.S story_points.aliases.M story_points.aliases.L story_points.aliases.XL"
+            config_keys="paths.backlog paths.sprints features.sprints features.epics features.phases theme.color_mode story_points.allowed_values story_points.aliases.XS story_points.aliases.S story_points.aliases.M story_points.aliases.L story_points.aliases.XL"
             color_modes="auto always never"
+            feature_flags="true false on off yes no 1 0"
             if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
                 COMPREPLY=( $(compgen -W "${config_keys}" -- "${cur}") )
                 return 0
@@ -726,6 +733,10 @@ pub(crate) fn inject_bash_config_set(script: &str) -> String {
                 case "${prev}" in
                     theme.color_mode)
                         COMPREPLY=( $(compgen -W "${color_modes}" -- "${cur}") )
+                        return 0
+                        ;;
+                    features.sprints|features.epics|features.phases)
+                        COMPREPLY=( $(compgen -W "${feature_flags}" -- "${cur}") )
                         return 0
                         ;;
                     paths.backlog|paths.sprints)

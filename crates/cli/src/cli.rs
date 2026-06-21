@@ -559,6 +559,45 @@ pub(crate) enum ConfigCommand {
     },
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum FeatureName {
+    Sprints,
+    Epics,
+    Phases,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum FeaturesCommand {
+    #[command(
+        about = "List enabled and disabled optional features. Effect: read-only inspection of `.kanban/paths.json`. Side effects: none."
+    )]
+    List {
+        #[arg(help = "Repository path to inspect. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        about = "Enable an optional feature. Effect: edits `.kanban/paths.json`. Side effects: re-enables subcommands and validation rules for the feature."
+    )]
+    Enable {
+        #[arg(help = "Feature to enable: sprints, epics, or phases.")]
+        feature: FeatureName,
+        #[arg(help = "Repository path to update. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        about = "Disable an optional feature. Effect: edits `.kanban/paths.json`. Side effects: hides subcommands and skips validation rules for the feature."
+    )]
+    Disable {
+        #[arg(help = "Feature to disable: sprints, epics, or phases.")]
+        feature: FeatureName,
+        #[arg(help = "Repository path to update. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+}
+
 #[derive(Subcommand)]
 pub(crate) enum DoctorCommand {
     #[command(
@@ -697,6 +736,21 @@ pub(crate) enum Command {
         #[arg(help = "Repository path to initialize. Defaults to the current directory.")]
         #[arg(default_value = ".")]
         repo_root: PathBuf,
+        #[arg(
+            long,
+            help = "Skip the sprint feature. Use this when the repository does not organize work into sprints."
+        )]
+        no_sprints: bool,
+        #[arg(
+            long,
+            help = "Skip the epic feature. Use this when the repository does not organize work into epics."
+        )]
+        no_epics: bool,
+        #[arg(
+            long,
+            help = "Skip the phase feature. Use this when the repository does not organize work into phases."
+        )]
+        no_phases: bool,
     },
     #[command(
         about = "Inspect or change repository-local kanban configuration. Effects depend on subcommand; write subcommands only touch `.kanban/*.json`."
@@ -783,6 +837,13 @@ pub(crate) enum Command {
         command: ReportCommand,
     },
     #[command(
+        about = "Toggle optional backlog features (phases, sprints, epics). Effect: edits `.kanban/paths.json`. Side effects: changes which subcommands and validation rules apply."
+    )]
+    Features {
+        #[command(subcommand)]
+        command: FeaturesCommand,
+    },
+    #[command(
         hide = true,
         about = "List IDs for shell completion. Effect: read-only listing of sprint names, story IDs, or epic IDs from the repository. Side effects: none."
     )]
@@ -808,7 +869,7 @@ pub(crate) enum Command {
 
 pub(crate) fn command_repo_root(command: &Command) -> Option<&PathBuf> {
     match command {
-        Command::Init { repo_root }
+        Command::Init { repo_root, .. }
         | Command::Validate { repo_root }
         | Command::ListIds { repo_root, .. }
         | Command::ListTaskIds { repo_root, .. } => Some(repo_root),
@@ -864,6 +925,11 @@ pub(crate) fn command_repo_root(command: &Command) -> Option<&PathBuf> {
             ReportCommand::Wbs { repo_root } | ReportCommand::Forecast { repo_root } => {
                 Some(repo_root)
             }
+        },
+        Command::Features { command } => match command {
+            FeaturesCommand::List { repo_root }
+            | FeaturesCommand::Enable { repo_root, .. }
+            | FeaturesCommand::Disable { repo_root, .. } => Some(repo_root),
         },
         Command::Completion { .. } => None,
     }

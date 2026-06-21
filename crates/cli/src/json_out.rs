@@ -78,15 +78,85 @@ pub(crate) fn forward_slashed_path(path: &Path) -> String {
 /// Dispatch the JSON output path for a supported command.
 pub(crate) fn emit_json(command: &Command) -> i32 {
     match command {
-        Command::Init { repo_root } => match init_config(repo_root) {
-            Ok(result) => print_envelope(&JsonEnvelope::ok(
-                "init",
-                ConfigInitDto::from_result(&result),
-            )),
-            Err(error) => print_envelope(&JsonEnvelope::<ConfigInitDto>::error(
-                "init",
-                KanbanErrorBody::from_anyhow(&error),
-            )),
+        Command::Init {
+            repo_root,
+            no_sprints,
+            no_epics,
+            no_phases,
+        } => {
+            let features = if *no_sprints || *no_epics || *no_phases {
+                Some(kanban_core::FeaturesConfig {
+                    phases: !*no_phases,
+                    sprints: !*no_sprints,
+                    epics: !*no_epics,
+                })
+            } else {
+                None
+            };
+            match init_config_with_features(repo_root, features) {
+                Ok(result) => print_envelope(&JsonEnvelope::ok(
+                    "init",
+                    ConfigInitDto::from_result(&result),
+                )),
+                Err(error) => print_envelope(&JsonEnvelope::<ConfigInitDto>::error(
+                    "init",
+                    KanbanErrorBody::from_anyhow(&error),
+                )),
+            }
+        }
+        Command::Features { command } => match command {
+            FeaturesCommand::List { repo_root } => match load_kanban_config(repo_root) {
+                Ok(config) => {
+                    let features = config.features();
+                    let env = JsonEnvelope::ok(
+                        "features.list",
+                        serde_json::json!({
+                            "phases": features.phases,
+                            "sprints": features.sprints,
+                            "epics": features.epics,
+                        }),
+                    );
+                    print_envelope(&env)
+                }
+                Err(error) => print_envelope(&JsonEnvelope::<serde_json::Value>::error(
+                    "features.list",
+                    KanbanErrorBody::from_anyhow(&error),
+                )),
+            },
+            FeaturesCommand::Enable { feature, repo_root } => {
+                let key = match feature {
+                    FeatureName::Sprints => "features.sprints",
+                    FeatureName::Epics => "features.epics",
+                    FeatureName::Phases => "features.phases",
+                };
+                match set_config_value(repo_root, key, "true") {
+                    Ok(result) => print_envelope(&JsonEnvelope::ok(
+                        "features.enable",
+                        ConfigSetDto::from_result(&result),
+                    )),
+                    Err(error) => print_envelope(&JsonEnvelope::<ConfigSetDto>::error(
+                        "features.enable",
+                        KanbanErrorBody::from_anyhow(&error),
+                    )),
+                }
+            }
+            FeaturesCommand::Disable { feature, repo_root } => {
+                let key = match feature {
+                    FeatureName::Sprints => "features.sprints",
+                    FeatureName::Epics => "features.epics",
+                    FeatureName::Phases => "features.phases",
+                };
+                match set_config_value(repo_root, key, "false") {
+                    Ok(result) => print_envelope(&JsonEnvelope::ok(
+                        "features.disable",
+                        ConfigSetDto::from_result(&result),
+                    )),
+                    Err(error) => print_envelope(&JsonEnvelope::<ConfigSetDto>::error(
+                        "features.disable",
+                        KanbanErrorBody::from_anyhow(&error),
+                    )),
+                }
+            }
         },
         Command::Config {
             command: ConfigCommand::Get { key, repo_root },

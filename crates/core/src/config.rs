@@ -238,16 +238,29 @@ pub fn resolve_repo_root(path: impl AsRef<Path>) -> Result<PathBuf> {
 }
 
 pub fn init_config(repo_root: impl AsRef<Path>) -> Result<ConfigInitResult> {
+    init_config_with_features(repo_root, None)
+}
+
+pub fn init_config_with_features(
+    repo_root: impl AsRef<Path>,
+    features: Option<FeaturesConfig>,
+) -> Result<ConfigInitResult> {
     let repo_root = resolve_repo_root(repo_root)?;
     let config_dir = repo_root.join(CONFIG_DIR_NAME);
     fs::create_dir_all(&config_dir)
         .with_context(|| format!("create config directory {}", config_dir.display()))?;
 
+    let paths_default = PathsConfig {
+        features,
+        ..PathsConfig::default()
+    };
+    validate_paths(&paths_default)?;
+
     let mut created_files = Vec::new();
     created_files.extend(write_default_json_if_missing(
         &repo_root,
         &config_dir.join(PATHS_FILE_NAME),
-        &PathsConfig::default(),
+        &paths_default,
     )?);
     created_files.extend(write_default_json_if_missing(
         &repo_root,

@@ -121,8 +121,22 @@ fn main() -> Result<()> {
     let theme = theme_for_command(&args.command);
 
     match args.command {
-        Command::Init { repo_root } => {
-            let result = init_config(repo_root)?;
+        Command::Init {
+            repo_root,
+            no_sprints,
+            no_epics,
+            no_phases,
+        } => {
+            let features = if no_sprints || no_epics || no_phases {
+                Some(FeaturesConfig {
+                    phases: !no_phases,
+                    sprints: !no_sprints,
+                    epics: !no_epics,
+                })
+            } else {
+                None
+            };
+            let result = init_config_with_features(repo_root, features)?;
             println!(
                 "{} {}",
                 theme.success("Initialized config:"),
@@ -803,6 +817,53 @@ fn main() -> Result<()> {
                         theme.paint(Style::Muted, "no throughput data yet"),
                     );
                 }
+            }
+        },
+        Command::Features { command } => match command {
+            FeaturesCommand::List { repo_root } => {
+                let config = load_kanban_config(repo_root)?;
+                let features = config.features();
+                let mut lines = Vec::new();
+                for (name, enabled) in [
+                    ("phases", features.phases),
+                    ("sprints", features.sprints),
+                    ("epics", features.epics),
+                ] {
+                    let status = if enabled { "on" } else { "off" };
+                    lines.push(format!("{name:8} {status}"));
+                }
+                println!("{}", theme.heading("Features"));
+                for line in lines {
+                    println!("  {line}");
+                }
+            }
+            FeaturesCommand::Enable { feature, repo_root } => {
+                let key = match feature {
+                    FeatureName::Sprints => "features.sprints",
+                    FeatureName::Epics => "features.epics",
+                    FeatureName::Phases => "features.phases",
+                };
+                let result = set_config_value(&repo_root, key, "true")?;
+                println!(
+                    "{} {} = {}",
+                    theme.success("Enabled"),
+                    theme.id(&result.key),
+                    result.value
+                );
+            }
+            FeaturesCommand::Disable { feature, repo_root } => {
+                let key = match feature {
+                    FeatureName::Sprints => "features.sprints",
+                    FeatureName::Epics => "features.epics",
+                    FeatureName::Phases => "features.phases",
+                };
+                let result = set_config_value(&repo_root, key, "false")?;
+                println!(
+                    "{} {} = {}",
+                    theme.success("Disabled"),
+                    theme.id(&result.key),
+                    result.value
+                );
             }
         },
         Command::ListIds { kind, repo_root } => match kind {

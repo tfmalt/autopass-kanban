@@ -119,6 +119,82 @@ fn init_emits_ok_envelope() {
 }
 
 #[test]
+fn init_with_no_sprints_persists_feature_flag() {
+    let dir = tempdir().expect("temp dir should be created");
+    let repo_root = dir.path().to_string_lossy().into_owned();
+
+    let out = kanban_in(
+        dir.path(),
+        &["--format", "json", "init", "--no-sprints", &repo_root],
+    );
+    assert!(
+        out.status.success(),
+        "init --no-sprints should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let paths_file = dir.path().join(".kanban/paths.json");
+    let json = serde_json::from_str::<serde_json::Value>(
+        &fs::read_to_string(&paths_file).expect("paths.json should be written"),
+    )
+    .expect("paths.json should parse as json");
+    assert_eq!(json["features"]["sprints"], false);
+    assert_eq!(json["features"]["phases"], true);
+    assert_eq!(json["features"]["epics"], true);
+}
+
+#[test]
+fn init_with_no_epics_and_no_phases_persists_feature_flags() {
+    let dir = tempdir().expect("temp dir should be created");
+    let repo_root = dir.path().to_string_lossy().into_owned();
+
+    let out = kanban_in(
+        dir.path(),
+        &[
+            "--format",
+            "json",
+            "init",
+            "--no-epics",
+            "--no-phases",
+            &repo_root,
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "init --no-epics --no-phases should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let paths_file = dir.path().join(".kanban/paths.json");
+    let json = serde_json::from_str::<serde_json::Value>(
+        &fs::read_to_string(&paths_file).expect("paths.json should be written"),
+    )
+    .expect("paths.json should parse as json");
+    assert_eq!(json["features"]["sprints"], true);
+    assert_eq!(json["features"]["phases"], false);
+    assert_eq!(json["features"]["epics"], false);
+}
+
+#[test]
+fn features_list_json_emits_feature_state() {
+    let dir = tempdir().expect("temp dir should be created");
+    let repo_root = dir.path().to_string_lossy().into_owned();
+
+    kanban_in(dir.path(), &["init", "--no-sprints", &repo_root]);
+
+    let out = kanban_in(
+        dir.path(),
+        &["--format", "json", "features", "list", &repo_root],
+    );
+    let json = parse_stdout(&out);
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["kind"], "features.list");
+    assert_eq!(json["data"]["sprints"], false);
+    assert_eq!(json["data"]["phases"], true);
+    assert_eq!(json["data"]["epics"], true);
+}
+
+#[test]
 fn config_get_unknown_key_emits_config_key_not_found_error() {
     let dir = tempdir().expect("temp dir should be created");
     let repo_root = dir.path().to_string_lossy().into_owned();

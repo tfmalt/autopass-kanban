@@ -28,7 +28,8 @@ pub(crate) mod prelude {
 
 pub use config::{
     ColorMode, ConfigInitResult, ConfigSetResult, FeaturesConfig, KanbanConfig, get_config_json,
-    get_config_value, init_config, load_kanban_config, resolve_repo_root, set_config_value,
+    get_config_value, init_config, init_config_with_features, load_kanban_config,
+    resolve_repo_root, set_config_value,
 };
 pub use constants::*;
 pub use doctor::*;
