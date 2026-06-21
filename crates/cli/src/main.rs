@@ -320,6 +320,7 @@ fn main() -> Result<()> {
         },
         Command::Phase { command } => match command {
             PhaseCommand::Show { phase, repo_root } => {
+                ensure_phases_enabled(&repo_root)?;
                 let phase = summarize_phase(repo_root, &phase)?;
                 print_phase_overview(&theme, OutputLayout::for_stdout()?, &phase);
             }
@@ -946,7 +947,6 @@ fn ensure_epics_enabled(repo_root: impl AsRef<Path>) -> Result<()> {
     ensure_feature_enabled(repo_root, "epics", &config.features())
 }
 
-#[allow(dead_code)]
 fn ensure_phases_enabled(repo_root: impl AsRef<Path>) -> Result<()> {
     let config = kanban_core::load_kanban_config(repo_root.as_ref())?;
     ensure_feature_enabled(repo_root, "phases", &config.features())

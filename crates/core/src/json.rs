@@ -1001,7 +1001,7 @@ pub struct ReportStoryDto {
     pub sprint: Option<String>,
     pub epic_id: Option<String>,
     pub epic_title: Option<String>,
-    pub phase: String,
+    pub phase: Option<String>,
     pub path: String,
     pub work_started: Option<String>,
     pub work_done: Option<String>,
@@ -1012,7 +1012,7 @@ pub struct ReportStoryDto {
 impl ReportStoryDto {
     pub fn from_overview(o: &StoryOverview) -> Self {
         Self {
-            phase: phase_from_story_id(&o.id),
+            phase: Some(phase_from_story_id(&o.id)),
             id: o.id.clone(),
             title: o.title.clone(),
             status: o.status.clone(),

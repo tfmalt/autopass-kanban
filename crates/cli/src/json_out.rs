@@ -55,7 +55,6 @@ pub(crate) fn ensure_epics_enabled_json(repo_root: &Path) -> anyhow::Result<()> 
     Ok(())
 }
 
-#[allow(dead_code)]
 pub(crate) fn ensure_phases_enabled_json(repo_root: &Path) -> anyhow::Result<()> {
     let config = load_kanban_config(repo_root)?;
     if !config.features().phases {
@@ -409,16 +408,24 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
         }
         Command::Phase {
             command: PhaseCommand::Show { phase, repo_root },
-        } => match summarize_phase(repo_root, phase) {
-            Ok(overview) => print_envelope(&JsonEnvelope::ok(
-                "phase.show",
-                PhaseShowDto::from_overview(&overview),
-            )),
-            Err(error) => print_envelope(&JsonEnvelope::<PhaseShowDto>::error(
-                "phase.show",
-                KanbanErrorBody::new(KanbanErrorCode::PhaseNotFound, error.to_string()),
-            )),
-        },
+        } => {
+            if let Err(error) = ensure_phases_enabled_json(repo_root) {
+                return print_envelope(&JsonEnvelope::<PhaseShowDto>::error(
+                    "phase.show",
+                    KanbanErrorBody::from_anyhow(&error),
+                ));
+            }
+            match summarize_phase(repo_root, phase) {
+                Ok(overview) => print_envelope(&JsonEnvelope::ok(
+                    "phase.show",
+                    PhaseShowDto::from_overview(&overview),
+                )),
+                Err(error) => print_envelope(&JsonEnvelope::<PhaseShowDto>::error(
+                    "phase.show",
+                    KanbanErrorBody::new(KanbanErrorCode::PhaseNotFound, error.to_string()),
+                )),
+            }
+        }
         Command::Config {
             command: ConfigCommand::Show { repo_root },
         } => match get_config_json(repo_root)
