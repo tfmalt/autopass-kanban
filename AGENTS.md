@@ -18,7 +18,7 @@ These instructions apply to all files in this repository.
 - Keep command behavior deterministic and safe for human-edited markdown files.
 - Do not silently rewrite unrelated frontmatter, prose, ordering, or formatting in backlog documents.
 - Use full local ISO 8601 timestamps with numeric timezone offset when writing backlog lifecycle fields.
-- Avoid adding new CLI command names, status names, or file layout conventions without checking `delivery/backlog/README.md` and the relevant backlog-board workflow.
+- Avoid adding new CLI command names, status names, or file layout conventions without checking how existing commands and the configured backlog directory use those names in practice.
 
 ## Versioning
 
@@ -40,7 +40,9 @@ Run commands from the repository root unless noted otherwise:
 
 For changes that modify markdown parsing or writing behavior, also run:
 
-- `cargo run -p kanban-cli -- validate ../ip-2.0`
-- `cargo run -p kanban-cli -- doctor ../ip-2.0`
+- `cargo run -p kanban-cli -- validate .`
+- `cargo run -p kanban-cli -- doctor .`
+
+The `.` argument tells the CLI to use the current directory as the target repository root, reading backlog configuration from `.kanban/paths.json`. To verify against a different backlog, replace `.` with the path to that repository's root.
 
 If a command cannot be run, report the reason and what remains unverified.
