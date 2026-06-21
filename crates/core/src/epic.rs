@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn find_epic_exposes_child_story_progress_and_sections() {
-        let repo_root = repo_root();
+        let (_fixture, repo_root) = build_fixture();
         let epic = find_epic(&repo_root, "EP-F1-06").unwrap().unwrap();
 
         assert_eq!(epic.epic.id, "EP-F1-06");
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn find_epic_returns_none_for_unknown_id() {
-        let repo_root = repo_root();
+        let (_fixture, repo_root) = build_fixture();
         assert!(find_epic(&repo_root, "EP-F9-99").unwrap().is_none());
     }
 

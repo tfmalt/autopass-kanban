@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn collect_user_story_files_returns_backlog_stories_but_not_task_files() {
-        let repo_root = repo_root();
+        let (_fixture, repo_root) = build_fixture();
         let story_files = collect_user_story_files(&repo_root).unwrap();
 
         assert!(story_files.iter().any(|story_file| {

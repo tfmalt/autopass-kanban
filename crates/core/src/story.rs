@@ -859,7 +859,7 @@ mod tests {
 
     #[test]
     fn list_all_stories_returns_single_story_entry() {
-        let repo_root = repo_root();
+        let (_fixture, repo_root) = build_fixture();
 
         let stories = list_all_stories(&repo_root).unwrap();
         let matching = stories
@@ -882,7 +882,7 @@ mod tests {
 
     #[test]
     fn find_story_exposes_acceptance_criteria_and_tasks() {
-        let repo_root = repo_root();
+        let (_fixture, repo_root) = build_fixture();
         let story = find_story(&repo_root, "US-F1-010").unwrap().unwrap();
 
         assert!(

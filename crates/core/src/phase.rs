@@ -52,7 +52,7 @@ mod tests {
 
     #[test]
     fn summarize_phase_lists_backlog_stories_with_sprint_assignment() {
-        let repo_root = repo_root();
+        let (_fixture, repo_root) = build_fixture();
         let phase = summarize_phase(&repo_root, "F1").unwrap();
 
         assert_eq!(phase.phase, "F1");
