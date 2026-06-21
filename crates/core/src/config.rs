@@ -38,6 +38,8 @@ pub enum ColorMode {
 pub struct PathsConfig {
     pub backlog: String,
     pub sprints: String,
+    #[serde(default)]
+    pub features: Option<FeaturesConfig>,
 }
 
 impl Default for PathsConfig {
@@ -45,7 +47,38 @@ impl Default for PathsConfig {
         Self {
             backlog: DEFAULT_BACKLOG_PATH.to_string(),
             sprints: DEFAULT_SPRINTS_PATH.to_string(),
+            features: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeaturesConfig {
+    #[serde(default = "default_feature_on")]
+    pub phases: bool,
+    #[serde(default = "default_feature_on")]
+    pub sprints: bool,
+    #[serde(default = "default_feature_on")]
+    pub epics: bool,
+}
+
+impl Default for FeaturesConfig {
+    fn default() -> Self {
+        Self {
+            phases: true,
+            sprints: true,
+            epics: true,
+        }
+    }
+}
+
+fn default_feature_on() -> bool {
+    true
+}
+
+impl FeaturesConfig {
+    pub fn all_enabled() -> Self {
+        Self::default()
     }
 }
 
@@ -174,6 +207,10 @@ impl KanbanConfig {
     pub fn sprints_marker(&self) -> String {
         path_marker(&self.paths.sprints)
     }
+
+    pub fn features(&self) -> FeaturesConfig {
+        self.paths.features.unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,6 +309,9 @@ pub fn get_config_value(repo_root: impl AsRef<Path>, key: &str) -> Result<String
                 .cloned()
                 .ok_or_else(|| anyhow!("Unknown story point alias: {alias}"))
         }
+        "features.sprints" => Ok(config.features().sprints.to_string()),
+        "features.epics" => Ok(config.features().epics.to_string()),
+        "features.phases" => Ok(config.features().phases.to_string()),
         _ => unsupported_key(key),
     }
 }
@@ -292,7 +332,8 @@ pub fn set_config_value(
 
     let key = key.trim();
     let trimmed_value = value.trim();
-    if trimmed_value.is_empty() {
+    let allow_empty = key == "paths.sprints";
+    if trimmed_value.is_empty() && !allow_empty {
         bail!("Configuration values must not be empty.");
     }
 
@@ -310,7 +351,25 @@ pub fn set_config_value(
             config_dir.join(PATHS_FILE_NAME)
         }
         "paths.sprints" => {
-            paths.sprints = normalize_relative_repo_path(trimmed_value)?;
+            paths.sprints = if trimmed_value.is_empty() {
+                String::new()
+            } else {
+                normalize_relative_repo_path(trimmed_value)?
+            };
+            validate_paths(&paths)?;
+            write_json(&config_dir.join(PATHS_FILE_NAME), &paths)?;
+            config_dir.join(PATHS_FILE_NAME)
+        }
+        "features.sprints" | "features.epics" | "features.phases" => {
+            let enabled = parse_feature_flag(trimmed_value)?;
+            let mut features = paths.features.unwrap_or_default();
+            match key {
+                "features.sprints" => features.sprints = enabled,
+                "features.epics" => features.epics = enabled,
+                "features.phases" => features.phases = enabled,
+                _ => unreachable!(),
+            }
+            paths.features = Some(features);
             validate_paths(&paths)?;
             write_json(&config_dir.join(PATHS_FILE_NAME), &paths)?;
             config_dir.join(PATHS_FILE_NAME)
@@ -477,9 +536,22 @@ where
 
 fn validate_paths(paths: &PathsConfig) -> Result<()> {
     let backlog = normalize_relative_repo_path(&paths.backlog)?;
-    let sprints = normalize_relative_repo_path(&paths.sprints)?;
-    if backlog.is_empty() || sprints.is_empty() {
+    if backlog.is_empty() {
         bail!("Configured paths must not be empty.");
+    }
+    let sprints_enabled = paths.features.map(|f| f.sprints).unwrap_or(true);
+    if sprints_enabled {
+        if paths.sprints.trim().is_empty() {
+            bail!(
+                "Configured paths.sprints must not be empty when the sprints feature is enabled."
+            );
+        }
+        let sprints = normalize_relative_repo_path(&paths.sprints)?;
+        if sprints.is_empty() {
+            bail!(
+                "Configured paths.sprints must not be empty when the sprints feature is enabled."
+            );
+        }
     }
     Ok(())
 }
@@ -515,6 +587,14 @@ fn parse_color_mode(value: &str) -> Result<ColorMode> {
     }
 }
 
+fn parse_feature_flag(value: &str) -> Result<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "on" | "1" | "yes" => Ok(true),
+        "false" | "off" | "0" | "no" => Ok(false),
+        _ => bail!("Feature flag must be one of: true, false, on, off, yes, no, 1, 0."),
+    }
+}
+
 fn path_marker(relative_path: &str) -> String {
     format!("/{}/", relative_path.replace('\\', "/").trim_matches('/'))
 }
@@ -525,7 +605,7 @@ fn relative_path(repo_root: &Path, path: &Path) -> PathBuf {
 
 fn unsupported_key<T>(key: &str) -> Result<T> {
     bail!(
-        "Unsupported config key `{key}`. Supported keys: paths.backlog, paths.sprints, theme.color_mode, story_points.allowed_values, story_points.aliases.<NAME>, web.port, web.host, web.style."
+        "Unsupported config key `{key}`. Supported keys: paths.backlog, paths.sprints, features.sprints, features.epics, features.phases, theme.color_mode, story_points.allowed_values, story_points.aliases.<NAME>, web.port, web.host, web.style."
     )
 }
 
@@ -615,5 +695,98 @@ mod tests {
 
         let err = set_config_value(temp_root.path(), "web.style", "neon").unwrap_err();
         assert!(err.to_string().contains("web.style"));
+    }
+
+    #[test]
+    fn features_default_to_all_enabled_when_block_missing() {
+        let config = KanbanConfig {
+            repo_root: PathBuf::from("/tmp/repo"),
+            paths: PathsConfig::default(),
+            theme: ThemeConfig::default(),
+            story_points: StoryPointsConfig::default(),
+            web: WebConfig::default(),
+        };
+        let features = config.features();
+        assert!(features.phases);
+        assert!(features.sprints);
+        assert!(features.epics);
+    }
+
+    #[test]
+    fn features_round_trip_through_set_config_value() {
+        let temp_root = tempdir().unwrap();
+        init_config(temp_root.path()).unwrap();
+
+        for (key, value) in [
+            ("features.sprints", "false"),
+            ("features.epics", "off"),
+            ("features.phases", "no"),
+        ] {
+            set_config_value(temp_root.path(), key, value).unwrap();
+        }
+
+        let config = load_kanban_config(temp_root.path()).unwrap();
+        let features = config.features();
+        assert!(!features.sprints);
+        assert!(!features.epics);
+        assert!(!features.phases);
+        assert_eq!(
+            get_config_value(temp_root.path(), "features.sprints").unwrap(),
+            "false"
+        );
+        assert_eq!(
+            get_config_value(temp_root.path(), "features.epics").unwrap(),
+            "false"
+        );
+        assert_eq!(
+            get_config_value(temp_root.path(), "features.phases").unwrap(),
+            "false"
+        );
+    }
+
+    #[test]
+    fn set_feature_flag_rejects_unknown_value() {
+        let temp_root = tempdir().unwrap();
+        init_config(temp_root.path()).unwrap();
+
+        let err = set_config_value(temp_root.path(), "features.sprints", "maybe").unwrap_err();
+        assert!(err.to_string().contains("Feature flag"));
+    }
+
+    #[test]
+    fn empty_sprints_path_allowed_when_sprints_feature_disabled() {
+        let temp_root = tempdir().unwrap();
+        init_config(temp_root.path()).unwrap();
+
+        set_config_value(temp_root.path(), "features.sprints", "false").unwrap();
+        set_config_value(temp_root.path(), "paths.sprints", "").unwrap();
+
+        let config = load_kanban_config(temp_root.path()).unwrap();
+        assert!(!config.features().sprints);
+    }
+
+    #[test]
+    fn empty_sprints_path_rejected_when_sprints_feature_enabled() {
+        let temp_root = tempdir().unwrap();
+        init_config(temp_root.path()).unwrap();
+
+        set_config_value(temp_root.path(), "features.sprints", "true").unwrap();
+        let err = set_config_value(temp_root.path(), "paths.sprints", "").unwrap_err();
+        assert!(err.to_string().contains("paths.sprints"));
+    }
+
+    #[test]
+    fn backward_compatible_paths_config_without_features_keeps_all_enabled() {
+        let temp_root = tempdir().unwrap();
+        init_config(temp_root.path()).unwrap();
+        let paths_file = temp_root.path().join(".kanban/paths.json");
+        let raw = r#"{"backlog":"delivery/backlog","sprints":"delivery/sprints"}"#;
+        fs::write(&paths_file, raw).unwrap();
+
+        let config = load_kanban_config(temp_root.path()).unwrap();
+        let features = config.features();
+        assert!(features.phases);
+        assert!(features.sprints);
+        assert!(features.epics);
     }
 }
