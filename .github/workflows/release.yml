@@ -1,0 +1,161 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools (musl targets)
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build -p kanban-cli --release --target ${{ matrix.target }}
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Pack tarball
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TARGET="${{ matrix.target }}"
+          TARBALL="kanban-${VERSION}-${TARGET}.tar.gz"
+          STAGING="kanban-${VERSION}-${TARGET}"
+
+          mkdir -p "$STAGING"
+
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            BIN_EXT=""
+          else
+            BIN_EXT=""
+          fi
+
+          cp "target/${{ matrix.target }}/release/kanban$BIN_EXT" "$STAGING/kanban"
+          chmod +x "$STAGING/kanban"
+
+          printf '%s\n' "$VERSION" > "$STAGING/VERSION"
+
+          mkdir -p "$STAGING/skills"
+          cp -R skills/kanban-backlog-maintainer "$STAGING/skills/"
+          cp -R skills/kanban-developer "$STAGING/skills/"
+
+          tar -czf "$TARBALL" -C "$STAGING" kanban VERSION skills
+
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "staging=$STAGING" >> "$GITHUB_OUTPUT"
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: kanban-*.tar.gz
+          if-no-files-found: error
+
+  checksums:
+    name: Generate checksums
+    runs-on: ubuntu-latest
+    needs: build
+    if: success() || failure()
+
+    steps:
+      - name: Download all tarball artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*'
+          merge-multiple: true
+          path: tarballs/
+
+      - name: List downloaded artifacts
+        run: ls -la tarballs/
+
+      - name: Generate checksums file
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          CHECKSUMS="kanban-${VERSION}-checksums.txt"
+
+          for tarball in tarballs/kanban-*.tar.gz; do
+            basename="${tarball##*/}"
+            hash=$(sha256sum "$tarball" | awk '{print $1}')
+            printf '%s  %s\n' "$hash" "$basename" >> "$CHECKSUMS"
+          done
+
+          sort -k2 "$CHECKSUMS" > "${CHECKSUMS}.sorted"
+          mv "${CHECKSUMS}.sorted" "$CHECKSUMS"
+
+          echo "Generated checksums file:"
+          cat "$CHECKSUMS"
+
+      - name: Upload checksums artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: kanban-*-checksums.txt
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build, checksums]
+    if: success()
+
+    steps:
+      - name: Download all tarballs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: 'x86_64-*|aarch64-*'
+          merge-multiple: true
+          path: assets/
+
+      - name: Download checksums
+        uses: actions/download-artifact@v4
+        with:
+          name: checksums
+          path: assets/
+
+      - name: List assets
+        run: ls -la assets/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: kanban ${{ github.ref_name }}
+          files: assets/*
+          generate_release_notes: true
