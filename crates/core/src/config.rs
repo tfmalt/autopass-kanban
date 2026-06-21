@@ -14,13 +14,15 @@ const DEFAULT_WEB_PORT: u16 = 3000;
 const DEFAULT_WEB_HOST: &str = "127.0.0.1";
 const DEFAULT_WEB_STYLE: &str = "calm-light";
 const WEB_STYLES: [&str; 3] = ["calm-light", "modern-dark", "vibrant"];
-const DEFAULT_ALLOWED_STORY_POINTS: [&str; 5] = ["2", "3", "5", "8", "13"];
-const DEFAULT_STORY_POINT_ALIASES: [(&str, &str); 5] = [
+const DEFAULT_ALLOWED_STORY_POINTS: [&str; 7] = ["1", "2", "3", "5", "8", "13", "21"];
+const DEFAULT_STORY_POINT_ALIASES: [(&str, &str); 7] = [
+    ("XXS", "1"),
     ("XS", "2"),
     ("S", "3"),
     ("M", "5"),
     ("L", "8"),
     ("XL", "13"),
+    ("XXL", "21"),
 ];
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
