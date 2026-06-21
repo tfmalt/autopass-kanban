@@ -58,10 +58,13 @@ Set `KANBAN_REPO_PATH=/path/to/project` to serve a different git-backed kanban
 repository without installing `kanban` on the host.
 
 Implemented commands:
-- `kanban init [repo_root]`
+- `kanban init [--no-sprints|--no-epics|--no-phases] [repo_root]`
 - `kanban config show [repo_root]`
 - `kanban config get <key> [repo_root]`
 - `kanban config set <key> <value> [repo_root]`
+- `kanban features list [repo_root]`
+- `kanban features enable <sprints|epics|phases> [repo_root]`
+- `kanban features disable <sprints|epics|phases> [repo_root]`
 - `kanban sprint current [repo_root]`
 - `kanban sprint list [repo_root]`
 - `kanban sprint show <name> [repo_root]`
@@ -92,6 +95,25 @@ Run `kanban init` once per repository. This creates `.kanban/` in the git root w
 - `story-points.json` for allowed values and alias conversion
 
 If `.kanban/` is missing, operational commands fail with a prompt to run `kanban init`.
+
+### Optional features
+
+The phases, sprints, and epics concepts are all optional. Each can be disabled
+when the repository does not organize work that way. Disable features at init
+time with `kanban init --no-sprints --no-epics --no-phases`, or toggle them
+later with `kanban features disable <sprints|epics|phases>`. The current state
+is recorded in `.kanban/paths.json` under the `features` block.
+
+When a feature is disabled:
+
+- The corresponding subcommands (`kanban sprint *`, `kanban epic *`,
+  `kanban phase *`) return a clear `feature disabled` error.
+- Story frontmatter fields specific to the feature are no longer required
+  (`sprint` when sprints are off, `epic` when epics are off).
+- `validate` and `doctor` skip the rules that only apply to that feature.
+
+Existing repositories without a `features` block default to all features
+on, so the change is fully backward compatible.
 
 ## Shell completion
 

@@ -22,6 +22,17 @@ for the needed operation.
 - A `delivery/backlog/README.md` or similar project convention document should
   define the project's ID scheme, artifact layout, state model, and templates.
 
+## Optional features
+
+Phases, sprints, and epics are individually optional. A project that does not
+use sprints should pass `--no-sprints` to `kanban init` (or run
+`kanban features disable sprints` later). The same applies to `--no-epics` and
+`--no-phases`. When a feature is off, the corresponding `kanban <area> *`
+subcommands return a clear "feature disabled" error, the matching story
+frontmatter field is no longer required, and `validate`/`doctor` skip the
+feature-specific rules. Always check `.kanban/paths.json` for the `features`
+block before assuming a project uses sprints, epics, or phases.
+
 ## Required Reading
 
 Before creating or editing backlog artifacts, read in this order:
@@ -91,6 +102,7 @@ Tasks are inline blocks in `.tasks.md`, not one file per task. Task IDs are
 | Update task | `kanban task update <id> <task_id> [--status <s>] [...]` |
 | Validate consistency | `kanban validate --format json`; `kanban doctor --format json`; `kanban doctor fix` |
 | Sprint create/rollover | `kanban sprint create [...]`; `kanban sprint rollover <name>` |
+| Toggle optional features | `kanban features list`; `kanban features enable/disable <sprints|epics|phases>` |
 | WBS Excel report | `kanban --format json report wbs \| python3 scripts/wbs_report.py` |
 
 When a requested operation has no command, check `kanban <area> --help`, name
