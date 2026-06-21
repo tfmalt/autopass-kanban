@@ -14,6 +14,54 @@ fresh clone or if the local config was removed. After that, enable shell
 completion and run commands such as `kanban sprint current`, `kanban sprint
 sync`, and `kanban story list --current` from the repository root.
 
+## Local install
+
+Install the prebuilt `kanban` binary, set up `PATH`, and install shell
+completions with a single script:
+
+```sh
+sh scripts/install.sh --binary ./target/release/kanban
+```
+
+The installer copies the binary to `~/.local/bin/kanban` (default), appends
+the directory to `PATH` in your shell rc file only if it is not already
+present, installs tab completions for bash or zsh, and writes an install
+manifest at `~/.local/lib/kanban/manifest.txt`. No `sudo` is required.
+
+### Flags
+
+| Flag | Description |
+|---|---|
+| `--binary <path>` | Path to the prebuilt `kanban` binary (required) |
+| `--prefix <dir>` | Install directory for the binary (default: `~/.local/bin`) |
+| `--dry-run` | Preview all actions without modifying the filesystem |
+| `--quiet` | Suppress non-error log lines |
+
+### Examples
+
+```sh
+# Install from a release build
+sh scripts/install.sh --binary ./target/release/kanban
+
+# Install to a custom directory
+sh scripts/install.sh --binary ./kanban --prefix ~/bin
+
+# Preview what would happen without making changes
+sh scripts/install.sh --binary ./target/release/kanban --dry-run
+
+# Install silently
+sh scripts/install.sh --binary ./target/release/kanban --quiet
+```
+
+### Supported shells
+
+| Shell | RC file | Completions |
+|---|---|---|
+| bash | `~/.bashrc` | `~/.local/share/bash-completion/completions/kanban` |
+| zsh | `~/.zshrc` | `~/.zsh/completions/_kanban` |
+| ash (Alpine) | `~/.profile` | Skipped (no completion support) |
+| fish and others | None | Skipped with a notice |
+
 ## Release build
 
 Build the optimized release binary with:
