@@ -1,0 +1,39 @@
+{
+  "paths": {
+    "backlog": "delivery/backlog",
+    "features": {
+      "epics": true,
+      "phases": true,
+      "sprints": true
+    },
+    "sprints": "delivery/sprints"
+  },
+  "story_points": {
+    "aliases": {
+      "L": "8",
+      "M": "5",
+      "S": "3",
+      "XL": "13",
+      "XS": "2",
+      "XXL": "21",
+      "XXS": "1"
+    },
+    "allowed_values": [
+      "1",
+      "13",
+      "2",
+      "21",
+      "3",
+      "5",
+      "8"
+    ]
+  },
+  "theme": {
+    "color_mode": "auto"
+  },
+  "web": {
+    "host": "127.0.0.1",
+    "port": 3000,
+    "style": "calm-light"
+  }
+}

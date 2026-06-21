@@ -1,9 +1,0 @@
-{
-  "backlog": "delivery/backlog",
-  "sprints": "delivery/sprints",
-  "features": {
-    "phases": true,
-    "sprints": true,
-    "epics": true
-  }
-}

@@ -7,10 +7,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 const CONFIG_DIR_NAME: &str = ".kanban";
-const PATHS_FILE_NAME: &str = "paths.json";
-const THEME_FILE_NAME: &str = "theme.json";
-const STORY_POINTS_FILE_NAME: &str = "story-points.json";
-const WEB_FILE_NAME: &str = "web.json";
+const SETTINGS_FILE_NAME: &str = "settings.json";
 const DEFAULT_BACKLOG_PATH: &str = "delivery/backlog";
 const DEFAULT_SPRINTS_PATH: &str = "delivery/sprints";
 const DEFAULT_WEB_PORT: u16 = 3000;
@@ -350,47 +347,39 @@ pub fn set_config_value(
         bail!("Configuration values must not be empty.");
     }
 
-    let mut paths = read_json_or_default::<PathsConfig>(&config_dir.join(PATHS_FILE_NAME))?;
-    let mut theme = read_json_or_default::<ThemeConfig>(&config_dir.join(THEME_FILE_NAME))?;
-    let mut story_points =
-        read_json_or_default::<StoryPointsConfig>(&config_dir.join(STORY_POINTS_FILE_NAME))?;
-    let mut web = read_json_or_default::<WebConfig>(&config_dir.join(WEB_FILE_NAME))?;
+    let settings_path = config_dir.join(SETTINGS_FILE_NAME);
+    let contents = fs::read_to_string(&settings_path)
+        .with_context(|| format!("read config file {}", settings_path.display()))?;
+    let mut settings = serde_json::from_str::<Settings>(&contents)
+        .with_context(|| format!("parse config file {}", settings_path.display()))?;
 
-    let file_path = match key {
+    match key {
         "paths.backlog" => {
-            paths.backlog = normalize_relative_repo_path(trimmed_value)?;
-            validate_paths(&paths)?;
-            write_json(&config_dir.join(PATHS_FILE_NAME), &paths)?;
-            config_dir.join(PATHS_FILE_NAME)
+            settings.paths.backlog = normalize_relative_repo_path(trimmed_value)?;
+            validate_paths(&settings.paths)?;
         }
         "paths.sprints" => {
-            paths.sprints = if trimmed_value.is_empty() {
+            settings.paths.sprints = if trimmed_value.is_empty() {
                 String::new()
             } else {
                 normalize_relative_repo_path(trimmed_value)?
             };
-            validate_paths(&paths)?;
-            write_json(&config_dir.join(PATHS_FILE_NAME), &paths)?;
-            config_dir.join(PATHS_FILE_NAME)
+            validate_paths(&settings.paths)?;
         }
         "features.sprints" | "features.epics" | "features.phases" => {
             let enabled = parse_feature_flag(trimmed_value)?;
-            let mut features = paths.features.unwrap_or_default();
+            let mut features = settings.paths.features.unwrap_or_default();
             match key {
                 "features.sprints" => features.sprints = enabled,
                 "features.epics" => features.epics = enabled,
                 "features.phases" => features.phases = enabled,
                 _ => unreachable!(),
             }
-            paths.features = Some(features);
-            validate_paths(&paths)?;
-            write_json(&config_dir.join(PATHS_FILE_NAME), &paths)?;
-            config_dir.join(PATHS_FILE_NAME)
+            settings.paths.features = Some(features);
+            validate_paths(&settings.paths)?;
         }
         "theme.color_mode" => {
-            theme.color_mode = parse_color_mode(trimmed_value)?;
-            write_json(&config_dir.join(THEME_FILE_NAME), &theme)?;
-            config_dir.join(THEME_FILE_NAME)
+            settings.theme.color_mode = parse_color_mode(trimmed_value)?;
         }
         "web.port" => {
             let port: u16 = trimmed_value
@@ -399,54 +388,56 @@ pub fn set_config_value(
             if port == 0 {
                 bail!("web.port must be a number between 1 and 65535.");
             }
-            web.port = port;
-            write_json(&config_dir.join(WEB_FILE_NAME), &web)?;
-            config_dir.join(WEB_FILE_NAME)
+            settings.web.port = port;
         }
         "web.host" => {
-            web.host = trimmed_value.to_string();
-            write_json(&config_dir.join(WEB_FILE_NAME), &web)?;
-            config_dir.join(WEB_FILE_NAME)
+            settings.web.host = trimmed_value.to_string();
         }
         "web.style" => {
             if !WEB_STYLES.contains(&trimmed_value) {
                 bail!("web.style must be one of: {}.", WEB_STYLES.join(", "));
             }
-            web.style = trimmed_value.to_string();
-            write_json(&config_dir.join(WEB_FILE_NAME), &web)?;
-            config_dir.join(WEB_FILE_NAME)
+            settings.web.style = trimmed_value.to_string();
         }
         "story_points.allowed_values" => {
-            story_points.allowed_values = trimmed_value
+            settings.story_points.allowed_values = trimmed_value
                 .split(',')
                 .map(|item| item.trim().to_string())
                 .filter(|item| !item.is_empty())
                 .collect();
-            story_points = story_points.normalize_and_validate()?;
-            write_json(&config_dir.join(STORY_POINTS_FILE_NAME), &story_points)?;
-            config_dir.join(STORY_POINTS_FILE_NAME)
+            settings.story_points = settings.story_points.normalize_and_validate()?;
         }
         _ if key.starts_with("story_points.aliases.") => {
             let alias = key.trim_start_matches("story_points.aliases.").trim();
             if alias.is_empty() {
                 bail!("Story point alias keys must not be empty.");
             }
-            story_points
+            settings
+                .story_points
                 .aliases
                 .insert(alias.to_string(), trimmed_value.to_string());
-            story_points = story_points.normalize_and_validate()?;
-            write_json(&config_dir.join(STORY_POINTS_FILE_NAME), &story_points)?;
-            config_dir.join(STORY_POINTS_FILE_NAME)
+            settings.story_points = settings.story_points.normalize_and_validate()?;
         }
         _ => return unsupported_key(key),
     };
 
+    write_json(&settings_path, &settings)?;
+
     Ok(ConfigSetResult {
         repo_root: repo_root.clone(),
-        file_path: relative_path(&repo_root, &file_path),
+        file_path: relative_path(&repo_root, &settings_path),
         key: key.to_string(),
         value: get_config_value(&repo_root, key)?,
     })
+}
+
+fn read_settings(repo_root: &Path) -> Result<Settings> {
+    let config_dir = repo_root.join(CONFIG_DIR_NAME);
+    let settings_file = config_dir.join(SETTINGS_FILE_NAME);
+    let contents = fs::read_to_string(&settings_file)
+        .with_context(|| format!("read config file {}", settings_file.display()))?;
+    serde_json::from_str::<Settings>(&contents)
+        .with_context(|| format!("parse config file {}", settings_file.display()))
 }
 
 fn load_kanban_config_from_root(repo_root: &Path) -> Result<KanbanConfig> {
@@ -455,21 +446,7 @@ fn load_kanban_config_from_root(repo_root: &Path) -> Result<KanbanConfig> {
         return missing_config_error(repo_root);
     }
 
-    let paths = read_json_or_default::<PathsConfig>(&config_dir.join(PATHS_FILE_NAME))?;
-    validate_paths(&paths)?;
-    let story_points =
-        read_json_or_default::<StoryPointsConfig>(&config_dir.join(STORY_POINTS_FILE_NAME))?
-            .normalize_and_validate()?;
-    let theme = read_json_or_default::<ThemeConfig>(&config_dir.join(THEME_FILE_NAME))?;
-    let web = read_json_or_default::<WebConfig>(&config_dir.join(WEB_FILE_NAME))?;
-
-    Ok(KanbanConfig {
-        repo_root: repo_root.to_path_buf(),
-        paths,
-        theme,
-        story_points,
-        web,
-    })
+    read_settings(repo_root)?.into_config(repo_root.to_path_buf())
 }
 
 #[cfg(test)]
@@ -508,19 +485,6 @@ fn git_toplevel(path: &Path) -> Option<PathBuf> {
         return None;
     }
     fs::canonicalize(root).ok()
-}
-
-fn read_json_or_default<T>(file_path: &Path) -> Result<T>
-where
-    T: for<'de> Deserialize<'de> + Default,
-{
-    if !file_path.exists() {
-        return Ok(T::default());
-    }
-    let contents = fs::read_to_string(file_path)
-        .with_context(|| format!("read config file {}", file_path.display()))?;
-    serde_json::from_str(&contents)
-        .with_context(|| format!("parse config file {}", file_path.display()))
 }
 
 fn write_default_json_if_missing<T>(
@@ -628,7 +592,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn init_config_creates_default_files() {
+    fn init_config_creates_settings() {
         let temp_root = tempdir().unwrap();
 
         let result = init_config(temp_root.path()).unwrap();
@@ -637,9 +601,9 @@ mod tests {
         assert!(
             result
                 .created_files
-                .contains(&PathBuf::from(".kanban/paths.json"))
+                .contains(&PathBuf::from(".kanban/settings.json"))
         );
-        assert!(temp_root.path().join(".kanban/story-points.json").exists());
+        assert!(temp_root.path().join(".kanban/settings.json").exists());
     }
 
     #[test]
@@ -650,7 +614,7 @@ mod tests {
         let result = set_config_value(temp_root.path(), "story_points.aliases.XXL", "21").unwrap();
         let config = load_kanban_config(temp_root.path()).unwrap();
 
-        assert_eq!(result.file_path, PathBuf::from(".kanban/story-points.json"));
+        assert_eq!(result.file_path, PathBuf::from(".kanban/settings.json"));
         assert_eq!(
             config.story_points.aliases.get("XXL").map(String::as_str),
             Some("21")
@@ -660,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    fn init_config_creates_web_json_with_defaults() {
+    fn init_config_creates_settings_with_defaults() {
         let temp_root = tempdir().unwrap();
 
         let result = init_config(temp_root.path()).unwrap();
@@ -668,7 +632,7 @@ mod tests {
         assert!(
             result
                 .created_files
-                .contains(&PathBuf::from(".kanban/web.json"))
+                .contains(&PathBuf::from(".kanban/settings.json"))
         );
         let config = load_kanban_config(temp_root.path()).unwrap();
         assert_eq!(config.web.port, 3000);
@@ -682,7 +646,7 @@ mod tests {
         init_config(temp_root.path()).unwrap();
 
         let result = set_config_value(temp_root.path(), "web.port", "4000").unwrap();
-        assert_eq!(result.file_path, PathBuf::from(".kanban/web.json"));
+        assert_eq!(result.file_path, PathBuf::from(".kanban/settings.json"));
 
         let config = load_kanban_config(temp_root.path()).unwrap();
         assert_eq!(config.web.port, 4000);
@@ -786,20 +750,5 @@ mod tests {
         set_config_value(temp_root.path(), "features.sprints", "true").unwrap();
         let err = set_config_value(temp_root.path(), "paths.sprints", "").unwrap_err();
         assert!(err.to_string().contains("paths.sprints"));
-    }
-
-    #[test]
-    fn backward_compatible_paths_config_without_features_keeps_all_enabled() {
-        let temp_root = tempdir().unwrap();
-        init_config(temp_root.path()).unwrap();
-        let paths_file = temp_root.path().join(".kanban/paths.json");
-        let raw = r#"{"backlog":"delivery/backlog","sprints":"delivery/sprints"}"#;
-        fs::write(&paths_file, raw).unwrap();
-
-        let config = load_kanban_config(temp_root.path()).unwrap();
-        let features = config.features();
-        assert!(features.phases);
-        assert!(features.sprints);
-        assert!(features.epics);
     }
 }
