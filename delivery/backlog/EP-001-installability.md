@@ -1,7 +1,7 @@
 ---
 id: EP-001
 type: epic
-status: draft
+status: done
 phase: 1
 owner: Thomas Malt / Tooling Lead
 milestone: MP1

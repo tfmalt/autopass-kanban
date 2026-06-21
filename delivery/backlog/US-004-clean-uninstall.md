@@ -1,15 +1,15 @@
 ---
 id: US-004
 type: user-story
-status: draft
+status: done
 epic: EP-001
 sprint: ~
 assignee: Thomas Malt <thomas.malt@vegvesen.no>
 story_points: 3
-work_started:
-work_done:
+work_started: 2026-06-21T22:38:29+0200
+work_done: 2026-06-21T22:39:39+0200
 created: 2026-06-21T16:48:56+0200
-updated: 2026-06-21T16:48:56+0200
+updated: 2026-06-21T22:39:39+0200
 ---
 
 # User Story: Clean uninstall of the kanban binary, completions, skills, and rc edits

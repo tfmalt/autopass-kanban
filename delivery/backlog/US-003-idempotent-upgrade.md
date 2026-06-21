@@ -1,15 +1,15 @@
 ---
 id: US-003
 type: user-story
-status: draft
+status: done
 epic: EP-001
 sprint: ~
 assignee: Thomas Malt <thomas.malt@vegvesen.no>
 story_points: 5
-work_started:
-work_done:
+work_started: 2026-06-21T21:37:16+0200
+work_done: 2026-06-21T22:38:20+0200
 created: 2026-06-21T16:48:56+0200
-updated: 2026-06-21T16:48:56+0200
+updated: 2026-06-21T22:38:20+0200
 ---
 
 # User Story: Idempotent upgrade and reinstall of an existing kanban install

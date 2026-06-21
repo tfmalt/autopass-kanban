@@ -1,15 +1,16 @@
 ---
 id: US-002
 type: user-story
-status: draft
+status: done
 epic: EP-001
 sprint: ~
 assignee: Thomas Malt <thomas.malt@vegvesen.no>
 story_points: 5
-work_started:
-work_done:
+work_started: 2026-06-21T21:31:24+0200
+work_done: 2026-06-21T21:34:36+0200
 created: 2026-06-21T16:48:56+0200
-updated: 2026-06-21T16:48:56+0200
+updated: 2026-06-21T21:34:36+0200
+activated: 2026-06-21T21:22:12+0200
 ---
 
 # User Story: Discover and install kanban agent skills into the user's agent config

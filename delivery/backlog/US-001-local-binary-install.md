@@ -1,15 +1,15 @@
 ---
 id: US-001
 type: user-story
-status: draft
+status: done
 epic: EP-001
 sprint: ~
 assignee: Thomas Malt <thomas.malt@vegvesen.no>
 story_points: 8
-work_started:
-work_done:
+work_started: 2026-06-21T18:01:31+0200
+work_done: 2026-06-21T21:13:37+0200
 created: 2026-06-21T16:48:56+0200
-updated: 2026-06-21T16:48:56+0200
+updated: 2026-06-21T21:13:37+0200
 ---
 
 # User Story: Local install of the kanban binary with PATH and completion bootstrap
@@ -233,9 +233,9 @@ Expected tasks once activated into a sprint:
 
 | #   | Question / Assumption                                                                   | Owner        | Due        | Resolved |
 | --- | --------------------------------------------------------------------------------------- | ------------ | ---------- | -------- |
-| 1   | Is `~/.local/bin` the right default prefix on macOS, or should it be `~/bin`?           | Tooling lead | 2026-06-27 | No       |
-| 2   | Should the installer touch `.profile` on Debian, or only the shell-specific rc file?    | Tooling lead | 2026-06-27 | No       |
-| 3   | Do we install completions for the user's current shell only, or for bash and zsh both?  | Tooling lead | 2026-06-27 | No       |
+| 1   | Is `~/.local/bin` the right default prefix on macOS, or should it be `~/bin`?           | Tooling lead | 2026-06-27 | Yes — `~/.local/bin` chosen per XDG conventions |
+| 2   | Should the installer touch `.profile` on Debian, or only the shell-specific rc file?    | Tooling lead | 2026-06-27 | Yes — shell-specific rc file only (`.bashrc` on Debian) |
+| 3   | Do we install completions for the user's current shell only, or for bash and zsh both?  | Tooling lead | 2026-06-27 | Yes — current shell only; re-run for other shells |
 
 ---
 
