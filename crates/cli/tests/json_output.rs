@@ -113,8 +113,8 @@ fn init_emits_ok_envelope() {
     assert_eq!(json["status"], "ok", "envelope status should be ok");
     assert_eq!(json["kind"], "init", "envelope kind should be init");
     assert_eq!(
-        json["data"]["created_count"], 4,
-        "init should create the four default config files"
+        json["data"]["created_count"], 1,
+        "init should create the settings.json config file"
     );
 }
 
@@ -133,14 +133,14 @@ fn init_with_no_sprints_persists_feature_flag() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let paths_file = dir.path().join(".kanban/paths.json");
+    let settings_file = dir.path().join(".kanban/settings.json");
     let json = serde_json::from_str::<serde_json::Value>(
-        &fs::read_to_string(&paths_file).expect("paths.json should be written"),
+        &fs::read_to_string(&settings_file).expect("settings.json should be written"),
     )
-    .expect("paths.json should parse as json");
-    assert_eq!(json["features"]["sprints"], false);
-    assert_eq!(json["features"]["phases"], true);
-    assert_eq!(json["features"]["epics"], true);
+    .expect("settings.json should parse as json");
+    assert_eq!(json["paths"]["features"]["sprints"], false);
+    assert_eq!(json["paths"]["features"]["phases"], true);
+    assert_eq!(json["paths"]["features"]["epics"], true);
 }
 
 #[test]
@@ -165,14 +165,14 @@ fn init_with_no_epics_and_no_phases_persists_feature_flags() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let paths_file = dir.path().join(".kanban/paths.json");
+    let settings_file = dir.path().join(".kanban/settings.json");
     let json = serde_json::from_str::<serde_json::Value>(
-        &fs::read_to_string(&paths_file).expect("paths.json should be written"),
+        &fs::read_to_string(&settings_file).expect("settings.json should be written"),
     )
-    .expect("paths.json should parse as json");
-    assert_eq!(json["features"]["sprints"], true);
-    assert_eq!(json["features"]["phases"], false);
-    assert_eq!(json["features"]["epics"], false);
+    .expect("settings.json should parse as json");
+    assert_eq!(json["paths"]["features"]["sprints"], true);
+    assert_eq!(json["paths"]["features"]["phases"], false);
+    assert_eq!(json["paths"]["features"]["epics"], false);
 }
 
 #[test]
@@ -535,8 +535,8 @@ fn config_set_emits_updated_value() {
     assert!(
         json["data"]["file_path"]
             .as_str()
-            .is_some_and(|path| path.ends_with(".kanban/web.json")),
-        "file_path should point at web.json; got: {}",
+            .is_some_and(|path| path.ends_with(".kanban/settings.json")),
+        "file_path should point at settings.json; got: {}",
         json["data"]["file_path"]
     );
 }

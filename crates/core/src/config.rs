@@ -180,6 +180,26 @@ impl Default for WebConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Settings {
+    pub paths: PathsConfig,
+    pub theme: ThemeConfig,
+    pub story_points: StoryPointsConfig,
+    pub web: WebConfig,
+}
+
+impl Settings {
+    fn into_config(self, repo_root: PathBuf) -> KanbanConfig {
+        KanbanConfig {
+            repo_root,
+            paths: self.paths,
+            theme: self.theme,
+            story_points: self.story_points,
+            web: self.web,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct KanbanConfig {
     #[serde(skip_serializing)]
@@ -255,26 +275,18 @@ pub fn init_config_with_features(
     };
     validate_paths(&paths_default)?;
 
+    let settings = Settings {
+        paths: paths_default,
+        theme: ThemeConfig::default(),
+        story_points: StoryPointsConfig::default(),
+        web: WebConfig::default(),
+    };
+
     let mut created_files = Vec::new();
     created_files.extend(write_default_json_if_missing(
         &repo_root,
-        &config_dir.join(PATHS_FILE_NAME),
-        &paths_default,
-    )?);
-    created_files.extend(write_default_json_if_missing(
-        &repo_root,
-        &config_dir.join(THEME_FILE_NAME),
-        &ThemeConfig::default(),
-    )?);
-    created_files.extend(write_default_json_if_missing(
-        &repo_root,
-        &config_dir.join(STORY_POINTS_FILE_NAME),
-        &StoryPointsConfig::default(),
-    )?);
-    created_files.extend(write_default_json_if_missing(
-        &repo_root,
-        &config_dir.join(WEB_FILE_NAME),
-        &WebConfig::default(),
+        &config_dir.join(SETTINGS_FILE_NAME),
+        &settings,
     )?);
 
     Ok(ConfigInitResult {
@@ -448,7 +460,7 @@ fn load_kanban_config_from_root(repo_root: &Path) -> Result<KanbanConfig> {
         return missing_config_error(repo_root);
     }
 
-    read_settings(repo_root)?.into_config(repo_root.to_path_buf())
+    Ok(read_settings(repo_root)?.into_config(repo_root.to_path_buf()))
 }
 
 #[cfg(test)]
