@@ -7,7 +7,6 @@ These instructions apply to all files in this repository.
 
 - `crates/core` contains shared parsing, domain logic, validation, and write helpers.
 - `crates/cli` contains the `kanban` CLI and the documented `kb` alias in help/docs.
-- `crates/tui` is reserved for a terminal UI.
 - The local web app source lives in `web/`; production `kanban web start` launches the embedded Rust web server from `crates/web-server`.
 - `target/` is build output and must not be edited manually or committed.
 

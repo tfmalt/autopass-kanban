@@ -127,7 +127,6 @@ placed there — the zsh-specific completion syntax will fail. The `eval` approa
 
 - `crates/core`: shared parsing and validation core
 - `crates/cli`: CLI interface for inspection and lightweight write flows
-- `crates/tui`: reserved for the terminal UI
 - `crates/web-server`: embedded Rust web server used by `kanban web start`
 - `web`: Vite/React web app source used for development and release-time embedded assets
 

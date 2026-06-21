@@ -651,14 +651,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kanban-tui"
-version = "26.6.1903"
-dependencies = [
- "anyhow",
- "kanban-core",
-]
-
-[[package]]
 name = "kanban-web-server"
 version = "26.6.1903"
 dependencies = [
