@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-INSTALLER_VERSION="26.6.2209"
+INSTALLER_VERSION="26.6.2210"
 C_RESET=""
 C_BRAND=""
 C_GREEN=""
