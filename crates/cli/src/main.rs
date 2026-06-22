@@ -5,6 +5,7 @@ mod json_out;
 mod layout;
 mod prompt;
 mod render;
+mod self_manage;
 mod theme;
 mod web;
 
@@ -42,8 +43,8 @@ pub(crate) mod prelude {
 use crate::prelude::*;
 #[allow(unused_imports)]
 use crate::{
-    cli::*, completion::*, doctor_cli::*, json_out::*, layout::*, prompt::*, render::*, theme::*,
-    web::*,
+    cli::*, completion::*, doctor_cli::*, json_out::*, layout::*, prompt::*, render::*,
+    self_manage::*, theme::*, web::*,
 };
 use clap::{CommandFactory, Parser};
 #[allow(unused_imports)]
@@ -716,6 +717,36 @@ fn main() -> Result<()> {
                 println!("{COMPLETION_HELP}");
             }
         }
+        Command::Uninstall {
+            prefix,
+            skills_dir,
+            yes,
+            dry_run,
+            quiet,
+        } => run_uninstall(UninstallOptions {
+            prefix,
+            skills_dir,
+            yes,
+            dry_run,
+            quiet,
+        })?,
+        Command::Upgrade {
+            prefix,
+            skills_dir,
+            no_skills,
+            yes,
+            force,
+            dry_run,
+            quiet,
+        } => run_upgrade(UpgradeOptions {
+            prefix,
+            skills_dir,
+            no_skills,
+            yes,
+            force,
+            dry_run,
+            quiet,
+        })?,
         Command::Validate { repo_root } => {
             let report = validate_repository(repo_root)?;
             if report.issues.is_empty() {

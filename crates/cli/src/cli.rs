@@ -812,6 +812,48 @@ pub(crate) enum Command {
         target: CompletionTarget,
     },
     #[command(
+        about = "Uninstall kanban files installed by the kanban installer. Effect: removes manifest-tracked files and kanban-installer rc lines.",
+        long_about = "Uninstall kanban files installed by the kanban installer.\n\nThis command runs the embedded POSIX uninstaller from the current kanban binary. It removes only manifest-tracked files whose hashes still match the install manifest, strips shell rc lines tagged with `kanban-installer:`, and removes the install manifest directory."
+    )]
+    Uninstall {
+        #[arg(long, help = "Prefix used during install (default: ~/.local/bin).")]
+        prefix: Option<PathBuf>,
+        #[arg(long, help = "Skills directory used during install (optional).")]
+        skills_dir: Option<PathBuf>,
+        #[arg(long, help = "Skip confirmation prompts.")]
+        yes: bool,
+        #[arg(long, help = "Preview all actions without modifying the filesystem.")]
+        dry_run: bool,
+        #[arg(long, help = "Suppress non-error log lines.")]
+        quiet: bool,
+    },
+    #[command(
+        about = "Upgrade kanban using the remote GitHub installer. Effect: downloads and runs the latest release installer.",
+        long_about = "Upgrade kanban using the remote GitHub installer.\n\nThis command downloads the canonical install script from GitHub and runs it locally, preserving the installer's latest-release resolution, checksum verification, manifest reconciliation, completion refresh, and skill upgrade behavior."
+    )]
+    Upgrade {
+        #[arg(
+            long,
+            help = "Install directory for the binary (default: ~/.local/bin)."
+        )]
+        prefix: Option<PathBuf>,
+        #[arg(long, help = "Install agent skills to this directory.")]
+        skills_dir: Option<PathBuf>,
+        #[arg(long, help = "Skip agent skill installation.")]
+        no_skills: bool,
+        #[arg(long, help = "Accept installer defaults without prompting.")]
+        yes: bool,
+        #[arg(long, help = "Skip installer safety prompts.")]
+        force: bool,
+        #[arg(
+            long,
+            help = "Preview the remote latest-release install without changing files."
+        )]
+        dry_run: bool,
+        #[arg(long, help = "Suppress non-error installer log lines.")]
+        quiet: bool,
+    },
+    #[command(
         about = "Validate repository workflow metadata. Effect: read-only validation of backlog and sprint markdown. Side effects: none."
     )]
     Validate {
@@ -931,7 +973,7 @@ pub(crate) fn command_repo_root(command: &Command) -> Option<&PathBuf> {
             | FeaturesCommand::Enable { repo_root, .. }
             | FeaturesCommand::Disable { repo_root, .. } => Some(repo_root),
         },
-        Command::Completion { .. } => None,
+        Command::Completion { .. } | Command::Uninstall { .. } | Command::Upgrade { .. } => None,
     }
 }
 
@@ -1156,6 +1198,76 @@ mod tests {
             Command::Doctor {
                 command: DoctorCommand::Show { repo_root },
             } => assert_eq!(repo_root, PathBuf::from(".")),
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn uninstall_command_parses_self_management_flags() {
+        let args = Args::try_parse_from([
+            "kanban",
+            "uninstall",
+            "--prefix",
+            "/tmp/bin",
+            "--skills-dir",
+            "/tmp/skills",
+            "--yes",
+            "--dry-run",
+            "--quiet",
+        ])
+        .unwrap();
+
+        match args.command {
+            Command::Uninstall {
+                prefix,
+                skills_dir,
+                yes,
+                dry_run,
+                quiet,
+            } => {
+                assert_eq!(prefix, Some(PathBuf::from("/tmp/bin")));
+                assert_eq!(skills_dir, Some(PathBuf::from("/tmp/skills")));
+                assert!(yes);
+                assert!(dry_run);
+                assert!(quiet);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn upgrade_command_parses_remote_installer_flags() {
+        let args = Args::try_parse_from([
+            "kanban",
+            "upgrade",
+            "--prefix",
+            "/tmp/bin",
+            "--no-skills",
+            "--yes",
+            "--force",
+            "--dry-run",
+            "--quiet",
+        ])
+        .unwrap();
+
+        match args.command {
+            Command::Upgrade {
+                prefix,
+                skills_dir,
+                no_skills,
+                yes,
+                force,
+                dry_run,
+                quiet,
+            } => {
+                assert_eq!(prefix, Some(PathBuf::from("/tmp/bin")));
+                assert_eq!(skills_dir, None);
+                assert!(no_skills);
+                assert!(yes);
+                assert!(force);
+                assert!(dry_run);
+                assert!(quiet);
+            }
             _ => panic!("unexpected command"),
         }
     }

@@ -1027,6 +1027,20 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
         Command::Completion { target } => {
             print_envelope(&JsonEnvelope::ok("completion", completion_output(*target)))
         }
+        Command::Uninstall { .. } => print_envelope(&JsonEnvelope::<NoData>::error(
+            "uninstall",
+            KanbanErrorBody::new(
+                KanbanErrorCode::InvalidArgument,
+                "uninstall is not available in --format json mode because it runs an interactive system uninstaller.",
+            ),
+        )),
+        Command::Upgrade { .. } => print_envelope(&JsonEnvelope::<NoData>::error(
+            "upgrade",
+            KanbanErrorBody::new(
+                KanbanErrorCode::InvalidArgument,
+                "upgrade is not available in --format json mode because it downloads and runs the remote installer.",
+            ),
+        )),
         Command::Report { command } => {
             let repo_root = match command {
                 ReportCommand::Wbs { repo_root } | ReportCommand::Forecast { repo_root } => {
