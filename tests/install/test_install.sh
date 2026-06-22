@@ -48,6 +48,29 @@ assert_exit_code() {
 	return 1
 }
 
+assert_line_order() {
+	_file="$1"
+	_first="$2"
+	_second="$3"
+	_third="$4"
+
+	_first_line=$(grep -nF "$_first" "$_file" 2>/dev/null | sed -n '1s/:.*//p')
+	_second_line=$(grep -nF "$_second" "$_file" 2>/dev/null | sed -n '1s/:.*//p')
+	_third_line=$(grep -nF "$_third" "$_file" 2>/dev/null | sed -n '1s/:.*//p')
+
+	if [ -z "$_first_line" ] || [ -z "$_second_line" ] || [ -z "$_third_line" ]; then
+		fail "missing ordered log lines in $_file"
+		return 1
+	fi
+
+	if [ "$_first_line" -lt "$_second_line" ] && [ "$_second_line" -lt "$_third_line" ]; then
+		return 0
+	fi
+
+	fail "unexpected log order in $_file"
+	return 1
+}
+
 install_log_path() {
 	_log=$(sed -n 's/.*install log: //p' "$1" 2>/dev/null | sed -n '$p')
 	if [ -n "$_log" ]; then
@@ -628,6 +651,59 @@ rm -rf "$HOME_DIR"
 unset HOME_DIR HOME SHELL
 
 echo "PASS: US-002 dry-run previews skill install"
+
+# US-002/US-003: existing optional integrations update in place without prompting
+echo ""
+echo "--- Existing optional integrations update in place ---"
+tests_run=$((tests_run + 1))
+
+HOME_DIR=$(mktemp -d /tmp/kanban-install-test.XXXXXX)
+export HOME="$HOME_DIR"
+export SHELL="/bin/bash"
+
+cp "$SCRIPT_DIR/stub-kanban" "$HOME_DIR/stub-kanban"
+chmod +x "$HOME_DIR/stub-kanban"
+
+# First install opts into PATH, completions, and skills.
+set +e
+sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --yes > /dev/null 2> "$HOME_DIR/stderr1"
+_exit=$?
+set -e
+assert_exit_code 0 $_exit "first existing-integrations install exit"
+
+assert_file_contains "$HOME_DIR/.bashrc" "kanban-installer: PATH"
+assert_file_exists "$HOME_DIR/.local/share/bash-completion/completions/kanban"
+assert_file_exists "$HOME_DIR/.config/opencode/skills/kanban-backlog-maintainer/SKILL.md"
+assert_file_contains "$HOME_DIR/.local/lib/kanban/manifest.txt" "# path-installed: yes"
+assert_file_contains "$HOME_DIR/.local/lib/kanban/manifest.txt" "# completions-installed: yes"
+
+# Second install is non-interactive and must reuse prior consent.
+export KANBAN_INSTALL_NONINTERACTIVE=1
+set +e
+sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" > /dev/null 2> "$HOME_DIR/stderr2"
+_exit=$?
+set -e
+unset KANBAN_INSTALL_NONINTERACTIVE
+
+assert_exit_code 0 $_exit "existing-integrations non-interactive re-run exit"
+assert_file_contains "$HOME_DIR/.bashrc" "kanban-installer: PATH"
+assert_file_contains "$HOME_DIR/.local/share/bash-completion/completions/kanban" "stub kanban bash completion"
+assert_file_exists "$HOME_DIR/.config/opencode/skills/kanban-developer/SKILL.md"
+
+_install_log=$(install_log_path "$HOME_DIR/stderr2")
+assert_file_exists "$_install_log"
+assert_file_contains "$_install_log" "PATH profile update already installed"
+assert_file_contains "$_install_log" "shell completion already installed"
+assert_file_contains "$_install_log" "agent skills already installed"
+assert_line_order "$_install_log" \
+	"PATH profile update already installed" \
+	"shell completion already installed" \
+	"agent skills already installed"
+
+rm -rf "$HOME_DIR"
+unset HOME_DIR HOME SHELL
+
+echo "PASS: existing optional integrations update in place"
 
 # US-002: idempotent re-run (upgrade-in-place)
 echo ""

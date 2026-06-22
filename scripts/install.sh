@@ -55,6 +55,11 @@ PROGRESS_LINE_OPEN=0
 PROGRESS_CURRENT=0
 PROGRESS_TOTAL=7
 PROGRESS_TITLE=""
+EXISTING_MANIFEST=""
+EXISTING_MANIFEST_PATH_SELECTED=""
+EXISTING_MANIFEST_COMPLETIONS_SELECTED=""
+EXISTING_MANIFEST_SKILLS_DIR=""
+EXISTING_MANIFEST_HAS_SKILLS=0
 
 cleanup() {
 	if [ -n "${UMASK_SAVED:-}" ]; then
@@ -641,6 +646,38 @@ read_manifest_entries() {
 	grep -v '^#' "$_manifest" 2>/dev/null | grep -v '^$' || true
 }
 
+load_existing_manifest_state() {
+	_manifest=$(manifest_path)
+	EXISTING_MANIFEST=""
+	EXISTING_MANIFEST_PATH_SELECTED=""
+	EXISTING_MANIFEST_COMPLETIONS_SELECTED=""
+	EXISTING_MANIFEST_SKILLS_DIR=""
+	EXISTING_MANIFEST_HAS_SKILLS=0
+
+	if [ ! -f "$_manifest" ]; then
+		return 0
+	fi
+
+	EXISTING_MANIFEST="$_manifest"
+	EXISTING_MANIFEST_PATH_SELECTED=$(sed -n 's/^# path-installed: //p' "$_manifest" 2>/dev/null | sed -n '1p')
+	EXISTING_MANIFEST_COMPLETIONS_SELECTED=$(sed -n 's/^# completions-installed: //p' "$_manifest" 2>/dev/null | sed -n '1p')
+	EXISTING_MANIFEST_SKILLS_DIR=$(sed -n 's/^# skills-dir: //p' "$_manifest" 2>/dev/null | sed -n '1p')
+
+	if grep -q 'generated:kanban-completion-' "$_manifest" 2>/dev/null; then
+		if [ -z "$EXISTING_MANIFEST_COMPLETIONS_SELECTED" ]; then
+			EXISTING_MANIFEST_COMPLETIONS_SELECTED="yes"
+		fi
+	fi
+
+	if grep -q 'repo:skills/' "$_manifest" 2>/dev/null; then
+		EXISTING_MANIFEST_HAS_SKILLS=1
+	fi
+
+	if [ -n "$EXISTING_MANIFEST" ]; then
+		log "existing install manifest found: $(value "$EXISTING_MANIFEST")"
+	fi
+}
+
 get_binary_version() {
 	_bin="$1"
 	if [ -x "$_bin" ]; then
@@ -878,6 +915,12 @@ discover_skills_dir() {
 		return 0
 	fi
 
+	if [ "$EXISTING_MANIFEST_HAS_SKILLS" -eq 1 ] && [ -n "$EXISTING_MANIFEST_SKILLS_DIR" ]; then
+		SKILLS_DIR="$EXISTING_MANIFEST_SKILLS_DIR"
+		log "reusing skills dir from existing install: $(value "$SKILLS_DIR")"
+		return 0
+	fi
+
 	if [ -n "${OPENCODE_HOME:-}" ]; then
 		SKILLS_DIR="${OPENCODE_HOME}/skills"
 		log "discovered skills dir from OPENCODE_HOME: $(value "$SKILLS_DIR")"
@@ -906,10 +949,80 @@ discover_skills_dir() {
 	log "no existing agent config found; proposing default: $(value "$SKILLS_DIR")"
 }
 
+path_already_installed() {
+	if [ "$EXISTING_MANIFEST_PATH_SELECTED" = "yes" ]; then
+		return 0
+	fi
+
+	if [ -z "$RC_FILE" ]; then
+		return 1
+	fi
+
+	_rc_expanded=$(resolve_path "$RC_FILE")
+	dir_contains_path "$_rc_expanded" "kanban-installer: PATH"
+}
+
+completion_destination() {
+	case "$SHELL_NAME" in
+		bash)
+			if [ -n "${BASH_COMPLETION_USER_DIR:-}" ]; then
+				printf '%s/completions/kanban' "$BASH_COMPLETION_USER_DIR"
+			else
+				printf '%s/.local/share/bash-completion/completions/kanban' "$HOME"
+			fi
+			;;
+		zsh)
+			printf '%s/.zsh/completions/_kanban' "$HOME"
+			;;
+		*)
+			printf ''
+			;;
+	esac
+}
+
+completion_already_installed() {
+	if [ "$EXISTING_MANIFEST_COMPLETIONS_SELECTED" = "yes" ]; then
+		return 0
+	fi
+
+	_dst=$(completion_destination)
+	if [ -z "$_dst" ]; then
+		return 1
+	fi
+
+	[ -f "$_dst" ]
+}
+
+skills_already_installed() {
+	if [ -z "${SKILLS_DIR:-}" ]; then
+		return 1
+	fi
+
+	if [ "$EXISTING_MANIFEST_HAS_SKILLS" -eq 1 ] && [ "$EXISTING_MANIFEST_SKILLS_DIR" = "$SKILLS_DIR" ]; then
+		return 0
+	fi
+
+	for _skill in kanban-backlog-maintainer kanban-developer; do
+		for _file in SKILL.md plugin.json; do
+			if [ -f "${SKILLS_DIR}/${_skill}/${_file}" ]; then
+				return 0
+			fi
+		done
+	done
+
+	return 1
+}
+
 confirm_or_override() {
 	if [ "$SKILLS_DIR_EXPLICIT" -eq 1 ]; then
 		SKILLS_DIR=$(resolve_path "$SKILLS_DIR")
 		log "agent skills selected: $(value "$SKILLS_DIR") (--skills-dir)"
+		return 0
+	fi
+
+	if skills_already_installed; then
+		SKILLS_DIR=$(resolve_path "$SKILLS_DIR")
+		log "agent skills already installed at $(value "$SKILLS_DIR"); updating in place"
 		return 0
 	fi
 
@@ -1228,6 +1341,11 @@ decide_path_update() {
 		log "PATH profile update skipped (--no-add-path)"
 		return 0
 	fi
+	if path_already_installed; then
+		ADD_PATH=1
+		log "PATH profile update already installed in $(value "$_rc_expanded"); updating in place"
+		return 0
+	fi
 	if [ "$YES" -eq 1 ]; then
 		ADD_PATH=1
 		log "PATH profile update selected: $(value "$_rc_expanded") (--yes)"
@@ -1268,6 +1386,11 @@ decide_completion_install() {
 	fi
 	if [ "${COMPLETIONS:-}" = "0" ]; then
 		log "shell completion installation skipped (--no-completions)"
+		return 0
+	fi
+	if completion_already_installed; then
+		COMPLETIONS=1
+		log "shell completion already installed for $(value "$SHELL_NAME"); updating in place"
 		return 0
 	fi
 	if [ "$YES" -eq 1 ]; then
@@ -1335,13 +1458,7 @@ install_completion() {
 }
 
 install_bash_completion() {
-	if [ -n "${BASH_COMPLETION_USER_DIR:-}" ]; then
-		_bash_comp_dir="${BASH_COMPLETION_USER_DIR}/completions"
-	else
-		_bash_comp_dir="${HOME}/.local/share/bash-completion/completions"
-	fi
-
-	_dst="${_bash_comp_dir}/kanban"
+	_dst=$(completion_destination)
 
 	if [ "$DRY_RUN" -eq 1 ]; then
 		if [ -x "$PREFIX/$BINARY_NAME" ]; then
@@ -1370,7 +1487,7 @@ install_bash_completion() {
 
 install_zsh_completion() {
 	_zsh_comp_dir="${HOME}/.zsh/completions"
-	_dst="${_zsh_comp_dir}/_kanban"
+	_dst=$(completion_destination)
 
 	if [ "$DRY_RUN" -eq 1 ]; then
 		if [ -x "$PREFIX/$BINARY_NAME" ]; then
@@ -1434,23 +1551,7 @@ gather_planned_files() {
 	add_planned_entry "$(printf '%s\t%s\t%s\t%s' "$_bin_dst" "$_bin_hash" "$BINARY" "$INSTALLER_VERSION")"
 
 	if [ "${COMPLETIONS:-0}" -eq 1 ] && [ -n "$SHELL_NAME" ]; then
-		case "$SHELL_NAME" in
-			bash)
-				if [ -n "${BASH_COMPLETION_USER_DIR:-}" ]; then
-					_bash_comp_dir="${BASH_COMPLETION_USER_DIR}/completions"
-				else
-					_bash_comp_dir="${HOME}/.local/share/bash-completion/completions"
-				fi
-				_dst="${_bash_comp_dir}/kanban"
-				;;
-			zsh)
-				_zsh_comp_dir="${HOME}/.zsh/completions"
-				_dst="${_zsh_comp_dir}/_kanban"
-				;;
-			*)
-				_dst=""
-				;;
-		esac
+		_dst=$(completion_destination)
 		if [ -n "$_dst" ]; then
 			if [ -x "$BINARY" ]; then
 				if [ "$SHELL_NAME" = "bash" ]; then
@@ -1488,6 +1589,14 @@ write_manifest() {
 	_manifest=$(manifest_path)
 	_manifest_tmp="${_manifest_dir}/.manifest.$$.tmp"
 	_installed_at=$(iso8601_now)
+	_path_installed="no"
+	_completions_installed="no"
+	if [ "${ADD_PATH:-0}" -eq 1 ]; then
+		_path_installed="yes"
+	fi
+	if [ "${COMPLETIONS:-0}" -eq 1 ]; then
+		_completions_installed="yes"
+	fi
 
 	if [ "$DRY_RUN" -eq 1 ]; then
 		detail "[dry-run] would write manifest to $_manifest"
@@ -1501,6 +1610,8 @@ write_manifest() {
 		printf '# installer-version: %s\n' "$INSTALLER_VERSION"
 		printf '# installed-at: %s\n' "$_installed_at"
 		printf '# prefix: %s\n' "$(resolve_path "$PREFIX")"
+		printf '# path-installed: %s\n' "$_path_installed"
+		printf '# completions-installed: %s\n' "$_completions_installed"
 		if [ -n "${SKILLS_DIR:-}" ]; then
 			printf '# skills-dir: %s\n' "$SKILLS_DIR"
 		fi
@@ -1536,6 +1647,7 @@ main() {
 
 	find_repo_root
 	detect_shell
+	load_existing_manifest_state
 
 	if [ "$REMOTE" -eq 1 ]; then
 		log "remote install mode"
@@ -1569,6 +1681,8 @@ main() {
 		log "warning: $(value "$BINARY") is not executable; continuing anyway"
 	fi
 
+	decide_path_update
+	decide_completion_install
 	if [ "$NO_SKILLS" -eq 0 ]; then
 		discover_skills_dir
 		if [ -n "${SKILLS_DIR:-}" ]; then
@@ -1576,8 +1690,6 @@ main() {
 			confirm_or_override
 		fi
 	fi
-	decide_path_update
-	decide_completion_install
 
 	gather_planned_files
 	progress_step "install plan prepared"
