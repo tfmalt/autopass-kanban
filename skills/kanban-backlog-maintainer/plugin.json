@@ -1,5 +1,5 @@
 {
   "name": "kanban-backlog-maintainer",
   "description": "Maintain and operate a markdown-based kanban backlog and sprint board using the kanban CLI — creates, edits, validates, plans, and reports on Epics, User Stories, tasks, and sprints for any git repository.",
-  "version": "26.6.2202"
+  "version": "26.6.2203"
 }
