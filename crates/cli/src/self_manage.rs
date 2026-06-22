@@ -65,7 +65,7 @@ pub(crate) fn run_upgrade(options: UpgradeOptions) -> Result<()> {
 fn run_upgrade_with_latest(options: UpgradeOptions, latest_version: &str) -> Result<()> {
     let current_version = env!("CARGO_PKG_VERSION");
     if !is_newer_version(current_version, latest_version)? {
-        println!("kanban {current_version} is already the latest version");
+        println!("kanban {current_version} is the latest version");
         return Ok(());
     }
 
