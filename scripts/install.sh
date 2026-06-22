@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-INSTALLER_VERSION="26.6.2201"
+INSTALLER_VERSION="26.6.2202"
 GITHUB_REPO="tfmalt/autopass-kanban"
 UMASK_SAVED=""
 RC_FILE=""
