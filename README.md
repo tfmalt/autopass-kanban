@@ -146,6 +146,19 @@ curl -fsSL https://raw.githubusercontent.com/tfmalt/autopass-kanban/main/scripts
 sh scripts/install.sh --binary ./target/release/kanban --quiet
 ```
 
+After installation, the tool can manage itself:
+
+```sh
+# Upgrade to the latest GitHub release using the remote installer
+kanban upgrade
+
+# Preview an upgrade without changing files
+kanban upgrade --dry-run
+
+# Remove files installed by the kanban installer
+kanban uninstall --yes
+```
+
 ### Supported shells
 
 | Shell | RC file | Completions |
