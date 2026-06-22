@@ -66,7 +66,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -74,7 +74,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -117,8 +117,11 @@ jobs:
           staging="dist/${{ matrix.target }}"
           mkdir -p "$staging/skills"
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$staging/${{ matrix.binary }}"
-          cp -R skills/kanban-backlog-maintainer "$staging/skills/"
-          cp -R skills/kanban-developer "$staging/skills/"
+          for skill in kanban-backlog-maintainer kanban-developer; do
+            mkdir -p "$staging/skills/$skill"
+            cp "skills/$skill/SKILL.md" "$staging/skills/$skill/SKILL.md"
+            cp "skills/$skill/plugin.json" "$staging/skills/$skill/plugin.json"
+          done
           printf '%s\n' "$version" > "$staging/VERSION"
           tar -C "$staging" -czf "$archive" "${{ matrix.binary }}" skills VERSION
           mkdir -p release-assets
@@ -138,7 +141,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download release archives
         uses: actions/download-artifact@v4
