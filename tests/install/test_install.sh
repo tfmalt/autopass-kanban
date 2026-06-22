@@ -96,16 +96,24 @@ cleanup_home() {
 
 echo "=== kanban installer integration tests ==="
 
-# Scenario 9: missing --binary
+# Scenario 9: remote dry-run without --binary resolves latest release
 echo ""
-echo "--- Scenario 9: missing --binary ---"
+echo "--- Scenario 9: remote dry-run defaults to latest release ---"
 tests_run=$((tests_run + 1))
+HOME_DIR=$(mktemp -d /tmp/kanban-install-test.XXXXXX)
+export HOME="$HOME_DIR"
+export SHELL="/bin/bash"
+export GITHUB_LATEST_TAG="v26.6.2201"
 set +e
-sh "$INSTALL_SCRIPT" > /dev/null 2>/dev/null
+sh "$INSTALL_SCRIPT" --dry-run --no-skills > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
 _exit=$?
 set -e
-assert_exit_code 2 $_exit "missing --binary"
-echo "PASS: Scenario 9 - missing --binary exits 2"
+assert_exit_code 0 $_exit "remote dry-run exit"
+assert_file_contains "$HOME_DIR/stderr" "resolved latest GitHub release: v26.6.2201"
+assert_file_contains "$HOME_DIR/stderr" "would download kanban-26.6.2201-"
+rm -rf "$HOME_DIR"
+unset HOME_DIR HOME SHELL GITHUB_LATEST_TAG
+echo "PASS: Scenario 9 - remote dry-run defaults to latest release"
 
 # Scenario 8: dry-run
 echo ""

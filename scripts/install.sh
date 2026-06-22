@@ -1,10 +1,12 @@
 #!/bin/sh
 set -eu
 
-INSTALLER_VERSION="26.6.2115"
+INSTALLER_VERSION="26.6.2201"
+GITHUB_REPO="tfmalt/autopass-kanban"
 UMASK_SAVED=""
 RC_FILE=""
 SHELL_NAME=""
+BINARY_NAME="kanban"
 
 BINARY=""
 PREFIX=""
@@ -51,17 +53,17 @@ die() {
 
 usage() {
 	cat >&2 <<'USAGE'
-Usage: sh scripts/install.sh --binary <path> [flags]
+Usage: sh scripts/install.sh [--binary <path>] [flags]
 
 Flags:
-  --binary <path>   Path to the prebuilt kanban binary (required)
+  --binary <path>   Path to the prebuilt kanban binary (local install mode)
   --prefix <dir>    Install directory for the binary (default: ~/.local/bin)
   --skills-dir <dir>  Install agent skills to <dir> (skips discovery and prompt)
   --no-skills       Skip agent skill installation entirely
   --yes             Accept all defaults without prompting
   --force           Skip safety prompts (downgrade, local-edit detection)
   --dry-run         Preview all actions without modifying the filesystem
-  --version <tag>   Install a specific release from remote (e.g. --version v26.6.2114)
+  --version <tag>   Install a specific release from remote (e.g. --version v26.6.2201)
   --channel main    Install from main/nightly channel (warned)
   --offline         Use cached artifacts only, no network
   --cache-dir <dir> Override download cache dir (default: ~/.cache/kanban)
@@ -71,8 +73,9 @@ Local install (requires --binary):
   sh scripts/install.sh --binary ./target/release/kanban
 
 Remote install:
-  curl -fsSL <url>/scripts/install.sh | sh -s -- --version v26.6.2114
-  sh scripts/install.sh --version v26.6.2114
+  curl -fsSL https://raw.githubusercontent.com/tfmalt/autopass-kanban/main/scripts/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/tfmalt/autopass-kanban/main/scripts/install.sh | bash -s -- --version v26.6.2201
+  sh scripts/install.sh --version v26.6.2201
 USAGE
 }
 
@@ -165,8 +168,7 @@ parse_args() {
 	done
 
 	if [ -z "$BINARY" ] && [ "$REMOTE" -eq 0 ]; then
-		usage
-		exit 2
+		REMOTE=1
 	fi
 
 	if [ -z "$PREFIX" ]; then
@@ -279,15 +281,57 @@ detect_target() {
 				*) return 1 ;;
 			esac
 			;;
+		MINGW*|MSYS*|CYGWIN*)
+			case "$_arch" in
+				x86_64|amd64) echo "x86_64-pc-windows-msvc" ;;
+				aarch64|arm64) echo "aarch64-pc-windows-msvc" ;;
+				*) return 1 ;;
+			esac
+			;;
 		*) return 1 ;;
 	esac
 }
 
+download_stdout() {
+	_url="$1"
+	if command -v curl >/dev/null 2>&1; then
+		curl -fsSL "$_url"
+	elif command -v wget >/dev/null 2>&1; then
+		wget -qO- "$_url"
+	else
+		die "no downloader found (curl or wget required)"
+	fi
+}
+
+resolve_latest_version() {
+	if [ -n "${GITHUB_LATEST_TAG:-}" ]; then
+		printf '%s' "$GITHUB_LATEST_TAG"
+		return 0
+	fi
+
+	_api_base="${GITHUB_API_BASE:-https://api.github.com/repos/${GITHUB_REPO}}"
+	_tag=$(download_stdout "${_api_base}/releases/latest" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p')
+	if [ -z "$_tag" ]; then
+		die "failed to resolve latest GitHub release for ${GITHUB_REPO}; pass --version v<version>"
+	fi
+	printf '%s' "$_tag"
+}
+
 resolve_remote_source() {
 	if [ -z "${GITHUB_REPO_BASE:-}" ]; then
-		RELEASE_BASE="https://github.com/anomalyco/autopass-kanban/releases/download"
+		RELEASE_BASE="https://github.com/${GITHUB_REPO}/releases/download"
 	else
 		RELEASE_BASE="$GITHUB_REPO_BASE"
+	fi
+
+	if [ -z "${REMOTE_VERSION:-}" ] && [ -z "${REMOTE_CHANNEL:-}" ]; then
+		REMOTE_VERSION=$(resolve_latest_version)
+		log "resolved latest GitHub release: $REMOTE_VERSION"
+	fi
+
+	if [ "${REMOTE_VERSION:-}" = "latest" ]; then
+		REMOTE_VERSION=$(resolve_latest_version)
+		log "resolved latest GitHub release: $REMOTE_VERSION"
 	fi
 
 	if [ -n "${REMOTE_VERSION:-}" ]; then
@@ -299,7 +343,7 @@ resolve_remote_source() {
 	fi
 
 	if [ -n "${REMOTE_CHANNEL:-}" ]; then
-		die "remote channel 'main' requires a published release; use --version instead"
+		die "remote channel 'main' requires a published release; use --version or omit it to install the latest release"
 	fi
 
 	die "no remote version specified; use --version <tag>"
@@ -736,6 +780,10 @@ copy_skill() {
 	_src_dir="${REPO_ROOT}/skills/${_skill_name}"
 
 	if [ ! -d "$_src_dir" ]; then
+		if [ "$DRY_RUN" -eq 1 ] && [ "$REMOTE" -eq 1 ]; then
+			echo "[dry-run] would install $_skill_name from downloaded release archive" >&2
+			return 0
+		fi
 		die "skill source directory not found: $_src_dir"
 	fi
 
@@ -948,7 +996,7 @@ do_ensure_compinit() {
 
 install_binary() {
 	_prefix_resolved=$(resolve_path "$PREFIX")
-	_dst="${_prefix_resolved}/kanban"
+	_dst="${_prefix_resolved}/${BINARY_NAME}"
 
 	log "installing kanban binary"
 	atomic_copy "$BINARY" "$_dst"
@@ -993,8 +1041,8 @@ install_bash_completion() {
 	_dst="${_bash_comp_dir}/kanban"
 
 	if [ "$DRY_RUN" -eq 1 ]; then
-		if [ -x "$PREFIX/kanban" ]; then
-			_completion=$("$PREFIX/kanban" completion bash 2>/dev/null || true)
+		if [ -x "$PREFIX/$BINARY_NAME" ]; then
+			_completion=$("$PREFIX/$BINARY_NAME" completion bash 2>/dev/null || true)
 		elif [ -x "$BINARY" ]; then
 			_completion=$("$BINARY" completion bash 2>/dev/null || true)
 		else
@@ -1004,7 +1052,7 @@ install_bash_completion() {
 		return 0
 	fi
 
-	_cmd="$PREFIX/kanban"
+	_cmd="$PREFIX/$BINARY_NAME"
 	if [ -x "$_cmd" ]; then
 		:
 	elif [ -x "$BINARY" ]; then
@@ -1022,8 +1070,8 @@ install_zsh_completion() {
 	_dst="${_zsh_comp_dir}/_kanban"
 
 	if [ "$DRY_RUN" -eq 1 ]; then
-		if [ -x "$PREFIX/kanban" ]; then
-			_completion=$("$PREFIX/kanban" completion zsh 2>/dev/null || true)
+		if [ -x "$PREFIX/$BINARY_NAME" ]; then
+			_completion=$("$PREFIX/$BINARY_NAME" completion zsh 2>/dev/null || true)
 		elif [ -x "$BINARY" ]; then
 			_completion=$("$BINARY" completion zsh 2>/dev/null || true)
 		else
@@ -1035,7 +1083,7 @@ install_zsh_completion() {
 		return 0
 	fi
 
-	_cmd="$PREFIX/kanban"
+	_cmd="$PREFIX/$BINARY_NAME"
 	if [ -x "$_cmd" ]; then
 		:
 	elif [ -x "$BINARY" ]; then
@@ -1072,10 +1120,14 @@ gather_planned_files() {
 	clear_planned_entries
 
 	_prefix_resolved=$(resolve_path "$PREFIX")
-	_bin_dst="${_prefix_resolved}/kanban"
+	_bin_dst="${_prefix_resolved}/${BINARY_NAME}"
 	PLANNED_BIN_DST="$_bin_dst"
 
-	_bin_hash=$(compute_sha256 "$BINARY")
+	if [ -f "$BINARY" ]; then
+		_bin_hash=$(compute_sha256 "$BINARY")
+	else
+		_bin_hash="dry-run"
+	fi
 	add_planned_entry "$(printf '%s\t%s\t%s\t%s' "$_bin_dst" "$_bin_hash" "$BINARY" "$INSTALLER_VERSION")"
 
 	if [ -n "$SHELL_NAME" ]; then
@@ -1163,7 +1215,12 @@ main() {
 	parse_args "$@"
 
 	log "kanban-installer v${INSTALLER_VERSION}"
-	log "source binary: $BINARY"
+	if [ -n "$BINARY" ]; then
+		case "$BINARY" in
+			*.exe) BINARY_NAME="kanban.exe" ;;
+		esac
+		log "source binary: $BINARY"
+	fi
 	log "install prefix: $PREFIX"
 	if [ "$DRY_RUN" -eq 1 ]; then
 		log "mode: dry-run (no filesystem changes)"
@@ -1178,13 +1235,15 @@ main() {
 	if [ "$REMOTE" -eq 1 ]; then
 		log "remote install mode"
 		TARGET_TRIPLE=$(detect_target) || die "unsupported target: $(uname -s) $(uname -m)"
+		case "$TARGET_TRIPLE" in
+			*-windows-*) BINARY_NAME="kanban.exe" ;;
+			*) BINARY_NAME="kanban" ;;
+		esac
 		log "detected target: $TARGET_TRIPLE"
 		resolve_remote_source
 		fetch_and_verify
-		if [ "$DRY_RUN" -eq 0 ]; then
-			BINARY="${EXTRACTED_DIR}/kanban"
-			REPO_ROOT="$EXTRACTED_DIR"
-		fi
+		BINARY="${EXTRACTED_DIR}/${BINARY_NAME}"
+		REPO_ROOT="$EXTRACTED_DIR"
 		log "using binary: $BINARY"
 	fi
 

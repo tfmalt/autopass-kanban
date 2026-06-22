@@ -1,6 +1,6 @@
 # Kanban
 
-An opinionated markdown-first product development management tool, utilizing epics, user stories and tasks for spec-driven development, planning, and tracking delivery work, in large scale projects. It provides a git-backed kanban board without vendor lock-in, with both CLI and web interfaces.
+An opinionated markdown-first, spec-driven, product development management tool, using epics, user stories and tasks for, planning and tracking delivery work, in large scale projects. It provides a git-backed kanban board without vendor lock-in, with both CLI and web interfaces.
 
 Optimized for effective use of AI assistants in the workflow, with human-friendly markdown files as the source of truth and machine-readable JSON output for scripting and integration.
 
@@ -55,6 +55,42 @@ fresh clone or if the local config was removed. After that, enable shell
 completion and run commands such as `kanban sprint current`, `kanban sprint
 sync`, and `kanban story list --current` from the repository root.
 
+## Install from GitHub
+
+Install the latest GitHub release with:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/tfmalt/autopass-kanban/main/scripts/install.sh | bash
+```
+
+Pin a specific release with the standard `bash -s --` flag escape hatch:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/tfmalt/autopass-kanban/main/scripts/install.sh | bash -s -- --version v26.6.2201
+```
+
+The remote installer detects the current OS and CPU and downloads the matching
+`kanban-<version>-<target>.tar.gz` release asset from GitHub Releases. Supported
+release targets are:
+
+| OS | CPU | Target triple |
+|---|---|---|
+| macOS | Intel / AMD64 | `x86_64-apple-darwin` |
+| macOS | Apple Silicon / ARM64 | `aarch64-apple-darwin` |
+| Linux glibc | Intel / AMD64 | `x86_64-unknown-linux-gnu` |
+| Linux musl / Alpine | Intel / AMD64 | `x86_64-unknown-linux-musl` |
+| Linux glibc | ARM64 | `aarch64-unknown-linux-gnu` |
+| Windows | Intel / AMD64 | `x86_64-pc-windows-msvc` |
+| Windows | ARM64 | `aarch64-pc-windows-msvc` |
+
+Every download is verified against `kanban-<version>-checksums.txt` before the
+archive is extracted. To verify manually after downloading release assets:
+
+```sh
+sh scripts/release/checksums.sh kanban-26.6.2201-*.tar.gz > expected-checksums.txt
+sha256sum -c kanban-26.6.2201-checksums.txt
+```
+
 ## Local install
 
 Install the prebuilt `kanban` binary, set up `PATH`, and install shell
@@ -73,8 +109,11 @@ manifest at `~/.local/lib/kanban/manifest.txt`. No `sudo` is required.
 
 | Flag | Description |
 |---|---|
-| `--binary <path>` | Path to the prebuilt `kanban` binary (required) |
+| `--binary <path>` | Path to the prebuilt `kanban` binary for local install mode |
 | `--prefix <dir>` | Install directory for the binary (default: `~/.local/bin`) |
+| `--version <tag>` | Install a specific GitHub release, for example `v26.6.2201` |
+| `--cache-dir <dir>` | Override the remote artifact cache directory (default: `~/.cache/kanban`) |
+| `--offline` | Install from cached remote artifacts only |
 | `--dry-run` | Preview all actions without modifying the filesystem |
 | `--quiet` | Suppress non-error log lines |
 
@@ -89,6 +128,9 @@ sh scripts/install.sh --binary ./kanban --prefix ~/bin
 
 # Preview what would happen without making changes
 sh scripts/install.sh --binary ./target/release/kanban --dry-run
+
+# Preview the latest GitHub release install without changing files
+curl -fsSL https://raw.githubusercontent.com/tfmalt/autopass-kanban/main/scripts/install.sh | bash -s -- --dry-run
 
 # Install silently
 sh scripts/install.sh --binary ./target/release/kanban --quiet

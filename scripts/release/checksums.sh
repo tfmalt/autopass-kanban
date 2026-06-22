@@ -3,18 +3,18 @@ set -eu
 
 usage() {
 	cat >&2 <<'USAGE'
-Usage: sh scripts/release/checksums.sh <tarball> [tarball...]
+Usage: sh scripts/release/checksums.sh <archive> [archive...]
 
-Produces a sha256sum-format checksums file from one or more tarballs.
-Each tarball must follow the naming convention:
+Produces a sha256sum-format checksums file from one or more release archives.
+Each archive must follow the naming convention:
   kanban-<version>-<target>.tar.gz
 
 Output format (sha256sum compatible):
   <sha256>  <tarball>
 
 Example:
-  sh scripts/release/checksums.sh kanban-26.6.2114-x86_64-apple-darwin.tar.gz
-  sh scripts/release/checksums.sh kanban-26.6.2114-*.tar.gz
+  sh scripts/release/checksums.sh kanban-26.6.2201-x86_64-apple-darwin.tar.gz
+  sh scripts/release/checksums.sh kanban-26.6.2201-*.tar.gz
 USAGE
 }
 
@@ -42,16 +42,16 @@ SHA_CMD=$(find_sha256_cmd)
 TMPFILE=$(mktemp /tmp/kanban-checksums.XXXXXX)
 trap 'rm -f "$TMPFILE"' EXIT
 
-for tarball in "$@"; do
-	if [ ! -f "$tarball" ]; then
-		echo "kanban-release: tarball not found: $tarball" >&2
+for archive in "$@"; do
+	if [ ! -f "$archive" ]; then
+		echo "kanban-release: archive not found: $archive" >&2
 		exit 1
 	fi
 
-	basename="${tarball##*/}"
-	hash=$($SHA_CMD "$tarball" 2>/dev/null | awk '{print $1}')
+	basename="${archive##*/}"
+	hash=$($SHA_CMD "$archive" 2>/dev/null | awk '{print $1}')
 	if [ -z "$hash" ]; then
-		echo "kanban-release: failed to compute sha256 for $tarball" >&2
+		echo "kanban-release: failed to compute sha256 for $archive" >&2
 		exit 1
 	fi
 

@@ -3,13 +3,15 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to package, without leading v"
+        required: false
 
 permissions:
   contents: write
-
-env:
-  CARGO_TERM_COLOR: always
 
 jobs:
   build:
@@ -19,143 +21,149 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-apple-darwin
-            os: macos-13
-          - target: aarch64-apple-darwin
-            os: macos-latest
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary: kanban
+            packages: ""
+            linker_env: ""
+            linker: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: kanban
+            packages: ""
+            linker_env: ""
+            linker: ""
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: kanban
+            packages: ""
+            linker_env: ""
+            linker: ""
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            binary: kanban
+            packages: musl-tools
+            linker_env: ""
+            linker: ""
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            binary: kanban
+            packages: gcc-aarch64-linux-gnu
+            linker_env: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER
+            linker: aarch64-linux-gnu-gcc
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: kanban.exe
+            packages: ""
+            linker_env: ""
+            linker: ""
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            binary: kanban.exe
+            packages: ""
+            linker_env: ""
+            linker: ""
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install musl tools (musl targets)
-        if: contains(matrix.target, 'musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
-      - name: Build
+      - name: Install web dependencies
+        shell: bash
+        run: npm ci --prefix web
+
+      - name: Install Linux target packages
+        if: runner.os == 'Linux' && matrix.packages != ''
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
+
+      - name: Configure linker
+        if: matrix.linker_env != ''
+        shell: bash
+        run: echo "${{ matrix.linker_env }}=${{ matrix.linker }}" >> "$GITHUB_ENV"
+
+      - name: Build release binary
+        shell: bash
         run: cargo build -p kanban-cli --release --target ${{ matrix.target }}
 
-      - name: Extract version from tag
-        id: version
+      - name: Package archive
+        shell: bash
         run: |
-          TAG="${{ github.ref_name }}"
-          VERSION="${TAG#v}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Pack tarball
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          TARGET="${{ matrix.target }}"
-          TARBALL="kanban-${VERSION}-${TARGET}.tar.gz"
-          STAGING="kanban-${VERSION}-${TARGET}"
-
-          mkdir -p "$STAGING"
-
-          if [ "${{ runner.os }}" = "macOS" ]; then
-            BIN_EXT=""
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            version="${{ github.event.inputs.version }}"
           else
-            BIN_EXT=""
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          cargo_version=$(awk -F '"' '/^version =/{print $2; exit}' Cargo.toml)
+          if [ "$version" != "$cargo_version" ]; then
+            echo "Tag version $version does not match Cargo.toml version $cargo_version" >&2
+            exit 1
           fi
 
-          cp "target/${{ matrix.target }}/release/kanban$BIN_EXT" "$STAGING/kanban"
-          chmod +x "$STAGING/kanban"
+          archive="kanban-${version}-${{ matrix.target }}.tar.gz"
+          staging="dist/${{ matrix.target }}"
+          mkdir -p "$staging/skills"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$staging/${{ matrix.binary }}"
+          cp -R skills/kanban-backlog-maintainer "$staging/skills/"
+          cp -R skills/kanban-developer "$staging/skills/"
+          printf '%s\n' "$version" > "$staging/VERSION"
+          tar -C "$staging" -czf "$archive" "${{ matrix.binary }}" skills VERSION
+          mkdir -p release-assets
+          mv "$archive" release-assets/
 
-          printf '%s\n' "$VERSION" > "$STAGING/VERSION"
-
-          mkdir -p "$STAGING/skills"
-          cp -R skills/kanban-backlog-maintainer "$STAGING/skills/"
-          cp -R skills/kanban-developer "$STAGING/skills/"
-
-          tar -czf "$TARBALL" -C "$STAGING" kanban VERSION skills
-
-          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
-          echo "staging=$STAGING" >> "$GITHUB_OUTPUT"
-
-      - name: Upload tarball artifact
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
-          path: kanban-*.tar.gz
+          name: kanban-${{ matrix.target }}
+          path: release-assets/*.tar.gz
           if-no-files-found: error
 
-  checksums:
-    name: Generate checksums
-    runs-on: ubuntu-latest
+  publish:
+    name: Publish GitHub release
     needs: build
-    if: success() || failure()
-
-    steps:
-      - name: Download all tarball artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: '*'
-          merge-multiple: true
-          path: tarballs/
-
-      - name: List downloaded artifacts
-        run: ls -la tarballs/
-
-      - name: Generate checksums file
-        run: |
-          VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"
-          CHECKSUMS="kanban-${VERSION}-checksums.txt"
-
-          for tarball in tarballs/kanban-*.tar.gz; do
-            basename="${tarball##*/}"
-            hash=$(sha256sum "$tarball" | awk '{print $1}')
-            printf '%s  %s\n' "$hash" "$basename" >> "$CHECKSUMS"
-          done
-
-          sort -k2 "$CHECKSUMS" > "${CHECKSUMS}.sorted"
-          mv "${CHECKSUMS}.sorted" "$CHECKSUMS"
-
-          echo "Generated checksums file:"
-          cat "$CHECKSUMS"
-
-      - name: Upload checksums artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: checksums
-          path: kanban-*-checksums.txt
-          if-no-files-found: error
-
-  release:
-    name: Create GitHub Release
+    if: always() && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    needs: [build, checksums]
-    if: success()
-
     steps:
-      - name: Download all tarballs
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release archives
         uses: actions/download-artifact@v4
         with:
-          pattern: 'x86_64-*|aarch64-*'
+          path: release-assets
+          pattern: kanban-*
           merge-multiple: true
-          path: assets/
 
-      - name: Download checksums
-        uses: actions/download-artifact@v4
-        with:
-          name: checksums
-          path: assets/
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          archive_count=$(find release-assets -maxdepth 1 -name 'kanban-*.tar.gz' | wc -l | tr -d ' ')
+          if [ "$archive_count" -eq 0 ]; then
+            echo "No release archives were built" >&2
+            exit 1
+          fi
+          sh scripts/release/checksums.sh release-assets/kanban-*.tar.gz > "release-assets/kanban-${version}-checksums.txt"
 
-      - name: List assets
-        run: ls -la assets/
-
-      - name: Create Release
+      - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
-          name: kanban ${{ github.ref_name }}
-          files: assets/*
+          fail_on_unmatched_files: true
           generate_release_notes: true
+          files: |
+            release-assets/*.tar.gz
+            release-assets/*-checksums.txt
