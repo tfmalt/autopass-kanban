@@ -1,8 +1,18 @@
-# Kanban
+# AutoPASS Kanban
 
-An opinionated markdown-first, spec-driven, product development management tool, using epics, user stories and tasks for, planning and tracking delivery work, in large scale projects. It provides a git-backed kanban board without vendor lock-in, with both CLI and web interfaces.
+An opinionated markdown-first, git-centric, spec-driven, product development management tool. Using epics, user stories and tasks for planning and tracking delivery work. It's particulary useful in large scale projects where a lot of planning is required, to make utilizing AI assistants more effective.
+
+It provides a git-backed kanban board without vendor lock-in, with both CLI and web interfaces.
 
 Optimized for effective use of AI assistants in the workflow, with human-friendly markdown files as the source of truth and machine-readable JSON output for scripting and integration.
+
+## Install from GitHub
+
+Install the latest GitHub release with:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/tfmalt/autopass-kanban/main/scripts/install.sh | bash
+```
 
 ## What it is
 
