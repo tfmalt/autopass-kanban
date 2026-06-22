@@ -1,7 +1,10 @@
 #!/bin/sh
 set -eu
 
-INSTALLER_VERSION="26.6.2208"
+INSTALLER_VERSION="26.6.2209"
+C_RESET=""
+C_BRAND=""
+C_GREEN=""
 
 PREFIX=""
 DRY_RUN=0
@@ -21,6 +24,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
+init_ui() {
+	if [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+		C_RESET='\033[0m'
+		C_BRAND='\033[93m'
+		C_GREEN='\033[32m'
+	fi
+}
+
+brand() {
+	printf '%bkanban%b' "$C_BRAND" "$C_RESET"
+}
+
+version() {
+	printf '%b%s%b' "$C_GREEN" "$1" "$C_RESET"
+}
+
 log() {
 	if [ "$QUIET" -eq 0 ]; then
 		echo "- $*" >&2
@@ -28,7 +47,7 @@ log() {
 }
 
 die() {
-	echo "kanban-uninstaller: $*" >&2
+	printf '%s-uninstaller: %s\n' "$(brand)" "$*" >&2
 	exit 1
 }
 
@@ -186,11 +205,11 @@ prompt_skill_removal() {
 	fi
 
 	if [ "$DRY_RUN" -eq 1 ]; then
-		echo "[dry-run] would prompt: Remove kanban skills from $_skills_dir? [Y/n]" >&2
+		echo "[dry-run] would prompt: Remove $(brand) skills from $_skills_dir? [Y/n]" >&2
 		return 0
 	fi
 
-	printf 'Remove kanban skills from %s? [Y/n] ' "$_skills_dir" > /dev/tty
+	printf 'Remove %s skills from %s? [Y/n] ' "$(brand)" "$_skills_dir" > /dev/tty
 	read -r _resp < /dev/tty
 
 	case "$_resp" in
@@ -277,9 +296,10 @@ remove_manifest_dir() {
 }
 
 main() {
+	init_ui
 	parse_args "$@"
 
-	log "kanban-uninstaller v${INSTALLER_VERSION}"
+	log "$(brand)-uninstaller $(version "v${INSTALLER_VERSION}")"
 	log "prefix: $PREFIX"
 	if [ "$DRY_RUN" -eq 1 ]; then
 		log "mode: dry-run (no filesystem changes)"

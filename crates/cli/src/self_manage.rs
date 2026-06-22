@@ -72,7 +72,11 @@ fn run_upgrade_with_latest(
 ) -> Result<()> {
     let current_version = env!("CARGO_PKG_VERSION");
     if !is_newer_version(current_version, latest_version)? {
-        println!("{} {current_version} is the latest version", theme.brand());
+        println!(
+            "{} {} is the latest version",
+            theme.brand(),
+            theme.version(current_version)
+        );
         return Ok(());
     }
 

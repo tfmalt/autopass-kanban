@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-INSTALLER_VERSION="26.6.2208"
+INSTALLER_VERSION="26.6.2209"
 GITHUB_REPO="tfmalt/autopass-kanban"
 UMASK_SAVED=""
 RC_FILE=""
@@ -112,6 +112,10 @@ brand() {
 	printf '%bkanban%b' "$C_BRAND" "$C_RESET"
 }
 
+version() {
+	printf '%b%s%b' "$C_GREEN" "$1" "$C_RESET"
+}
+
 init_log_file() {
 	_stamp=$(date '+%Y%m%d-%H%M%S' 2>/dev/null || date '+%s' 2>/dev/null || echo "unknown")
 	if [ "$DRY_RUN" -eq 1 ]; then
@@ -126,7 +130,7 @@ init_log_file() {
 		: > "$LOG_FILE" 2>/dev/null || die "failed to create install log"
 	}
 	LOG_READY=1
-	log "$(brand) installer v${INSTALLER_VERSION}"
+	log "$(brand) installer $(version "v${INSTALLER_VERSION}")"
 }
 
 progress_bar() {
@@ -195,7 +199,7 @@ progress_finish() {
 }
 
 die() {
-	printf '%b%s kanban-installer:%b %s\n' "$C_RED" "$ICON_ERROR" "$C_RESET" "$*" >&2
+	printf '%b%s %s-installer:%b %s\n' "$C_RED" "$ICON_ERROR" "$(brand)" "$C_RESET" "$*" >&2
 	if [ -n "${LOG_FILE:-}" ]; then
 		printf '%s install log: %s\n' "$ICON_ERROR" "$LOG_FILE" >&2
 	fi
@@ -916,7 +920,7 @@ confirm_or_override() {
 	fi
 
 	if [ "$DRY_RUN" -eq 1 ]; then
-		detail "[dry-run] would prompt: Install kanban skills to $SKILLS_DIR? [y/N/path]; assuming yes for preview"
+		detail "[dry-run] would prompt: Install $(brand) skills to $SKILLS_DIR? [y/N/path]; assuming yes for preview"
 		SKILLS_DIR=$(resolve_path "$SKILLS_DIR")
 		return 0
 	fi
@@ -963,7 +967,7 @@ confirm_or_override() {
 	fi
 
 	progress_break_for_prompt
-	printf '%b%s%b Install kanban agent skills? %b%s%b [y/N/path] ' "$C_YELLOW" "$ICON_PROMPT" "$C_RESET" "$C_BOLD" "$SKILLS_DIR" "$C_RESET" > /dev/tty
+	printf '%b%s%b Install %s agent skills? %b%s%b [y/N/path] ' "$C_YELLOW" "$ICON_PROMPT" "$C_RESET" "$(brand)" "$C_BOLD" "$SKILLS_DIR" "$C_RESET" > /dev/tty
 	read -r _response < /dev/tty
 
 	case "$_response" in
@@ -1289,7 +1293,7 @@ install_binary() {
 	_prefix_resolved=$(resolve_path "$PREFIX")
 	_dst="${_prefix_resolved}/${BINARY_NAME}"
 
-	log "installing kanban binary"
+	log "installing $(brand) binary"
 	atomic_copy "$BINARY" "$_dst"
 	log "$(brand) binary copied to $(value "$_dst")"
 }
@@ -1514,7 +1518,7 @@ main() {
 	parse_args "$@"
 	init_ui
 	init_log_file
-	progress_start "installing kanban $(value "v${INSTALLER_VERSION}")"
+	progress_start "installing $(brand) $(version "v${INSTALLER_VERSION}")"
 
 	if [ -n "$BINARY" ]; then
 		case "$BINARY" in

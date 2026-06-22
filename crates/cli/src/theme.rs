@@ -125,6 +125,10 @@ impl Theme {
         self.paint(Style::Amber, "kanban")
     }
 
+    pub(crate) fn version(&self, value: impl std::fmt::Display) -> String {
+        self.paint(Style::Green, value)
+    }
+
     pub(crate) fn status(&self, status: &str) -> String {
         match status {
             "backlog" | "ready" => self.paint(Style::Muted, status),
@@ -208,5 +212,13 @@ mod tests {
 
         assert!(styled.contains("\x1b["));
         assert!(styled.contains("in-progress"));
+    }
+
+    #[test]
+    fn brand_and_version_use_distinct_colors() {
+        let theme = Theme::color();
+
+        assert_eq!(theme.brand(), "\x1b[93mkanban\x1b[0m");
+        assert_eq!(theme.version("1.2.3"), "\x1b[1;32m1.2.3\x1b[0m");
     }
 }

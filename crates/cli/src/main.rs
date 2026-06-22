@@ -58,11 +58,18 @@ pub(crate) fn render_styled_output(styled: clap::builder::StyledStr, color: bool
     }
 }
 
+pub(crate) fn render_version_line(theme: &Theme) -> String {
+    format!(
+        "{} {}",
+        theme.brand(),
+        theme.version(env!("CARGO_PKG_VERSION"))
+    )
+}
+
 pub(crate) fn render_no_args_help_output(theme: &Theme) -> Result<String> {
-    let version = Args::command().render_version().to_string();
     let mut command = Args::command();
     let help = render_styled_output(command.render_help(), theme.color);
-    Ok(format!("{version}{help}\n"))
+    Ok(format!("{}\n{help}\n", render_version_line(theme)))
 }
 
 pub(crate) fn normalize_args(raw_args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
@@ -90,14 +97,18 @@ pub(crate) fn normalize_args(raw_args: Vec<std::ffi::OsString>) -> Vec<std::ffi:
 
 fn main() -> Result<()> {
     let raw_args = normalize_args(std::env::args_os().collect::<Vec<_>>());
-    if raw_args.len() == 1 {
-        let version_line = Args::command().render_version().to_string();
+    if raw_args.len() == 2 && matches!(raw_args[1].to_str(), Some("--version" | "-V")) {
+        let theme = Theme::for_stdout(ColorMode::Auto);
+        println!("{}", render_version_line(&theme));
+        return Ok(());
+    }
 
+    if raw_args.len() == 1 {
         let config = kanban_core::load_kanban_config(".");
 
         if let Err(error) = &config {
-            println!("{}", version_line.trim_end());
             let theme = Theme::for_stdout(ColorMode::Auto);
+            println!("{}", render_version_line(&theme));
             let message = error.to_string();
             let init_guidance = "Run `kanban init` to initialize this repository.";
             let primary = message

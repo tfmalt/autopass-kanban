@@ -1,6 +1,17 @@
 #!/bin/sh
 set -eu
 
+C_RESET=""
+C_BRAND=""
+if [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+	C_RESET='\033[0m'
+	C_BRAND='\033[93m'
+fi
+
+brand() {
+	printf '%bkanban%b' "$C_BRAND" "$C_RESET"
+}
+
 usage() {
 	cat >&2 <<'USAGE'
 Usage: sh scripts/release/checksums.sh <archive> [archive...]
@@ -33,7 +44,7 @@ find_sha256_cmd() {
 	elif command -v shasum >/dev/null 2>&1; then
 		echo "shasum -a 256"
 	else
-		echo "kanban-release: no sha256 utility found (sha256sum or shasum required)" >&2
+		printf '%s-release: no sha256 utility found (sha256sum or shasum required)\n' "$(brand)" >&2
 		exit 1
 	fi
 }
@@ -44,14 +55,14 @@ trap 'rm -f "$TMPFILE"' EXIT
 
 for archive in "$@"; do
 	if [ ! -f "$archive" ]; then
-		echo "kanban-release: archive not found: $archive" >&2
+		printf '%s-release: archive not found: %s\n' "$(brand)" "$archive" >&2
 		exit 1
 	fi
 
 	basename="${archive##*/}"
 	hash=$($SHA_CMD "$archive" 2>/dev/null | awk '{print $1}')
 	if [ -z "$hash" ]; then
-		echo "kanban-release: failed to compute sha256 for $archive" >&2
+		printf '%s-release: failed to compute sha256 for %s\n' "$(brand)" "$archive" >&2
 		exit 1
 	fi
 
