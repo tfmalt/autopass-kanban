@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-INSTALLER_VERSION="26.6.2210"
+INSTALLER_VERSION="26.6.2211"
 GITHUB_REPO="tfmalt/autopass-kanban"
 UMASK_SAVED=""
 RC_FILE=""
@@ -201,6 +201,32 @@ progress_finish() {
 		fi
 		printf '%b%s%b %s install log: %s\n' "$C_GREEN" "$ICON_OK" "$C_RESET" "$_status" "$(value "$LOG_FILE")" >&2
 	fi
+}
+
+display_install_version() {
+	if [ -n "${REMOTE_ARTIFACT_VERSION:-}" ]; then
+		printf 'v%s' "$REMOTE_ARTIFACT_VERSION"
+		return 0
+	fi
+
+	if [ -n "${REMOTE_VERSION:-}" ] && [ "$REMOTE_VERSION" != "latest" ]; then
+		printf '%s' "$REMOTE_VERSION"
+		return 0
+	fi
+
+	if [ -n "${BINARY:-}" ] && [ -x "$BINARY" ]; then
+		_bin_ver=$(get_binary_version "$BINARY")
+		case "$_bin_ver" in
+			""|unknown|absent|non-executable)
+				;;
+			*)
+				printf 'v%s' "$_bin_ver"
+				return 0
+				;;
+		esac
+	fi
+
+	printf 'v%s' "$INSTALLER_VERSION"
 }
 
 die() {
@@ -1629,7 +1655,6 @@ main() {
 	parse_args "$@"
 	init_ui
 	init_log_file
-	progress_start "installing $(brand) $(version "v${INSTALLER_VERSION}")"
 
 	if [ -n "$BINARY" ]; then
 		case "$BINARY" in
@@ -1663,6 +1688,8 @@ main() {
 		REPO_ROOT="$EXTRACTED_DIR"
 		log "using binary: $(value "$BINARY")"
 	fi
+
+	progress_start "installing $(brand) $(version "$(display_install_version)")"
 
 	if [ -n "$RC_FILE" ]; then
 		log "detected shell: $(value "$SHELL_NAME") (rc: $(value "$RC_FILE"))"

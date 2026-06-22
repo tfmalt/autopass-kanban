@@ -141,11 +141,32 @@ set -e
 assert_exit_code 0 $_exit "remote dry-run exit"
 _install_log=$(install_log_path "$HOME_DIR/stderr")
 assert_file_exists "$_install_log"
+assert_file_contains "$HOME_DIR/stderr" "installing kanban v26.6.2201"
 assert_file_contains "$_install_log" "resolved latest GitHub release: v26.6.2201"
 assert_file_contains "$_install_log" "would download kanban-26.6.2201-"
 rm -rf "$HOME_DIR"
 unset HOME_DIR HOME SHELL GITHUB_LATEST_TAG
 echo "PASS: Scenario 9 - remote dry-run defaults to latest release"
+
+# Scenario 10: remote dry-run with pinned version shows target version in progress
+echo ""
+echo "--- Scenario 10: remote dry-run shows pinned target version ---"
+tests_run=$((tests_run + 1))
+HOME_DIR=$(mktemp -d /tmp/kanban-install-test.XXXXXX)
+export HOME="$HOME_DIR"
+export SHELL="/bin/bash"
+set +e
+sh "$INSTALL_SCRIPT" --dry-run --no-skills --version v26.6.2203 > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
+_exit=$?
+set -e
+assert_exit_code 0 $_exit "pinned remote dry-run exit"
+_install_log=$(install_log_path "$HOME_DIR/stderr")
+assert_file_exists "$_install_log"
+assert_file_contains "$HOME_DIR/stderr" "installing kanban v26.6.2203"
+assert_file_contains "$_install_log" "would download kanban-26.6.2203-"
+rm -rf "$HOME_DIR"
+unset HOME_DIR HOME SHELL
+echo "PASS: Scenario 10 - remote dry-run shows pinned target version"
 
 # Scenario 8: dry-run
 echo ""
