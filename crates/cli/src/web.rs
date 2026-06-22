@@ -735,7 +735,7 @@ pub(crate) fn stop_web(theme: &Theme, repo_root: &Path, quiet: bool) -> Result<b
     match read_web_process_state(&paths)? {
         WebProcessState::Stopped => {
             if !quiet {
-                println!("{}", theme.warning("kanban web UI is not running."));
+                println!("{} web UI is not running.", theme.brand());
             }
             Ok(false)
         }
@@ -776,7 +776,7 @@ pub(crate) fn print_web_status(theme: &Theme, repo_root: &Path) -> Result<()> {
     let url = format!("http://{}:{}", config.web.host, status_port);
     match process_state {
         WebProcessState::Running(pid) => {
-            println!("{} running", theme.success("kanban web UI:"));
+            println!("{} web UI: running", theme.brand());
             println!("{} {pid}", theme.label("PID:"));
             println!("{} {url}", theme.label("URL:"));
             println!(
@@ -786,13 +786,13 @@ pub(crate) fn print_web_status(theme: &Theme, repo_root: &Path) -> Result<()> {
             );
         }
         WebProcessState::Stopped => {
-            println!("{} stopped", theme.warning("kanban web UI:"));
+            println!("{} web UI: stopped", theme.brand());
             println!("{} {url}", theme.label("URL:"));
         }
         WebProcessState::Stale(pid) => {
             match pid {
-                Some(pid) => println!("{} stale PID {pid}", theme.warning("kanban web UI:")),
-                None => println!("{} stale PID file", theme.warning("kanban web UI:")),
+                Some(pid) => println!("{} web UI: stale PID {pid}", theme.brand()),
+                None => println!("{} web UI: stale PID file", theme.brand()),
             }
             println!(
                 "{} {}",

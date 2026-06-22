@@ -15,6 +15,7 @@ C_GREEN=""
 C_YELLOW=""
 C_BLUE=""
 C_VALUE=""
+C_BRAND=""
 ICON_STEP="→"
 ICON_OK="✓"
 ICON_WARN="⚠"
@@ -73,6 +74,7 @@ init_ui() {
 		C_YELLOW='\033[33m'
 		C_BLUE='\033[34m'
 		C_VALUE='\033[35m'
+		C_BRAND='\033[93m'
 	fi
 
 	if [ -n "${KANBAN_INSTALL_ASCII:-}" ]; then
@@ -106,6 +108,10 @@ value() {
 	printf '%b%s%b' "$C_VALUE" "$1" "$C_RESET"
 }
 
+brand() {
+	printf '%bkanban%b' "$C_BRAND" "$C_RESET"
+}
+
 init_log_file() {
 	_stamp=$(date '+%Y%m%d-%H%M%S' 2>/dev/null || date '+%s' 2>/dev/null || echo "unknown")
 	if [ "$DRY_RUN" -eq 1 ]; then
@@ -120,7 +126,7 @@ init_log_file() {
 		: > "$LOG_FILE" 2>/dev/null || die "failed to create install log"
 	}
 	LOG_READY=1
-	log "kanban installer v${INSTALLER_VERSION}"
+	log "$(brand) installer v${INSTALLER_VERSION}"
 }
 
 progress_bar() {
@@ -1285,7 +1291,7 @@ install_binary() {
 
 	log "installing kanban binary"
 	atomic_copy "$BINARY" "$_dst"
-	log "kanban binary copied to $(value "$_dst")"
+	log "$(brand) binary copied to $(value "$_dst")"
 }
 
 append_path_export() {
@@ -1351,10 +1357,10 @@ install_bash_completion() {
 	elif [ -x "$BINARY" ]; then
 		_cmd="$BINARY"
 	else
-		die "kanban binary not executable; cannot generate completion"
+		die "$(brand) binary not executable; cannot generate completion"
 	fi
 
-	_completion=$("$_cmd" completion bash 2>/dev/null) || die "kanban completion bash failed"
+	_completion=$("$_cmd" completion bash 2>/dev/null) || die "$(brand) completion bash failed"
 	do_write_file "$_completion" "$_dst" "bash completion"
 }
 
@@ -1382,10 +1388,10 @@ install_zsh_completion() {
 	elif [ -x "$BINARY" ]; then
 		_cmd="$BINARY"
 	else
-		die "kanban binary not executable; cannot generate completion"
+		die "$(brand) binary not executable; cannot generate completion"
 	fi
 
-	_completion=$("$_cmd" completion zsh 2>/dev/null) || die "kanban completion zsh failed"
+	_completion=$("$_cmd" completion zsh 2>/dev/null) || die "$(brand) completion zsh failed"
 
 	do_write_file "$_completion" "$_dst" "zsh completion"
 	do_append_fpath "$_zsh_comp_dir"

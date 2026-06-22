@@ -17,6 +17,7 @@ pub(crate) enum Style {
     Bold,
     DarkGray,
     Muted,
+    Amber,
     Blue,
     Cyan,
     Green,
@@ -120,6 +121,10 @@ impl Theme {
         self.paint(Style::Purple, value)
     }
 
+    pub(crate) fn brand(&self) -> String {
+        self.paint(Style::Amber, "kanban")
+    }
+
     pub(crate) fn status(&self, status: &str) -> String {
         match status {
             "backlog" | "ready" => self.paint(Style::Muted, status),
@@ -159,6 +164,7 @@ pub(crate) fn foreground_code(style: Style) -> &'static str {
         Style::Bold => "1",
         Style::DarkGray => "90",
         Style::Muted => "2",
+        Style::Amber => "93",
         Style::Blue => "1;34",
         Style::Cyan => "1;36",
         Style::Green => "1;32",
@@ -172,6 +178,7 @@ pub(crate) fn background_code(style: Style) -> &'static str {
     match style {
         Style::Bold | Style::Muted => "100",
         Style::DarkGray => "40",
+        Style::Amber => "43",
         Style::Blue => "44",
         Style::Cyan => "46",
         Style::Green => "42",

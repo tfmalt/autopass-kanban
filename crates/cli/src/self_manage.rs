@@ -1,5 +1,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::theme::Theme;
+use kanban_core::ColorMode;
 use std::ffi::OsString;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -57,15 +59,20 @@ pub(crate) fn run_upgrade(_options: UpgradeOptions) -> Result<()> {
 
 #[cfg(not(windows))]
 pub(crate) fn run_upgrade(options: UpgradeOptions) -> Result<()> {
+    let theme = Theme::for_stdout(ColorMode::Auto);
     let latest_version = resolve_latest_version()?;
-    run_upgrade_with_latest(options, &latest_version)
+    run_upgrade_with_latest(&theme, options, &latest_version)
 }
 
 #[cfg(not(windows))]
-fn run_upgrade_with_latest(options: UpgradeOptions, latest_version: &str) -> Result<()> {
+fn run_upgrade_with_latest(
+    theme: &Theme,
+    options: UpgradeOptions,
+    latest_version: &str,
+) -> Result<()> {
     let current_version = env!("CARGO_PKG_VERSION");
     if !is_newer_version(current_version, latest_version)? {
-        println!("kanban {current_version} is the latest version");
+        println!("{} {current_version} is the latest version", theme.brand());
         return Ok(());
     }
 
@@ -306,6 +313,7 @@ mod tests {
     #[test]
     fn run_upgrade_returns_ok_without_installer_when_current_is_latest() {
         let result = run_upgrade_with_latest(
+            &Theme::color(),
             UpgradeOptions {
                 prefix: None,
                 skills_dir: None,
