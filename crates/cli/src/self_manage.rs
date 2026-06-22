@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const REMOTE_INSTALL_URL: &str =
     "https://raw.githubusercontent.com/tfmalt/autopass-kanban/main/scripts/install.sh";
+const GITHUB_API_BASE: &str = "https://api.github.com/repos/tfmalt/autopass-kanban";
 const UNINSTALL_SCRIPT: &str = include_str!("../../../scripts/uninstall.sh");
 
 #[derive(Debug)]
@@ -56,6 +57,20 @@ pub(crate) fn run_upgrade(_options: UpgradeOptions) -> Result<()> {
 
 #[cfg(not(windows))]
 pub(crate) fn run_upgrade(options: UpgradeOptions) -> Result<()> {
+    let latest_version = resolve_latest_version()?;
+    run_upgrade_with_latest(options, &latest_version)
+}
+
+#[cfg(not(windows))]
+fn run_upgrade_with_latest(options: UpgradeOptions, latest_version: &str) -> Result<()> {
+    let current_version = env!("CARGO_PKG_VERSION");
+    if !is_newer_version(current_version, latest_version)? {
+        println!(
+            "kanban is already at the latest version (current: {current_version}, latest: {latest_version})."
+        );
+        return Ok(());
+    }
+
     let install_path = temp_script_path("kanban-install");
     let status = ProcessCommand::new("sh")
         .arg("-c")
@@ -80,7 +95,7 @@ sh "$_tmp" "$@"
         .arg("kanban-upgrade")
         .arg(REMOTE_INSTALL_URL)
         .arg(&install_path)
-        .args(upgrade_args(&options))
+        .args(upgrade_args(&options, Some(latest_version)))
         .status()
         .context("failed to run remote kanban installer")?;
 
@@ -89,6 +104,73 @@ sh "$_tmp" "$@"
     }
 
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn resolve_latest_version() -> Result<String> {
+    if let Ok(tag) = std::env::var("GITHUB_LATEST_TAG") {
+        return Ok(normalize_version(&tag));
+    }
+
+    let api_base = std::env::var("GITHUB_API_BASE").unwrap_or_else(|_| GITHUB_API_BASE.to_string());
+    let body = download_stdout(&format!("{api_base}/releases/latest"))?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&body).context("failed to parse latest GitHub release metadata")?;
+    let tag = json
+        .get("tag_name")
+        .and_then(|value| value.as_str())
+        .context("latest GitHub release metadata did not include tag_name")?;
+    Ok(normalize_version(tag))
+}
+
+#[cfg(not(windows))]
+fn download_stdout(url: &str) -> Result<Vec<u8>> {
+    if let Some(output) = run_downloader("curl", &["-fsSL", url])? {
+        return Ok(output);
+    }
+    if let Some(output) = run_downloader("wget", &["-qO-", url])? {
+        return Ok(output);
+    }
+    bail!("kanban upgrade requires curl or wget to check the latest release")
+}
+
+#[cfg(not(windows))]
+fn run_downloader(command: &str, args: &[&str]) -> Result<Option<Vec<u8>>> {
+    let output = match ProcessCommand::new(command).args(args).output() {
+        Ok(output) => output,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("failed to run {command}")),
+    };
+    if !output.status.success() {
+        bail!("{command} failed while checking latest kanban release")
+    }
+    Ok(Some(output.stdout))
+}
+
+fn normalize_version(version: &str) -> String {
+    version.trim().trim_start_matches('v').to_string()
+}
+
+fn is_newer_version(current: &str, latest: &str) -> Result<bool> {
+    Ok(parse_version(latest)? > parse_version(current)?)
+}
+
+fn parse_version(version: &str) -> Result<(u64, u64, u64)> {
+    let normalized = normalize_version(version);
+    let mut parts = normalized.split('.');
+    let major = parse_version_part(parts.next(), version)?;
+    let minor = parse_version_part(parts.next(), version)?;
+    let patch = parse_version_part(parts.next(), version)?;
+    if parts.next().is_some() {
+        bail!("invalid version '{version}'")
+    }
+    Ok((major, minor, patch))
+}
+
+fn parse_version_part(part: Option<&str>, original: &str) -> Result<u64> {
+    part.context("missing version component")?
+        .parse::<u64>()
+        .with_context(|| format!("invalid version '{original}'"))
 }
 
 fn write_temp_script(prefix: &str, contents: &str) -> Result<PathBuf> {
@@ -115,8 +197,12 @@ pub(crate) fn uninstall_args(options: &UninstallOptions) -> Vec<OsString> {
     args
 }
 
-pub(crate) fn upgrade_args(options: &UpgradeOptions) -> Vec<OsString> {
+pub(crate) fn upgrade_args(options: &UpgradeOptions, version: Option<&str>) -> Vec<OsString> {
     let mut args = Vec::new();
+    if let Some(version) = version {
+        args.push("--version".into());
+        args.push(format!("v{version}").into());
+    }
     push_path_arg(&mut args, "--prefix", options.prefix.as_ref());
     push_path_arg(&mut args, "--skills-dir", options.skills_dir.as_ref());
     push_bool_arg(&mut args, "--no-skills", options.no_skills);
@@ -176,19 +262,24 @@ mod tests {
 
     #[test]
     fn upgrade_args_run_latest_remote_install_by_default() {
-        let args = upgrade_args(&UpgradeOptions {
-            prefix: Some(PathBuf::from("/tmp/bin")),
-            skills_dir: None,
-            no_skills: true,
-            yes: true,
-            force: true,
-            dry_run: true,
-            quiet: false,
-        });
+        let args = upgrade_args(
+            &UpgradeOptions {
+                prefix: Some(PathBuf::from("/tmp/bin")),
+                skills_dir: None,
+                no_skills: true,
+                yes: true,
+                force: true,
+                dry_run: true,
+                quiet: false,
+            },
+            Some("26.6.2208"),
+        );
 
         assert_eq!(
             strings(args),
             [
+                "--version",
+                "v26.6.2208",
                 "--prefix",
                 "/tmp/bin",
                 "--no-skills",
@@ -197,5 +288,38 @@ mod tests {
                 "--dry-run"
             ]
         );
+    }
+
+    #[test]
+    fn version_compare_detects_newer_latest_release() {
+        assert!(is_newer_version("26.6.2207", "26.6.2208").unwrap());
+        assert!(is_newer_version("26.6.2207", "26.7.101").unwrap());
+        assert!(is_newer_version("26.6.2207", "27.1.101").unwrap());
+    }
+
+    #[test]
+    fn version_compare_rejects_equal_or_older_latest_release() {
+        assert!(!is_newer_version("26.6.2207", "26.6.2207").unwrap());
+        assert!(!is_newer_version("26.6.2207", "v26.6.2207").unwrap());
+        assert!(!is_newer_version("26.6.2207", "26.6.2206").unwrap());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn run_upgrade_returns_ok_without_installer_when_current_is_latest() {
+        let result = run_upgrade_with_latest(
+            UpgradeOptions {
+                prefix: None,
+                skills_dir: None,
+                no_skills: true,
+                yes: true,
+                force: false,
+                dry_run: true,
+                quiet: true,
+            },
+            env!("CARGO_PKG_VERSION"),
+        );
+
+        result.unwrap();
     }
 }
