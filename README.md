@@ -1,8 +1,49 @@
 # Kanban
 
-Rust workspace for markdown-first kanban tooling used by AutoPASS IP 2.0.
+An opinionated markdown-first product development management tool, utilizing epics, user stories and tasks for spec-driven development, planning, and tracking delivery work, in large scale projects. It provides a git-backed kanban board without vendor lock-in, with both CLI and web interfaces.
+
+Optimized for effective use of AI assistants in the workflow, with human-friendly markdown files as the source of truth and machine-readable JSON output for scripting and integration.
+
+## What it is
+
+Kanban treats a project's backlog as plain markdown files living in the git
+repository alongside the code. Stories, tasks, sprints, epics, and phases are
+all human-readable markdown documents with structured YAML frontmatter — there
+is no database, hidden state store, or external service. The git history *is*
+the audit trail, and the files remain fully editable by hand.
+
+On top of those files the tool provides two interfaces:
+
+- a `kanban` command-line interface (with a documented `kb` alias) for
+  inspecting and updating the backlog directly from the terminal, and
+- an embedded web UI (`kanban web start`) that serves a Vite/React board from
+  the same compiled binary, reading and writing the very same markdown files.
+
+## Purpose
+
+The goal is to keep the backlog as close to the work as possible: versioned,
+reviewable, diff-able, and free of vendor lock-in. Because the source of truth
+is markdown in git, planning data travels with the repository, survives tooling
+changes, and can be branched, reviewed in pull requests, and merged like any
+other code. Teams get a kanban workflow without surrendering their data to a
+hosted SaaS board.
+
+## What it does
+
+- Models a backlog as markdown stories and tasks, optionally organized into
+  sprints, epics, and phases (each concept can be enabled or disabled per repo).
+- Lets you list, show, move, plan, and update stories and tasks from the CLI,
+  and manage sprints (create, rollover, sync, show current).
+- `validate` and `doctor` check the backlog for structural and semantic issues
+  without rewriting human-authored content.
+- Serves an interactive web board from the same binary for visual planning.
+- Emits machine-readable `--format json` envelopes for scripting and CI, with
+  exit codes that reflect command status.
+- Ships shell completions for bash, zsh, and PowerShell, plus a no-sudo local
+  installer and a Docker image for running the web UI without a host install.
 
 CLI binary name:
+
 - `kanban`
 - short alias in help/docs: `kb`
 
@@ -106,6 +147,7 @@ Set `KANBAN_REPO_PATH=/path/to/project` to serve a different git-backed kanban
 repository without installing `kanban` on the host.
 
 Implemented commands:
+
 - `kanban init [--no-sprints|--no-epics|--no-phases] [repo_root]`
 - `kanban config show [repo_root]`
 - `kanban config get <key> [repo_root]`
