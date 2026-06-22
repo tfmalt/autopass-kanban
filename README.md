@@ -103,17 +103,16 @@ sha256sum -c kanban-26.6.2201-checksums.txt
 
 ## Local install
 
-Install the prebuilt `kanban` binary, set up `PATH`, and install shell
-completions with a single script:
+Install the prebuilt `kanban` binary with a single script:
 
 ```sh
 sh scripts/install.sh --binary ./target/release/kanban
 ```
 
-The installer copies the binary to `~/.local/bin/kanban` (default), appends
-the directory to `PATH` in your shell rc file only if it is not already
-present, installs tab completions for bash or zsh, and writes an install
-manifest at `~/.local/lib/kanban/manifest.txt`. No `sudo` is required.
+The installer copies the binary to `~/.local/bin/kanban` (default), writes an
+install manifest at `~/.local/lib/kanban/manifest.txt`, and asks before making
+optional changes such as installing agent skills, editing your shell profile, or
+installing tab completions. No `sudo` is required.
 
 ### Flags
 
@@ -124,6 +123,13 @@ manifest at `~/.local/lib/kanban/manifest.txt`. No `sudo` is required.
 | `--version <tag>` | Install a specific GitHub release, for example `v26.6.2201` |
 | `--cache-dir <dir>` | Override the remote artifact cache directory (default: `~/.cache/kanban`) |
 | `--offline` | Install from cached remote artifacts only |
+| `--skills-dir <dir>` | Install kanban agent skills to a specific directory without prompting |
+| `--no-skills` | Skip agent skill installation |
+| `--add-path` | Add the install directory to the detected shell profile without prompting |
+| `--no-add-path` | Do not edit the shell profile `PATH` |
+| `--completions` | Install shell completions for the detected shell without prompting |
+| `--no-completions` | Skip shell completion installation |
+| `--yes` | Accept default optional integrations without prompting |
 | `--dry-run` | Preview all actions without modifying the filesystem |
 | `--quiet` | Suppress non-error log lines |
 
@@ -135,6 +141,9 @@ sh scripts/install.sh --binary ./target/release/kanban
 
 # Install to a custom directory
 sh scripts/install.sh --binary ./kanban --prefix ~/bin
+
+# Install binary, add PATH, completions, and discovered skills without prompts
+sh scripts/install.sh --binary ./target/release/kanban --yes
 
 # Preview what would happen without making changes
 sh scripts/install.sh --binary ./target/release/kanban --dry-run

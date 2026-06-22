@@ -48,6 +48,13 @@ assert_exit_code() {
 	return 1
 }
 
+install_log_path() {
+	_log=$(sed -n 's/.*install log: //p' "$1" 2>/dev/null | sed -n '$p')
+	if [ -n "$_log" ]; then
+		printf '%s' "$_log"
+	fi
+}
+
 run_in_home() {
 	_shell_override="$1"
 	_test_name="$2"
@@ -74,12 +81,12 @@ run_in_home() {
 
 	if [ "$_output" = "capture" ]; then
 		set +e
-		sh "$INSTALL_SCRIPT" --binary "$STUB" $_prefix_arg > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
+		sh "$INSTALL_SCRIPT" --binary "$STUB" $_prefix_arg --yes --no-skills > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
 		_exit=$?
 		set -e
 	else
 		set +e
-		sh "$INSTALL_SCRIPT" --binary "$STUB" $_prefix_arg
+		sh "$INSTALL_SCRIPT" --binary "$STUB" $_prefix_arg --yes --no-skills
 		_exit=$?
 		set -e
 	fi
@@ -109,8 +116,10 @@ sh "$INSTALL_SCRIPT" --dry-run --no-skills > "$HOME_DIR/stdout" 2> "$HOME_DIR/st
 _exit=$?
 set -e
 assert_exit_code 0 $_exit "remote dry-run exit"
-assert_file_contains "$HOME_DIR/stderr" "resolved latest GitHub release: v26.6.2201"
-assert_file_contains "$HOME_DIR/stderr" "would download kanban-26.6.2201-"
+_install_log=$(install_log_path "$HOME_DIR/stderr")
+assert_file_exists "$_install_log"
+assert_file_contains "$_install_log" "resolved latest GitHub release: v26.6.2201"
+assert_file_contains "$_install_log" "would download kanban-26.6.2201-"
 rm -rf "$HOME_DIR"
 unset HOME_DIR HOME SHELL GITHUB_LATEST_TAG
 echo "PASS: Scenario 9 - remote dry-run defaults to latest release"
@@ -128,7 +137,7 @@ cp "$SCRIPT_DIR/stub-kanban" "$HOME_DIR/stub-kanban"
 chmod +x "$HOME_DIR/stub-kanban"
 
 set +e
-sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --dry-run > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
+sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --dry-run --no-skills > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
 _exit=$?
 set -e
 
@@ -142,7 +151,9 @@ if [ -f "$HOME_DIR/.local/lib/kanban/manifest.txt" ]; then
 	fail "dry-run should not create manifest"
 fi
 # dry-run should preview operations
-if ! grep -q '\[dry-run\]' "$HOME_DIR/stderr" 2>/dev/null; then
+_install_log=$(install_log_path "$HOME_DIR/stderr")
+assert_file_exists "$_install_log"
+if ! grep -q '\[dry-run\]' "$_install_log" 2>/dev/null; then
 	fail "dry-run did not produce preview output"
 fi
 
@@ -150,6 +161,44 @@ rm -rf "$HOME_DIR"
 unset HOME_DIR HOME SHELL
 
 echo "PASS: Scenario 8 - dry-run previews without filesystem changes"
+
+# Scenario: non-interactive install skips optional integrations without consent
+echo ""
+echo "--- Scenario: non-interactive skips optional integrations ---"
+tests_run=$((tests_run + 1))
+
+HOME_DIR=$(mktemp -d /tmp/kanban-install-test.XXXXXX)
+export HOME="$HOME_DIR"
+export SHELL="/bin/bash"
+export KANBAN_INSTALL_NONINTERACTIVE=1
+
+cp "$SCRIPT_DIR/stub-kanban" "$HOME_DIR/stub-kanban"
+chmod +x "$HOME_DIR/stub-kanban"
+
+set +e
+sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
+_exit=$?
+set -e
+
+assert_exit_code 0 $_exit "non-interactive install exit"
+assert_file_exists "$HOME_DIR/.local/bin/kanban"
+assert_file_not_contains "$HOME_DIR/.bashrc" "kanban-installer: PATH"
+if [ -f "$HOME_DIR/.local/share/bash-completion/completions/kanban" ]; then
+	fail "non-interactive install should not install completions without consent"
+fi
+if [ -d "$HOME_DIR/.config/opencode/skills" ]; then
+	fail "non-interactive install should not install skills without consent"
+fi
+_install_log=$(install_log_path "$HOME_DIR/stderr")
+assert_file_exists "$_install_log"
+assert_file_contains "$_install_log" "PATH profile update skipped"
+assert_file_contains "$_install_log" "shell completion installation skipped"
+assert_file_contains "$_install_log" "agent skills skipped"
+
+rm -rf "$HOME_DIR"
+unset HOME_DIR HOME SHELL KANBAN_INSTALL_NONINTERACTIVE
+
+echo "PASS: non-interactive skips optional integrations"
 
 # Scenario 2: bash install (default prefix)
 echo ""
@@ -164,7 +213,7 @@ cp "$SCRIPT_DIR/stub-kanban" "$HOME_DIR/stub-kanban"
 chmod +x "$HOME_DIR/stub-kanban"
 
 set +e
-sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
+sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --yes --no-skills > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
 _exit=$?
 set -e
 
@@ -193,7 +242,7 @@ cp "$SCRIPT_DIR/stub-kanban" "$HOME_DIR/stub-kanban"
 chmod +x "$HOME_DIR/stub-kanban"
 
 set +e
-sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
+sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --yes --no-skills > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
 _exit=$?
 set -e
 
@@ -222,7 +271,7 @@ cp "$SCRIPT_DIR/stub-kanban" "$HOME_DIR/stub-kanban"
 chmod +x "$HOME_DIR/stub-kanban"
 
 set +e
-sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
+sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --yes --no-skills > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
 _exit=$?
 set -e
 
@@ -257,7 +306,7 @@ cp "$SCRIPT_DIR/stub-kanban" "$HOME_DIR/stub-kanban"
 chmod +x "$HOME_DIR/stub-kanban"
 
 set +e
-sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --prefix "$HOME_DIR/bin" > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
+sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --prefix "$HOME_DIR/bin" --yes --no-skills > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
 _exit=$?
 set -e
 
@@ -287,7 +336,7 @@ cp "$SCRIPT_DIR/stub-kanban" "$HOME_DIR/stub-kanban"
 chmod +x "$HOME_DIR/stub-kanban"
 
 set +e
-sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
+sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --yes --no-skills > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
 _exit=$?
 set -e
 
@@ -326,14 +375,14 @@ chmod +x "$HOME_DIR/stub-kanban"
 
 # First run
 set +e
-sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" > /dev/null 2>/dev/null
+sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --yes --no-skills > /dev/null 2>/dev/null
 _exit=$?
 set -e
 assert_exit_code 0 $_exit "first run exit"
 
 # Second run
 set +e
-sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" > /dev/null 2>/dev/null
+sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --yes --no-skills > /dev/null 2>/dev/null
 _exit=$?
 set -e
 assert_exit_code 0 $_exit "second run exit"
@@ -362,7 +411,7 @@ cp "$SCRIPT_DIR/stub-kanban" "$HOME_DIR/stub-kanban"
 chmod +x "$HOME_DIR/stub-kanban"
 
 set +e
-sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --no-skills > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
+sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --yes --no-skills > "$HOME_DIR/stdout" 2> "$HOME_DIR/stderr"
 _exit=$?
 set -e
 
@@ -373,7 +422,9 @@ if [ -d "$HOME_DIR/.config/opencode/skills" ]; then
 	fail "--no-skills should not create skills directory"
 fi
 # Log should mention skipping
-if ! grep -q "skipped" "$HOME_DIR/stderr" 2>/dev/null; then
+_install_log=$(install_log_path "$HOME_DIR/stderr")
+assert_file_exists "$_install_log"
+if ! grep -q "skipped" "$_install_log" 2>/dev/null; then
 	fail "--no-skills should log skip notice"
 fi
 
@@ -563,11 +614,13 @@ if [ -f "$_skill_target/kanban-developer/SKILL.md" ]; then
 	fail "dry-run should not create skill files"
 fi
 # Should preview skill operations
-if ! grep -q '\[dry-run\]' "$HOME_DIR/stderr" 2>/dev/null; then
+_install_log=$(install_log_path "$HOME_DIR/stderr")
+assert_file_exists "$_install_log"
+if ! grep -q '\[dry-run\]' "$_install_log" 2>/dev/null; then
 	fail "dry-run did not produce preview output"
 fi
 # Should mention skill dir
-if ! grep -q "skills" "$HOME_DIR/stderr" 2>/dev/null; then
+if ! grep -q "skills" "$_install_log" 2>/dev/null; then
 	fail "dry-run output missing skills references"
 fi
 
@@ -804,7 +857,9 @@ set -e
 assert_exit_code 0 $_exit "dry-run upgrade exit"
 
 # Dry-run should not modify files
-if ! grep -q '\[dry-run\]' "$HOME_DIR/stderr" 2>/dev/null; then
+_install_log=$(install_log_path "$HOME_DIR/stderr")
+assert_file_exists "$_install_log"
+if ! grep -q '\[dry-run\]' "$_install_log" 2>/dev/null; then
 	fail "dry-run upgrade should produce preview output"
 fi
 
@@ -827,7 +882,7 @@ chmod +x "$HOME_DIR/stub-kanban"
 
 # Install with --force (should work like --yes for prompts)
 set +e
-sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --force --no-skills > /dev/null 2>&1
+sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --force --no-skills --no-add-path --no-completions > /dev/null 2>&1
 _exit=$?
 set -e
 assert_exit_code 0 $_exit "--force install exit"
@@ -835,7 +890,7 @@ assert_file_exists "$HOME_DIR/.local/bin/kanban"
 
 # Re-run with --force
 set +e
-sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --force --no-skills > /dev/null 2>&1
+sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --force --no-skills --no-add-path --no-completions > /dev/null 2>&1
 _exit=$?
 set -e
 assert_exit_code 0 $_exit "--force re-run exit"
