@@ -142,7 +142,19 @@ pub(crate) fn normalize_args(raw_args: Vec<std::ffi::OsString>) -> Vec<std::ffi:
     }
 }
 
-fn main() -> Result<()> {
+fn main() {
+    if let Err(error) = run() {
+        let theme = Theme::for_stdout(ColorMode::Auto);
+        eprintln!(
+            "{} {}",
+            theme.error_label(),
+            theme.highlight_commands(&error.to_string())
+        );
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<()> {
     let raw_args = normalize_args(std::env::args_os().collect::<Vec<_>>());
     if raw_args.len() == 2 && matches!(raw_args[1].to_str(), Some("--version" | "-V")) {
         let theme = Theme::for_stdout(ColorMode::Auto);
@@ -193,15 +205,19 @@ fn main() -> Result<()> {
             };
             let result = init_config_with_features(repo_root, features)?;
             println!(
-                "{} {}",
-                theme.success("Initialized config:"),
+                "{} initialized config: {}",
+                theme.ok_label(),
                 theme.path(result.config_dir.display())
             );
             if result.created_files.is_empty() {
-                println!("{} none", theme.label("Created files:"));
+                println!("{} created files: none", theme.info_label());
             } else {
                 for file in result.created_files {
-                    println!("- {}", theme.path(file.display()));
+                    println!(
+                        "{} created file: {}",
+                        theme.info_label(),
+                        theme.path(file.display())
+                    );
                 }
             }
         }
@@ -219,14 +235,14 @@ fn main() -> Result<()> {
             } => {
                 let result = set_config_value(repo_root, &key, &value)?;
                 println!(
-                    "{} {} = {}",
-                    theme.success("Updated"),
+                    "{} updated {} = {}",
+                    theme.ok_label(),
                     theme.id(&result.key),
                     result.value
                 );
                 println!(
-                    "{} {}",
-                    theme.label("File:"),
+                    "{} file: {}",
+                    theme.info_label(),
                     theme.path(result.file_path.display())
                 );
             }
@@ -321,13 +337,13 @@ fn main() -> Result<()> {
                 };
                 let result = create_sprint(repo_root, &input)?;
                 println!(
-                    "{} {}",
-                    theme.success("Created sprint:"),
+                    "{} created sprint: {}",
+                    theme.ok_label(),
                     result.sprint_name
                 );
                 println!(
-                    "{} {}",
-                    theme.label("Path:"),
+                    "{} path: {}",
+                    theme.info_label(),
                     theme.path(result.sprint_path.display())
                 );
             }
@@ -362,13 +378,13 @@ fn main() -> Result<()> {
                 let changed = sync_sprint_rosters(repo_root)?;
                 if changed.is_empty() {
                     println!(
-                        "{}",
-                        theme.success("Sprint story tables already up to date.")
+                        "{} sprint story tables are already up to date.",
+                        theme.ok_label()
                     );
                 } else {
-                    println!("{}", theme.success("Regenerated sprint story tables:"));
+                    println!("{} regenerated sprint story tables:", theme.ok_label());
                     for sprint in changed {
-                        println!("- {}", theme.id(sprint));
+                        println!("{} sprint: {}", theme.info_label(), theme.id(sprint));
                     }
                 }
             }
@@ -387,7 +403,7 @@ fn main() -> Result<()> {
                     Some(details) => {
                         print_epic_details(&theme, OutputLayout::for_stdout()?, &details)
                     }
-                    None => println!("{} {id}", theme.warning("Epic not found:")),
+                    None => println!("{} epic not found: {id}", theme.warning_label()),
                 }
             }
             EpicCommand::Update {
@@ -425,14 +441,14 @@ fn main() -> Result<()> {
 
                 let result = update_epic_frontmatter(&repo_root, &id, &updates)?;
                 println!(
-                    "{} {} ({})",
-                    theme.success("Updated"),
+                    "{} updated {} ({})",
+                    theme.ok_label(),
                     theme.id(&result.epic_id),
                     result.updated_fields.join(", ")
                 );
                 println!(
-                    "{} {}",
-                    theme.label("Epic:"),
+                    "{} epic: {}",
+                    theme.info_label(),
                     theme.path(result.epic_path.display())
                 );
             }
@@ -440,7 +456,7 @@ fn main() -> Result<()> {
         Command::Story { command } => match command {
             StoryCommand::Show { id, repo_root } => match find_story(repo_root, &id)? {
                 Some(details) => print_story_details(&theme, OutputLayout::for_stdout()?, &details),
-                None => println!("{} {id}", theme.warning("Story not found:")),
+                None => println!("{} story not found: {id}", theme.warning_label()),
             },
             StoryCommand::List {
                 current,
@@ -495,22 +511,22 @@ fn main() -> Result<()> {
                     assignee.as_deref(),
                 )?;
                 println!(
-                    "{} {} in {}: {} -> {}",
-                    theme.success("Moved"),
+                    "{} moved {} in {}: {} -> {}",
+                    theme.ok_label(),
                     theme.id(&result.story_id),
                     result.sprint_name,
                     theme.status(&result.from_status),
                     theme.status(&result.to_status)
                 );
                 println!(
-                    "{} {}",
-                    theme.label("Story:"),
+                    "{} story: {}",
+                    theme.info_label(),
                     theme.path(result.story_path.display())
                 );
                 if let Some(task_path) = result.task_path {
                     println!(
-                        "{} {}",
-                        theme.label("Task file:"),
+                        "{} task file: {}",
+                        theme.info_label(),
                         theme.path(task_path.display())
                     );
                 }
@@ -522,20 +538,20 @@ fn main() -> Result<()> {
             } => {
                 let result = plan_story_into_sprint(repo_root, &id, &sprint)?;
                 println!(
-                    "{} {} -> {}",
-                    theme.success("Planned"),
+                    "{} planned {} -> {}",
+                    theme.ok_label(),
                     theme.id(&result.story_id),
                     result.sprint_name
                 );
                 println!(
-                    "{} {}",
-                    theme.label("Story:"),
+                    "{} story: {}",
+                    theme.info_label(),
                     theme.path(result.story_path.display())
                 );
                 if let Some(task_path) = result.task_path {
                     println!(
-                        "{} {}",
-                        theme.label("Tasks:"),
+                        "{} tasks: {}",
+                        theme.info_label(),
                         theme.path(task_path.display())
                     );
                 }
@@ -543,24 +559,24 @@ fn main() -> Result<()> {
             StoryCommand::Delete { id, repo_root } => {
                 let result = delete_story(repo_root, &id)?;
                 println!(
-                    "{} {}",
-                    theme.success("Deleted"),
+                    "{} deleted {}",
+                    theme.ok_label(),
                     theme.id(&result.story_id)
                 );
                 println!(
-                    "{} {}",
-                    theme.label("Story:"),
+                    "{} story: {}",
+                    theme.info_label(),
                     theme.path(result.story_path.display())
                 );
                 if let Some(task_path) = result.task_path {
                     println!(
-                        "{} {}",
-                        theme.label("Tasks:"),
+                        "{} tasks: {}",
+                        theme.info_label(),
                         theme.path(task_path.display())
                     );
                 }
                 if let Some(sprint_name) = result.sprint_name {
-                    println!("{} {}", theme.label("Updated sprint:"), sprint_name);
+                    println!("{} updated sprint: {}", theme.info_label(), sprint_name);
                 }
             }
             StoryCommand::Update {
@@ -610,21 +626,21 @@ fn main() -> Result<()> {
                 if updates.is_empty() {
                     open_story_markdown_in_editor(&story_file.absolute_path)?;
                     println!(
-                        "{} {}",
-                        theme.success("Edited"),
+                        "{} edited {}",
+                        theme.ok_label(),
                         theme.path(story_file.story_path.display())
                     );
                 } else {
                     let result = update_story_frontmatter(&repo_root, &id, &updates)?;
                     println!(
-                        "{} {} ({})",
-                        theme.success("Updated"),
+                        "{} updated {} ({})",
+                        theme.ok_label(),
                         theme.id(&result.story_id),
                         result.updated_fields.join(", ")
                     );
                     println!(
-                        "{} {}",
-                        theme.label("Story:"),
+                        "{} story: {}",
+                        theme.info_label(),
                         theme.path(result.story_path.display())
                     );
                 }
@@ -659,14 +675,14 @@ fn main() -> Result<()> {
                 let result =
                     add_task_to_story(repo_root, &story_id, &title, &status, &tags, &description)?;
                 println!(
-                    "{} {} to {}",
-                    theme.success("Added"),
+                    "{} added {} to {}",
+                    theme.ok_label(),
                     theme.id(&result.task_id),
                     theme.id(&result.story_id)
                 );
                 println!(
-                    "{} {}",
-                    theme.label("Task file:"),
+                    "{} task file: {}",
+                    theme.info_label(),
                     theme.path(result.task_file_path.display())
                 );
             }
@@ -689,14 +705,14 @@ fn main() -> Result<()> {
                     description.as_deref(),
                 )?;
                 println!(
-                    "{} {} in {}",
-                    theme.success("Updated"),
+                    "{} updated {} in {}",
+                    theme.ok_label(),
                     theme.id(&result.task_id),
                     theme.id(&result.story_id)
                 );
                 println!(
-                    "{} {}",
-                    theme.label("Task file:"),
+                    "{} task file: {}",
+                    theme.info_label(),
                     theme.path(result.task_file_path.display())
                 );
             }
@@ -707,14 +723,14 @@ fn main() -> Result<()> {
             } => {
                 let result = delete_task_from_story(repo_root, &story_id, &task_id)?;
                 println!(
-                    "{} {} from {}",
-                    theme.success("Deleted"),
+                    "{} deleted {} from {}",
+                    theme.ok_label(),
                     theme.id(&result.task_id),
                     theme.id(&result.story_id)
                 );
                 println!(
-                    "{} {}",
-                    theme.label("Task file:"),
+                    "{} task file: {}",
+                    theme.info_label(),
                     theme.path(result.task_file_path.display())
                 );
             }
@@ -804,11 +820,12 @@ fn main() -> Result<()> {
         Command::Validate { repo_root } => {
             let report = validate_repository(repo_root)?;
             if report.issues.is_empty() {
-                println!("{}", theme.success("No validation issues found."));
+                println!("{} no validation issues found.", theme.ok_label());
             } else {
                 for issue in report.issues {
                     println!(
-                        "{} [{}] {}",
+                        "{} {} [{}] {}",
+                        theme.warning_label(),
                         theme.path(issue.file_path.display()),
                         theme.warning(issue.rule),
                         issue.message
@@ -955,8 +972,8 @@ fn main() -> Result<()> {
                 };
                 let result = set_config_value(&repo_root, key, "true")?;
                 println!(
-                    "{} {} = {}",
-                    theme.success("Enabled"),
+                    "{} enabled {} = {}",
+                    theme.ok_label(),
                     theme.id(&result.key),
                     result.value
                 );
@@ -969,8 +986,8 @@ fn main() -> Result<()> {
                 };
                 let result = set_config_value(&repo_root, key, "false")?;
                 println!(
-                    "{} {} = {}",
-                    theme.success("Disabled"),
+                    "{} disabled {} = {}",
+                    theme.ok_label(),
                     theme.id(&result.key),
                     result.value
                 );

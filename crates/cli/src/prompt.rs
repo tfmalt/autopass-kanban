@@ -79,7 +79,10 @@ pub(crate) fn prompt_date(label: &str, default: NaiveDate) -> Result<NaiveDate> 
         let input = prompt_with_default(label, &default.format("%Y-%m-%d").to_string())?;
         match NaiveDate::parse_from_str(&input, "%Y-%m-%d") {
             Ok(date) => return Ok(date),
-            Err(_) => println!("Enter a date as YYYY-MM-DD."),
+            Err(_) => {
+                let theme = Theme::for_stdout(ColorMode::Auto);
+                println!("{} enter a date as YYYY-MM-DD.", theme.warning_label());
+            }
         }
     }
 }
@@ -107,7 +110,10 @@ pub(crate) fn prompt_create_sprint(
         let value = prompt_with_default("Sprint number", &format!("{suggested_number}"))?;
         match value.parse::<u32>() {
             Ok(number) => break number,
-            Err(_) => println!("Enter a numeric sprint number."),
+            Err(_) => {
+                let theme = Theme::for_stdout(ColorMode::Auto);
+                println!("{} enter a numeric sprint number.", theme.warning_label());
+            }
         }
     };
     let today = chrono::Local::now().date_naive();
@@ -117,7 +123,11 @@ pub(crate) fn prompt_create_sprint(
     let start_date = loop {
         let date = prompt_date("Start date", default_start)?;
         if date < today {
-            println!("Start date cannot be in the past.");
+            let theme = Theme::for_stdout(ColorMode::Auto);
+            println!(
+                "{} start date cannot be in the past.",
+                theme.warning_label()
+            );
             continue;
         }
         break date;
@@ -128,7 +138,11 @@ pub(crate) fn prompt_create_sprint(
     let end_date = loop {
         let date = prompt_date("End date", default_end)?;
         if date <= start_date {
-            println!("End date must be after start date.");
+            let theme = Theme::for_stdout(ColorMode::Auto);
+            println!(
+                "{} end date must be after start date.",
+                theme.warning_label()
+            );
             continue;
         }
         break date;
@@ -154,20 +168,20 @@ pub(crate) fn print_rollover_result(theme: &Theme, result: &RolloverResult) {
         result.carried_story_ids.join(", ")
     };
     println!(
-        "{} {} -> {}",
-        theme.success("Rolled sprint"),
+        "{} rolled sprint {} -> {}",
+        theme.ok_label(),
         result.from_sprint,
         result.to_sprint
     );
     println!(
-        "{} {}",
-        theme.label("Created next sprint:"),
+        "{} created next sprint: {}",
+        theme.info_label(),
         if result.created_next_sprint {
             theme.success("yes")
         } else {
             "no".to_string()
         }
     );
-    println!("{} {completed}", theme.label("Completed stories:"));
-    println!("{} {carried}", theme.label("Carried stories:"));
+    println!("{} completed stories: {completed}", theme.info_label());
+    println!("{} carried stories: {carried}", theme.info_label());
 }

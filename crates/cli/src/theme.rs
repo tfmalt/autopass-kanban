@@ -85,6 +85,22 @@ impl Theme {
         self.paint(Style::Bold, value)
     }
 
+    pub(crate) fn ok_label(&self) -> String {
+        self.paint(Style::Green, "✔ ok")
+    }
+
+    pub(crate) fn warning_label(&self) -> String {
+        self.paint(Style::Amber, "▲ warning")
+    }
+
+    pub(crate) fn info_label(&self) -> String {
+        self.paint(Style::Cyan, "ℹ info")
+    }
+
+    pub(crate) fn error_label(&self) -> String {
+        self.paint(Style::Red, "✖ error")
+    }
+
     pub(crate) fn id(&self, value: impl std::fmt::Display) -> String {
         self.paint(Style::Cyan, value)
     }
@@ -106,11 +122,7 @@ impl Theme {
     }
 
     pub(crate) fn warning(&self, value: impl std::fmt::Display) -> String {
-        self.paint(Style::Yellow, value)
-    }
-
-    pub(crate) fn error(&self, value: impl std::fmt::Display) -> String {
-        self.paint(Style::Red, value)
+        self.paint(Style::Amber, value)
     }
 
     pub(crate) fn command(&self, value: impl std::fmt::Display) -> String {
@@ -156,10 +168,39 @@ impl Theme {
     pub(crate) fn severity(&self, severity: &str) -> String {
         match severity.to_ascii_lowercase().as_str() {
             "error" | "critical" => self.paint(Style::Red, severity),
-            "warning" | "warn" => self.paint(Style::Yellow, severity),
+            "warning" | "warn" => self.paint(Style::Amber, severity),
             "info" => self.paint(Style::Cyan, severity),
             _ => severity.to_string(),
         }
+    }
+
+    pub(crate) fn highlight_commands(&self, text: &str) -> String {
+        let mut output = String::new();
+        let mut chars = text.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch != '`' {
+                output.push(ch);
+                continue;
+            }
+
+            let mut token = String::new();
+            for next in chars.by_ref() {
+                if next == '`' {
+                    break;
+                }
+                token.push(next);
+            }
+
+            if token.is_empty() {
+                output.push('`');
+                output.push('`');
+            } else {
+                output.push_str(&self.command(token));
+            }
+        }
+
+        output
     }
 }
 
@@ -212,6 +253,25 @@ mod tests {
 
         assert!(styled.contains("\x1b["));
         assert!(styled.contains("in-progress"));
+    }
+
+    #[test]
+    fn message_labels_are_lowercase_and_colored() {
+        let theme = Theme::color();
+
+        assert_eq!(theme.ok_label(), "\x1b[1;32m✔ ok\x1b[0m");
+        assert_eq!(theme.warning_label(), "\x1b[93m▲ warning\x1b[0m");
+        assert_eq!(theme.info_label(), "\x1b[1;36mℹ info\x1b[0m");
+        assert_eq!(theme.error_label(), "\x1b[1;31m✖ error\x1b[0m");
+    }
+
+    #[test]
+    fn highlight_commands_colors_backticked_commands() {
+        let theme = Theme::color();
+        let output = theme.highlight_commands("Run `git init` before `kanban init`.");
+
+        assert!(output.contains("\x1b[1;34mgit init\x1b[0m"));
+        assert!(output.contains("\x1b[1;34mkanban init\x1b[0m"));
     }
 
     #[test]

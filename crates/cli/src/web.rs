@@ -559,7 +559,7 @@ fn finish_stopped_web_process(
 ) -> Result<bool> {
     remove_pid_file(paths)?;
     if !quiet {
-        println!("{} PID {pid}", theme.success("Stopped kanban web UI:"));
+        println!("{} stopped kanban web UI: PID {pid}", theme.ok_label());
     }
     Ok(true)
 }
@@ -662,7 +662,7 @@ pub(crate) fn start_web(
     }
 
     if build {
-        println!("{}", theme.label("Building kanban web UI..."));
+        println!("{} building kanban web UI...", theme.info_label());
         run_web_build(&repo_root)?;
     }
     let port = resolve_web_port(&config.web.host, config.web.port)?;
@@ -676,9 +676,9 @@ pub(crate) fn start_web(
     let url = format!("http://{}:{}", config.web.host, port.actual);
     let spec = build_web_start_command_spec(&repo_root, dev, &config.web.host, port.actual)?;
     if foreground {
-        println!("{} {url}", theme.success("Starting kanban web UI:"));
+        println!("{} starting kanban web UI: {url}", theme.ok_label());
         if open && let Err(error) = open_browser_url(&url) {
-            eprintln!("{} {error}", theme.warning("Could not open browser:"));
+            eprintln!("{} could not open browser: {error}", theme.warning_label());
         }
         let status = process_from_spec(&spec)
             .env("KANBAN_WEB_PORT", port.actual.to_string())
@@ -716,15 +716,15 @@ pub(crate) fn start_web(
     fs::write(&paths.pid_file, format!("{}\n", child.id()))
         .with_context(|| format!("write PID file {}", paths.pid_file.display()))?;
 
-    println!("{} {url}", theme.success("Started kanban web UI:"));
-    println!("{} {}", theme.label("PID:"), child.id());
+    println!("{} started kanban web UI: {url}", theme.ok_label());
+    println!("{} pid: {}", theme.info_label(), child.id());
     println!(
-        "{} {}",
-        theme.label("Log:"),
+        "{} log: {}",
+        theme.info_label(),
         theme.path(paths.log_file.display())
     );
     if open && let Err(error) = open_browser_url(&url) {
-        eprintln!("{} {error}", theme.warning("Could not open browser:"));
+        eprintln!("{} could not open browser: {error}", theme.warning_label());
     }
     Ok(())
 }
@@ -735,7 +735,7 @@ pub(crate) fn stop_web(theme: &Theme, repo_root: &Path, quiet: bool) -> Result<b
     match read_web_process_state(&paths)? {
         WebProcessState::Stopped => {
             if !quiet {
-                println!("{} web UI is not running.", theme.brand());
+                println!("{} web UI is not running.", theme.info_label());
             }
             Ok(false)
         }
@@ -743,8 +743,8 @@ pub(crate) fn stop_web(theme: &Theme, repo_root: &Path, quiet: bool) -> Result<b
             remove_pid_file(&paths)?;
             if !quiet {
                 match pid {
-                    Some(pid) => println!("{} stale PID {pid}", theme.warning("Removed")),
-                    None => println!("{}", theme.warning("Removed stale web PID file.")),
+                    Some(pid) => println!("{} removed stale PID {pid}", theme.warning_label()),
+                    None => println!("{} removed stale web PID file.", theme.warning_label()),
                 }
             }
             Ok(false)
@@ -776,27 +776,27 @@ pub(crate) fn print_web_status(theme: &Theme, repo_root: &Path) -> Result<()> {
     let url = format!("http://{}:{}", config.web.host, status_port);
     match process_state {
         WebProcessState::Running(pid) => {
-            println!("{} web UI: running", theme.brand());
-            println!("{} {pid}", theme.label("PID:"));
-            println!("{} {url}", theme.label("URL:"));
+            println!("{} web UI: running", theme.ok_label());
+            println!("{} pid: {pid}", theme.info_label());
+            println!("{} url: {url}", theme.info_label());
             println!(
-                "{} {}",
-                theme.label("Log:"),
+                "{} log: {}",
+                theme.info_label(),
                 theme.path(paths.log_file.display())
             );
         }
         WebProcessState::Stopped => {
-            println!("{} web UI: stopped", theme.brand());
-            println!("{} {url}", theme.label("URL:"));
+            println!("{} web UI: stopped", theme.info_label());
+            println!("{} url: {url}", theme.info_label());
         }
         WebProcessState::Stale(pid) => {
             match pid {
-                Some(pid) => println!("{} web UI: stale PID {pid}", theme.brand()),
-                None => println!("{} web UI: stale PID file", theme.brand()),
+                Some(pid) => println!("{} web UI: stale PID {pid}", theme.warning_label()),
+                None => println!("{} web UI: stale PID file", theme.warning_label()),
             }
             println!(
-                "{} {}",
-                theme.label("PID file:"),
+                "{} pid file: {}",
+                theme.info_label(),
                 theme.path(paths.pid_file.display())
             );
         }
@@ -805,29 +805,22 @@ pub(crate) fn print_web_status(theme: &Theme, repo_root: &Path) -> Result<()> {
 }
 
 pub(crate) fn render_web_already_running_error(theme: &Theme, pid: u32, width: usize) -> String {
-    let icon = "✖";
-    let prefix_width = display_width(icon) + 1;
+    let prefix = "✖ error";
+    let prefix_width = display_width(prefix) + 1;
     let content_width = width.saturating_sub(prefix_width).max(1);
     let mut output = String::new();
-    let primary = format!("Error: kanban web is already running with PID {pid}.");
+    let primary = format!("kanban web is already running with PID {pid}.");
     let guidance = [
         InlineToken::plain("Use", false),
-        InlineToken::command("`kanban web status`", true),
+        InlineToken::command("kanban web status", true),
         InlineToken::plain("or", true),
-        InlineToken::command("`kanban web restart`", true),
+        InlineToken::command("kanban web restart", true),
         InlineToken::plain(".", false),
     ];
 
     for (index, line) in wrap_text(&primary, content_width).iter().enumerate() {
         if index == 0 {
-            if let Some(rest) = line.strip_prefix("Error:") {
-                push_line(
-                    &mut output,
-                    &format!("{} {}{}", theme.error(icon), theme.error("Error:"), rest),
-                );
-            } else {
-                push_line(&mut output, &format!("{} {line}", theme.error(icon)));
-            }
+            push_line(&mut output, &format!("{} {line}", theme.error_label()));
         } else {
             push_line(&mut output, &format!("{}{line}", " ".repeat(prefix_width)));
         }
@@ -845,7 +838,7 @@ pub(crate) fn render_web_port_fallback_warning(
 ) -> String {
     format!(
         "{} another service is already using http://{}:{}; starting kanban web UI on http://{}:{} instead.",
-        theme.warning("Warning:"),
+        theme.warning_label(),
         host,
         requested_port,
         host,
@@ -876,8 +869,8 @@ pub(crate) fn print_web_log(
     let paths = web_runtime_paths(&config.repo_root);
     if !paths.log_file.exists() {
         println!(
-            "{} {}",
-            theme.warning("No web log found:"),
+            "{} no web log found: {}",
+            theme.warning_label(),
             theme.path(paths.log_file.display())
         );
         return Ok(());
@@ -938,7 +931,7 @@ mod tests {
 
         assert_eq!(
             output,
-            "✖ Error: kanban web is already running with PID 77322.\n  Use `kanban web status` or `kanban web restart`.\n"
+            "✖ error kanban web is already running with PID 77322.\n        Use kanban web status or kanban web restart.\n"
         );
     }
 
@@ -947,20 +940,22 @@ mod tests {
         let output = render_web_already_running_error(&Theme::plain(), 77322, 48);
 
         for line in output.lines().skip(1) {
-            assert!(line.starts_with("  "), "line was not indented: {line}");
+            assert!(
+                line.starts_with("        "),
+                "line was not indented: {line}"
+            );
         }
-        assert!(output.contains("\n  77322.\n"));
-        assert!(output.contains("\n  `kanban web restart`.\n"));
+        assert!(output.contains("\n        77322.\n"));
+        assert!(output.contains("\n        kanban web restart.\n"));
     }
 
     #[test]
     fn web_already_running_error_uses_theme_colors_for_error_and_commands() {
         let output = render_web_already_running_error(&Theme::color(), 77322, 100);
 
-        assert!(output.contains("\x1b[1;31m✖\x1b[0m"));
-        assert!(output.contains("\x1b[1;31mError:\x1b[0m"));
-        assert!(output.contains("\x1b[1;34m`kanban web status`\x1b[0m"));
-        assert!(output.contains("\x1b[1;34m`kanban web restart`\x1b[0m"));
+        assert!(output.contains("\x1b[1;31m✖ error\x1b[0m"));
+        assert!(output.contains("\x1b[1;34mkanban web status\x1b[0m"));
+        assert!(output.contains("\x1b[1;34mkanban web restart\x1b[0m"));
     }
 
     #[test]
@@ -969,7 +964,7 @@ mod tests {
 
         assert_eq!(
             output,
-            "Warning: another service is already using http://127.0.0.1:3000; starting kanban web UI on http://127.0.0.1:3001 instead."
+            "▲ warning another service is already using http://127.0.0.1:3000; starting kanban web UI on http://127.0.0.1:3001 instead."
         );
     }
 

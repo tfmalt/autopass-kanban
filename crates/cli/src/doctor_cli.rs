@@ -9,7 +9,7 @@ use kanban_core::*;
 
 pub(crate) fn print_doctor_findings(theme: &Theme, findings: &[DoctorFinding]) {
     if findings.is_empty() {
-        println!("{}", theme.success("No doctor findings."));
+        println!("{} no doctor findings.", theme.ok_label());
         return;
     }
 
@@ -92,12 +92,16 @@ pub(crate) fn print_doctor_issue(theme: &Theme, index: usize, total: usize, issu
         theme.label("Rule:"),
         format_doctor_rule(theme, &issue.rule)
     );
-    println!("{} {}", theme.label("Scope:"), issue.scope);
+    println!("{} scope: {}", theme.info_label(), issue.scope);
     if let Some(story_id) = &issue.story_id {
-        println!("{} {}", theme.label("Story:"), theme.id(story_id));
+        println!("{} story: {}", theme.info_label(), theme.id(story_id));
     }
     if let Some(path) = &issue.file_path {
-        println!("{} {}", theme.label("File:"), theme.path(path.display()));
+        println!(
+            "{} file: {}",
+            theme.info_label(),
+            theme.path(path.display())
+        );
     }
     println!(
         "{} {}",
@@ -148,12 +152,13 @@ pub(crate) fn prompt_doctor_fix_action(issue: &DoctorIssue) -> Result<String> {
             "e" | "edit" if doctor_issue_allows_edit(issue) => return Ok(normalized),
             "s" | "skip" | "q" | "quit" => return Ok(normalized),
             _ => {
+                let theme = Theme::for_stdout(ColorMode::Auto);
                 if matches!(issue.fix_kind, DoctorFixKind::ManualOnly) {
-                    println!("Enter skip or quit.");
+                    println!("{} enter skip or quit.", theme.warning_label());
                 } else if doctor_issue_allows_edit(issue) {
-                    println!("Enter yes, edit, skip, or quit.");
+                    println!("{} enter yes, edit, skip, or quit.", theme.warning_label());
                 } else {
-                    println!("Enter yes, skip, or quit.");
+                    println!("{} enter yes, skip, or quit.", theme.warning_label());
                 }
             }
         }
@@ -184,7 +189,8 @@ pub(crate) fn collect_doctor_fix_input(issue: &DoctorIssue) -> Result<DoctorFixI
             if options.iter().any(|option| option == &value) {
                 break Some(value);
             }
-            println!("Choose one of: {options_text}.");
+            let theme = Theme::for_stdout(ColorMode::Auto);
+            println!("{} choose one of: {options_text}.", theme.warning_label());
         },
     };
     Ok(DoctorFixInput { value })
@@ -207,7 +213,7 @@ pub(crate) fn run_doctor_fix_wizard(
 ) -> Result<()> {
     let mut issues = resolve_doctor_fix_issues(repo_root, target)?;
     if issues.is_empty() {
-        println!("{}", theme.success("No doctor findings to fix."));
+        println!("{} no doctor findings to fix.", theme.ok_label());
         return Ok(());
     }
 
@@ -218,14 +224,14 @@ pub(crate) fn run_doctor_fix_wizard(
         print_doctor_issue(theme, index + 1, total, &issue);
         if matches!(issue.fix_kind, DoctorFixKind::ManualOnly) {
             println!(
-                "{} Manual-only issue; no automatic fix is available.",
-                theme.warning("Note:")
+                "{} manual-only issue; no automatic fix is available.",
+                theme.info_label()
             );
         }
         let action = prompt_doctor_fix_action(&issue)?;
         match action.as_str() {
             "q" | "quit" => {
-                println!("{}", theme.warning("Doctor fix aborted."));
+                println!("{} doctor fix aborted.", theme.warning_label());
                 return Ok(());
             }
             "s" | "skip" => {
@@ -234,36 +240,44 @@ pub(crate) fn run_doctor_fix_wizard(
             "e" | "edit" => {
                 let input = collect_doctor_edit_input(&issue)?;
                 let result = apply_doctor_fix(repo_root, &issue, &input)?;
-                println!("{} {}", theme.success("Applied:"), result.message);
+                println!("{} applied: {}", theme.ok_label(), result.message);
                 for path in result.touched_paths {
-                    println!("{} {}", theme.label("Updated:"), theme.path(path.display()));
+                    println!(
+                        "{} updated: {}",
+                        theme.info_label(),
+                        theme.path(path.display())
+                    );
                 }
                 issues = resolve_doctor_fix_issues(repo_root, target)?;
                 if issues.is_empty() {
                     println!(
-                        "{}",
-                        theme.success("All scoped doctor findings are resolved.")
+                        "{} all scoped doctor findings are resolved.",
+                        theme.ok_label()
                     );
                     return Ok(());
                 }
             }
             _ => {
                 if matches!(issue.fix_kind, DoctorFixKind::ManualOnly) {
-                    println!("{}", theme.warning("Skipping manual-only issue."));
+                    println!("{} skipping manual-only issue.", theme.warning_label());
                     index += 1;
                     continue;
                 }
                 let input = collect_doctor_fix_input(&issue)?;
                 let result = apply_doctor_fix(repo_root, &issue, &input)?;
-                println!("{} {}", theme.success("Applied:"), result.message);
+                println!("{} applied: {}", theme.ok_label(), result.message);
                 for path in result.touched_paths {
-                    println!("{} {}", theme.label("Updated:"), theme.path(path.display()));
+                    println!(
+                        "{} updated: {}",
+                        theme.info_label(),
+                        theme.path(path.display())
+                    );
                 }
                 issues = resolve_doctor_fix_issues(repo_root, target)?;
                 if issues.is_empty() {
                     println!(
-                        "{}",
-                        theme.success("All scoped doctor findings are resolved.")
+                        "{} all scoped doctor findings are resolved.",
+                        theme.ok_label()
                     );
                     return Ok(());
                 }
@@ -271,7 +285,7 @@ pub(crate) fn run_doctor_fix_wizard(
         }
     }
 
-    println!("{}", theme.success("Doctor fix wizard completed."));
+    println!("{} doctor fix wizard completed.", theme.ok_label());
     Ok(())
 }
 
