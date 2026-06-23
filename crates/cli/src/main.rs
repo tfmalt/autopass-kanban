@@ -159,6 +159,14 @@ fn run() -> Result<()> {
     if raw_args.len() == 2 && matches!(raw_args[1].to_str(), Some("--version" | "-V")) {
         let theme = Theme::for_stdout(ColorMode::Auto);
         println!("{}", render_version_line(&theme));
+        if let Some(latest) = latest_version_if_newer() {
+            println!(
+                "\n{} A new version is available: {}. Run {} to update.",
+                theme.warning_label(),
+                theme.version(&latest),
+                theme.command("kanban upgrade")
+            );
+        }
         return Ok(());
     }
 

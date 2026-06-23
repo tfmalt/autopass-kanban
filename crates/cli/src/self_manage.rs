@@ -115,6 +115,20 @@ sh "$_tmp" "$@"
     Ok(())
 }
 
+pub(crate) fn latest_version_if_newer() -> Option<String> {
+    let current = env!("CARGO_PKG_VERSION");
+    let latest = resolve_latest_version().ok()?;
+    match is_newer_version(current, &latest) {
+        Ok(true) => Some(latest),
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+fn resolve_latest_version() -> Result<String> {
+    bail!("kanban upgrade is only supported on POSIX shells")
+}
+
 #[cfg(not(windows))]
 fn resolve_latest_version() -> Result<String> {
     if let Ok(tag) = std::env::var("GITHUB_LATEST_TAG") {
@@ -331,5 +345,41 @@ mod tests {
         );
 
         result.unwrap();
+    }
+
+    #[test]
+    fn latest_version_if_newer_respects_github_latest_tag_env() {
+        // The GITHUB_LATEST_TAG env var short-circuits resolve_latest_version,
+        // so we can exercise latest_version_if_newer without network access.
+        let current = env!("CARGO_PKG_VERSION");
+        let parsed = parse_version(current).unwrap();
+        let newer = format!("{}.{}.{}", parsed.0, parsed.1, parsed.2 + 1);
+
+        // SAFETY: no other test touches GITHUB_LATEST_TAG, so there is no
+        // concurrent mutation risk.
+        unsafe {
+            std::env::set_var("GITHUB_LATEST_TAG", format!("v{newer}"));
+        }
+        let result = latest_version_if_newer();
+        unsafe {
+            std::env::remove_var("GITHUB_LATEST_TAG");
+        }
+
+        assert_eq!(result.as_deref(), Some(newer.as_str()));
+    }
+
+    #[test]
+    fn latest_version_if_newer_returns_none_when_current_is_latest() {
+        // SAFETY: no other test touches GITHUB_LATEST_TAG, so there is no
+        // concurrent mutation risk.
+        unsafe {
+            std::env::set_var("GITHUB_LATEST_TAG", env!("CARGO_PKG_VERSION"));
+        }
+        let result = latest_version_if_newer();
+        unsafe {
+            std::env::remove_var("GITHUB_LATEST_TAG");
+        }
+
+        assert!(result.is_none());
     }
 }
