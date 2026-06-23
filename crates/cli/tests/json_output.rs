@@ -38,12 +38,52 @@ fn write_story(root: &Path, rel: &str, frontmatter: &str, body: &str) {
 }
 
 fn init_repo(dir: &std::path::Path) {
+    git_init(dir);
     let repo_root = dir.to_string_lossy().into_owned();
     let output = kanban_in(dir, &["init", &repo_root]);
     assert!(
         output.status.success(),
         "kanban init should succeed; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn git_init(dir: &std::path::Path) {
+    let init = Command::new("git")
+        .current_dir(dir)
+        .args(["init"])
+        .output()
+        .expect("git init should run");
+    assert!(
+        init.status.success(),
+        "git init should succeed; stderr: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+}
+
+fn write_git_identity(dir: &std::path::Path, name: &str, email: &str) {
+    git_init(dir);
+
+    let set_name = Command::new("git")
+        .current_dir(dir)
+        .args(["config", "user.name", name])
+        .output()
+        .expect("git config user.name should run");
+    assert!(
+        set_name.status.success(),
+        "git config user.name should succeed; stderr: {}",
+        String::from_utf8_lossy(&set_name.stderr)
+    );
+
+    let set_email = Command::new("git")
+        .current_dir(dir)
+        .args(["config", "user.email", email])
+        .output()
+        .expect("git config user.email should run");
+    assert!(
+        set_email.status.success(),
+        "git config user.email should succeed; stderr: {}",
+        String::from_utf8_lossy(&set_email.stderr)
     );
 }
 
@@ -101,6 +141,7 @@ fn config_get_emits_ok_envelope() {
 fn init_emits_ok_envelope() {
     let dir = tempdir().expect("temp dir should be created");
     let repo_root = dir.path().to_string_lossy().into_owned();
+    git_init(dir.path());
 
     let out = kanban_in(dir.path(), &["--format", "json", "init", &repo_root]);
 
@@ -119,9 +160,33 @@ fn init_emits_ok_envelope() {
 }
 
 #[test]
+fn init_populates_team_from_git_identity() {
+    let dir = tempdir().expect("temp dir should be created");
+    let repo_root = dir.path().to_string_lossy().into_owned();
+    write_git_identity(dir.path(), "Test User", "test@example.com");
+
+    let out = kanban_in(dir.path(), &["--format", "json", "init", &repo_root]);
+
+    assert!(
+        out.status.success(),
+        "init should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let settings_file = dir.path().join(".kanban/settings.json");
+    let json = serde_json::from_str::<serde_json::Value>(
+        &fs::read_to_string(&settings_file).expect("settings.json should be written"),
+    )
+    .expect("settings.json should parse as json");
+    assert_eq!(json["team"][0]["name"], "Test User");
+    assert_eq!(json["team"][0]["email"], "test@example.com");
+}
+
+#[test]
 fn init_with_no_sprints_persists_feature_flag() {
     let dir = tempdir().expect("temp dir should be created");
     let repo_root = dir.path().to_string_lossy().into_owned();
+    git_init(dir.path());
 
     let out = kanban_in(
         dir.path(),
@@ -147,6 +212,7 @@ fn init_with_no_sprints_persists_feature_flag() {
 fn init_with_no_epics_and_no_phases_persists_feature_flags() {
     let dir = tempdir().expect("temp dir should be created");
     let repo_root = dir.path().to_string_lossy().into_owned();
+    git_init(dir.path());
 
     let out = kanban_in(
         dir.path(),
@@ -179,6 +245,7 @@ fn init_with_no_epics_and_no_phases_persists_feature_flags() {
 fn features_list_json_emits_feature_state() {
     let dir = tempdir().expect("temp dir should be created");
     let repo_root = dir.path().to_string_lossy().into_owned();
+    git_init(dir.path());
 
     kanban_in(dir.path(), &["init", "--no-sprints", &repo_root]);
 
@@ -192,6 +259,26 @@ fn features_list_json_emits_feature_state() {
     assert_eq!(json["data"]["sprints"], false);
     assert_eq!(json["data"]["phases"], true);
     assert_eq!(json["data"]["epics"], true);
+}
+
+#[test]
+fn init_outside_git_emits_invalid_argument_error() {
+    let dir = tempdir().expect("temp dir should be created");
+    let repo_root = dir.path().to_string_lossy().into_owned();
+
+    let out = kanban_in(dir.path(), &["--format", "json", "init", &repo_root]);
+
+    let json = parse_stdout(&out);
+    assert!(!out.status.success(), "init outside git should fail");
+    assert_eq!(json["status"], "error");
+    assert_eq!(json["kind"], "init");
+    assert_eq!(json["error"]["code"], "invalid_argument");
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .expect("error message should be a string")
+            .contains("not a git repository")
+    );
 }
 
 #[test]
@@ -1487,6 +1574,7 @@ fn epic_update_priority_json_rejects_missing_value() {
 #[test]
 fn completion_help_json_emits_help_content() {
     let dir = tempdir().expect("temp dir should be created");
+    git_init(dir.path());
 
     let out = kanban_in(dir.path(), &["--format", "json", "completion", "help"]);
 

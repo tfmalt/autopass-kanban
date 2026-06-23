@@ -53,6 +53,8 @@ pub(crate) const CLAP_STYLING: Styles = Styles::styled()
         ))),
     );
 
+pub(crate) const ROOT_HELP_GIT_REQUIREMENT: &str = "Git requirement:\n  Most `kanban` commands must be run inside a git repository.\n  Run `git init` before `kanban init` or other repository commands.";
+
 #[derive(Parser)]
 #[command(name = "kanban")]
 #[command(bin_name = "kanban")]
@@ -64,6 +66,7 @@ pub(crate) const CLAP_STYLING: Styles = Styles::styled()
 #[command(
     long_about = "Markdown-first kanban tooling for the AutoPASS IP 2.0 backlog. Commands state whether they are read-only or which markdown files they mutate."
 )]
+#[command(after_help = ROOT_HELP_GIT_REQUIREMENT)]
 pub(crate) struct Args {
     #[arg(
         long,

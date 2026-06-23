@@ -72,6 +72,53 @@ pub(crate) fn render_no_args_help_output(theme: &Theme) -> Result<String> {
     Ok(format!("{}\n{help}\n", render_version_line(theme)))
 }
 
+pub(crate) fn command_requires_git_repository(command: &Command) -> bool {
+    !matches!(command, Command::Upgrade { .. } | Command::Uninstall { .. })
+}
+
+pub(crate) fn command_git_requirement_path(command: &Command) -> &Path {
+    command_repo_root(command)
+        .map(PathBuf::as_path)
+        .unwrap_or_else(|| Path::new("."))
+}
+
+pub(crate) fn git_repository_requirement_message(path: &Path) -> String {
+    if path == Path::new(".") {
+        "Current directory is not a git repository. Run `git init` to initialize it.".into()
+    } else {
+        format!(
+            "Repository path {} is not a git repository. Run `git init` to initialize it.",
+            path.display()
+        )
+    }
+}
+
+pub(crate) fn is_git_repository(path: &Path) -> bool {
+    ProcessCommand::new("git")
+        .arg("-C")
+        .arg(path)
+        .arg("rev-parse")
+        .arg("--show-toplevel")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+pub(crate) fn command_git_requirement_error(command: &Command) -> Option<String> {
+    if !command_requires_git_repository(command) {
+        return None;
+    }
+
+    let path = command_git_requirement_path(command);
+    if is_git_repository(path) {
+        None
+    } else {
+        Some(git_repository_requirement_message(path))
+    }
+}
+
 pub(crate) fn normalize_args(raw_args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
     let doctor_passthrough = |arg: &std::ffi::OsString| {
         matches!(
@@ -104,22 +151,11 @@ fn main() -> Result<()> {
     }
 
     if raw_args.len() == 1 {
-        let config = kanban_core::load_kanban_config(".");
-
-        if let Err(error) = &config {
-            let theme = Theme::for_stdout(ColorMode::Auto);
-            println!("{}", render_version_line(&theme));
-            let message = error.to_string();
-            let init_guidance = "Run `kanban init` to initialize this repository.";
-            let primary = message
-                .strip_suffix(&format!(" {init_guidance}"))
-                .unwrap_or(message.as_str());
-            eprintln!(" {}  {primary}", theme.warning(""));
-            eprintln!("    {init_guidance}");
-            return Ok(());
-        }
-
-        let theme = Theme::for_stdout(config?.theme.color_mode);
+        let color_mode = kanban_core::load_kanban_config(".")
+            .ok()
+            .map(|config| config.theme.color_mode)
+            .unwrap_or(ColorMode::Auto);
+        let theme = Theme::for_stdout(color_mode);
         print!("{}", render_no_args_help_output(&theme)?);
         return Ok(());
     }
@@ -127,7 +163,14 @@ fn main() -> Result<()> {
     let args = Args::parse_from(raw_args);
 
     if args.format == OutputFormat::Json {
+        if let Some(message) = command_git_requirement_error(&args.command) {
+            std::process::exit(emit_json_git_requirement_error(&args.command, message));
+        }
         std::process::exit(emit_json(&args.command));
+    }
+
+    if let Some(message) = command_git_requirement_error(&args.command) {
+        bail!(message);
     }
 
     let theme = theme_for_command(&args.command);
@@ -1021,6 +1064,7 @@ mod tests {
             Args::command().render_version().to_string().trim_end()
         );
         assert!(output.contains("Usage: kanban"));
+        assert!(output.contains(ROOT_HELP_GIT_REQUIREMENT));
     }
 
     #[test]
@@ -1033,6 +1077,39 @@ mod tests {
             "expected ansi color codes in help output"
         );
         assert!(output.contains("Commands:"));
+    }
+
+    #[test]
+    fn upgrade_is_exempt_from_git_repository_requirement() {
+        let command = Command::Upgrade {
+            prefix: None,
+            skills_dir: None,
+            no_skills: false,
+            yes: false,
+            force: false,
+            dry_run: true,
+            quiet: false,
+        };
+
+        assert!(!command_requires_git_repository(&command));
+        assert!(command_git_requirement_error(&command).is_none());
+    }
+
+    #[test]
+    fn init_defaults_to_current_directory_git_requirement_message() {
+        let command = Command::Init {
+            repo_root: PathBuf::from("."),
+            no_sprints: false,
+            no_epics: false,
+            no_phases: false,
+        };
+
+        assert!(command_requires_git_repository(&command));
+        assert_eq!(command_git_requirement_path(&command), Path::new("."));
+        assert_eq!(
+            git_repository_requirement_message(Path::new(".")),
+            "Current directory is not a git repository. Run `git init` to initialize it."
+        );
     }
 
     #[test]

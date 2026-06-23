@@ -106,6 +106,83 @@ pub(crate) fn forward_slashed_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+pub(crate) fn command_json_kind(command: &Command) -> &'static str {
+    match command {
+        Command::Init { .. } => "init",
+        Command::Config { command } => match command {
+            ConfigCommand::Show { .. } => "config.show",
+            ConfigCommand::Get { .. } => "config.get",
+            ConfigCommand::Set { .. } => "config.set",
+        },
+        Command::Sprint { command } => match command {
+            SprintCommand::Current { .. } => "sprint.current",
+            SprintCommand::List { .. } => "sprint.list",
+            SprintCommand::Show { .. } => "sprint.show",
+            SprintCommand::Create { .. } => "sprint.create",
+            SprintCommand::Rollover { .. } => "sprint.rollover",
+            SprintCommand::Sync { .. } => "sprint.sync",
+        },
+        Command::Phase { command } => match command {
+            PhaseCommand::Show { .. } => "phase.show",
+        },
+        Command::Epic { command } => match command {
+            EpicCommand::Show { .. } => "epic.show",
+            EpicCommand::Update { .. } => "epic.update",
+        },
+        Command::Story { command } => match command {
+            StoryCommand::Show { .. } => "story.show",
+            StoryCommand::List { .. } => "story.list",
+            StoryCommand::Move { .. } => "story.move",
+            StoryCommand::Plan { .. } => "story.plan",
+            StoryCommand::Delete { .. } => "story.delete",
+            StoryCommand::Update { .. } => "story.update",
+        },
+        Command::Task { command } => match command {
+            TaskCommand::Show { .. } => "task.show",
+            TaskCommand::Add { .. } => "task.add",
+            TaskCommand::Update { .. } => "task.update",
+            TaskCommand::Delete { .. } => "task.delete",
+        },
+        Command::Web { command } => match command {
+            WebCommand::Start { .. } => "web.start",
+            WebCommand::Serve { .. } => "web.serve",
+            WebCommand::Stop { .. } => "web.stop",
+            WebCommand::Restart { .. } => "web.restart",
+            WebCommand::Status { .. } => "web.status",
+            WebCommand::Log { .. } => "web.log",
+        },
+        Command::Completion { .. } => "completion",
+        Command::Uninstall { .. } => "uninstall",
+        Command::Upgrade { .. } => "upgrade",
+        Command::Validate { .. } => "validate",
+        Command::Doctor { command } => match command {
+            DoctorCommand::Show { .. } => "doctor.show",
+            DoctorCommand::Fix { .. } => "doctor.fix",
+        },
+        Command::Report { command } => match command {
+            ReportCommand::Wbs { .. } => "report.wbs",
+            ReportCommand::Forecast { .. } => "report.forecast",
+        },
+        Command::Features { command } => match command {
+            FeaturesCommand::List { .. } => "features.list",
+            FeaturesCommand::Enable { .. } => "features.enable",
+            FeaturesCommand::Disable { .. } => "features.disable",
+        },
+        Command::ListIds { .. } => "list-ids",
+        Command::ListTaskIds { .. } => "list-task-ids",
+    }
+}
+
+pub(crate) fn emit_json_git_requirement_error(
+    command: &Command,
+    message: impl Into<String>,
+) -> i32 {
+    print_envelope(&JsonEnvelope::<serde_json::Value>::error(
+        command_json_kind(command),
+        KanbanErrorBody::new(KanbanErrorCode::InvalidArgument, message),
+    ))
+}
+
 /// Dispatch the JSON output path for a supported command.
 pub(crate) fn emit_json(command: &Command) -> i32 {
     match command {

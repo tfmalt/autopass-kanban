@@ -9,6 +9,19 @@ fn kanban(args: &[&str]) -> Output {
         .expect("kanban binary should run")
 }
 
+fn git_init(dir: &std::path::Path) {
+    let output = Command::new("git")
+        .current_dir(dir)
+        .args(["init"])
+        .output()
+        .expect("git init should run");
+    assert!(
+        output.status.success(),
+        "git init should succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn bash_completion_covers_current_command_tree() {
     let output = kanban(&["completion", "bash"]);
@@ -509,6 +522,7 @@ fn hidden_story_completion_listing_includes_ids_and_titles() {
     .expect("story fixture should be written");
 
     let repo_root = temp_root.path().display().to_string();
+    git_init(temp_root.path());
     let init_output = kanban(&["init", &repo_root]);
     assert!(init_output.status.success());
 
@@ -541,6 +555,7 @@ fn hidden_task_completion_listing_includes_task_ids_for_story() {
     .expect("task fixture should be written");
 
     let repo_root = temp_root.path().display().to_string();
+    git_init(temp_root.path());
     let init_output = kanban(&["init", &repo_root]);
     assert!(init_output.status.success());
 
@@ -552,7 +567,7 @@ fn hidden_task_completion_listing_includes_task_ids_for_story() {
 }
 
 #[test]
-fn bare_kanban_with_missing_config_prints_only_init_guidance() {
+fn bare_kanban_with_missing_config_prints_help_and_git_requirement() {
     let temp_root = tempdir().expect("temp repo should be created");
     let output = Command::new(env!("CARGO_BIN_EXE_kanban"))
         .current_dir(temp_root.path())
@@ -566,17 +581,9 @@ fn bare_kanban_with_missing_config_prints_only_init_guidance() {
         stdout.starts_with(&format!("kanban {}", env!("CARGO_PKG_VERSION"))),
         "stdout should start with the version line, got: {stdout}"
     );
-    assert_eq!(
-        stdout.trim_end().lines().count(),
-        1,
-        "stdout should only contain the version line, got: {stdout}"
-    );
-    assert!(
-        stderr.starts_with("   "),
-        "stderr should start with warning symbol, got: {stderr}"
-    );
-    assert!(stderr.contains("No `.kanban` configuration found"));
-    assert!(stderr.contains("\n    Run `kanban init` to initialize this repository"));
+    assert!(stdout.contains("Usage: kanban"));
+    assert!(stdout.contains("Git requirement:"));
+    assert!(stderr.is_empty(), "stderr should be empty, got: {stderr}");
 }
 
 #[test]
@@ -584,6 +591,7 @@ fn bare_kanban_with_config_prints_version_before_help() {
     let temp_root = tempdir().expect("temp repo should be created");
     let repo_root = temp_root.path().display().to_string();
 
+    git_init(temp_root.path());
     let init_output = kanban(&["init", &repo_root]);
     assert!(init_output.status.success());
 
@@ -604,6 +612,7 @@ fn bare_kanban_with_config_prints_version_before_help() {
     assert!(stdout.contains("Markdown-first kanban tooling"));
     assert!(stdout.contains("Usage:"));
     assert!(stdout.contains("kanban [OPTIONS] <COMMAND>") || stdout.contains("kanban <COMMAND>"));
+    assert!(stdout.contains("Git requirement:"));
 }
 
 #[test]
@@ -611,6 +620,7 @@ fn sprint_commands_use_theme_config_from_target_repo_root() {
     let temp_root = tempdir().expect("temp repo should be created");
     let repo_root = temp_root.path().display().to_string();
 
+    git_init(temp_root.path());
     let init_output = kanban(&["init", &repo_root]);
     assert!(init_output.status.success());
 
