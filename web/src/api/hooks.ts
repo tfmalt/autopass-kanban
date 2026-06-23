@@ -80,7 +80,7 @@ export function computePriorityUpdates<T extends Rankable>(
   return itemById.get(movedId)?.priority === priority ? [] : [{ id: movedId, priority }];
 }
 
-/** Team roster — TeamMember objects, sourced from .kanban/team.json or backlog frontmatter. */
+/** Team roster — TeamMember objects, sourced from .kanban/settings.json or backlog frontmatter. */
 export const useTeam = () =>
   useQuery({ queryKey: ["team"], queryFn: fetchTeam, staleTime: 5 * 60 * 1000 });
 

@@ -6,6 +6,8 @@ use std::process::Command;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::util::git_config_value;
+
 const CONFIG_DIR_NAME: &str = ".kanban";
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const DEFAULT_BACKLOG_PATH: &str = "delivery/backlog";
@@ -181,20 +183,61 @@ impl Default for WebConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamMemberConfig {
+    pub name: String,
+    pub email: String,
+    #[serde(default)]
+    pub avatar_url: Option<String>,
+    #[serde(default)]
+    pub avatar_path: Option<String>,
+}
+
+impl TeamMemberConfig {
+    fn normalize_and_validate(mut self) -> Result<Self> {
+        self.name = self.name.trim().to_string();
+        self.email = self.email.trim().to_string();
+        self.avatar_url = trim_optional_string(self.avatar_url);
+        self.avatar_path = trim_optional_string(self.avatar_path);
+
+        if self.name.is_empty() {
+            bail!("team entries must include a non-empty name.");
+        }
+        if self.email.is_empty() {
+            bail!("team entries must include a non-empty email.");
+        }
+
+        Ok(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     pub paths: PathsConfig,
     pub theme: ThemeConfig,
     pub story_points: StoryPointsConfig,
+    #[serde(default)]
+    pub team: Vec<TeamMemberConfig>,
     pub web: WebConfig,
 }
 
 impl Settings {
+    fn normalize_and_validate(mut self) -> Result<Self> {
+        self.team = self
+            .team
+            .into_iter()
+            .map(TeamMemberConfig::normalize_and_validate)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(self)
+    }
+
     fn into_config(self, repo_root: PathBuf) -> KanbanConfig {
         KanbanConfig {
             repo_root,
             paths: self.paths,
             theme: self.theme,
             story_points: self.story_points,
+            team: self.team,
             web: self.web,
         }
     }
@@ -207,6 +250,7 @@ pub struct KanbanConfig {
     pub paths: PathsConfig,
     pub theme: ThemeConfig,
     pub story_points: StoryPointsConfig,
+    pub team: Vec<TeamMemberConfig>,
     pub web: WebConfig,
 }
 
@@ -279,6 +323,7 @@ pub fn init_config_with_features(
         paths: paths_default,
         theme: ThemeConfig::default(),
         story_points: StoryPointsConfig::default(),
+        team: initial_team_from_git(&repo_root),
         web: WebConfig::default(),
     };
 
@@ -365,7 +410,8 @@ pub fn set_config_value(
     let contents = fs::read_to_string(&settings_path)
         .with_context(|| format!("read config file {}", settings_path.display()))?;
     let mut settings = serde_json::from_str::<Settings>(&contents)
-        .with_context(|| format!("parse config file {}", settings_path.display()))?;
+        .with_context(|| format!("parse config file {}", settings_path.display()))?
+        .normalize_and_validate()?;
 
     match key {
         "paths.backlog" => {
@@ -451,7 +497,8 @@ fn read_settings(repo_root: &Path) -> Result<Settings> {
     let contents = fs::read_to_string(&settings_file)
         .with_context(|| format!("read config file {}", settings_file.display()))?;
     serde_json::from_str::<Settings>(&contents)
-        .with_context(|| format!("parse config file {}", settings_file.display()))
+        .with_context(|| format!("parse config file {}", settings_file.display()))?
+        .normalize_and_validate()
 }
 
 fn load_kanban_config_from_root(repo_root: &Path) -> Result<KanbanConfig> {
@@ -470,6 +517,7 @@ fn missing_config_error(repo_root: &Path) -> Result<KanbanConfig> {
         paths: PathsConfig::default(),
         theme: ThemeConfig::default(),
         story_points: StoryPointsConfig::default(),
+        team: Vec::new(),
         web: WebConfig::default(),
     })
 }
@@ -586,6 +634,33 @@ fn parse_feature_flag(value: &str) -> Result<bool> {
     }
 }
 
+fn trim_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
+fn initial_team_from_git(repo_root: &Path) -> Vec<TeamMemberConfig> {
+    let Ok(name) = git_config_value(repo_root, "user.name") else {
+        return Vec::new();
+    };
+    let Ok(email) = git_config_value(repo_root, "user.email") else {
+        return Vec::new();
+    };
+
+    TeamMemberConfig {
+        name,
+        email,
+        avatar_url: None,
+        avatar_path: None,
+    }
+    .normalize_and_validate()
+    .ok()
+    .into_iter()
+    .collect()
+}
+
 fn path_marker(relative_path: &str) -> String {
     format!("/{}/", relative_path.replace('\\', "/").trim_matches('/'))
 }
@@ -603,6 +678,7 @@ fn unsupported_key<T>(key: &str) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::write_git_config;
     use tempfile::tempdir;
 
     #[test]
@@ -655,6 +731,25 @@ mod tests {
     }
 
     #[test]
+    fn init_config_populates_team_from_git_identity() {
+        let temp_root = tempdir().unwrap();
+        write_git_config(temp_root.path(), "Test User", "test@example.com");
+
+        init_config(temp_root.path()).unwrap();
+
+        let config = load_kanban_config(temp_root.path()).unwrap();
+        assert_eq!(
+            config.team,
+            vec![TeamMemberConfig {
+                name: "Test User".to_string(),
+                email: "test@example.com".to_string(),
+                avatar_url: None,
+                avatar_path: None,
+            }]
+        );
+    }
+
+    #[test]
     fn set_and_get_web_port_round_trips() {
         let temp_root = tempdir().unwrap();
         init_config(temp_root.path()).unwrap();
@@ -695,12 +790,48 @@ mod tests {
             paths: PathsConfig::default(),
             theme: ThemeConfig::default(),
             story_points: StoryPointsConfig::default(),
+            team: Vec::new(),
             web: WebConfig::default(),
         };
         let features = config.features();
         assert!(features.phases);
         assert!(features.sprints);
         assert!(features.epics);
+    }
+
+    #[test]
+    fn load_config_reads_team_from_settings() {
+        let temp_root = tempdir().unwrap();
+        init_config(temp_root.path()).unwrap();
+
+        let settings_path = temp_root.path().join(".kanban/settings.json");
+        let mut settings =
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&settings_path).unwrap())
+                .unwrap();
+        settings["team"] = serde_json::json!([
+            {
+                "name": " Test User ",
+                "email": " test@example.com ",
+                "avatarUrl": " https://example.com/avatar.png ",
+                "avatarPath": "  "
+            }
+        ]);
+        fs::write(
+            &settings_path,
+            format!("{}\n", serde_json::to_string_pretty(&settings).unwrap()),
+        )
+        .unwrap();
+
+        let config = load_kanban_config(temp_root.path()).unwrap();
+        assert_eq!(
+            config.team,
+            vec![TeamMemberConfig {
+                name: "Test User".to_string(),
+                email: "test@example.com".to_string(),
+                avatar_url: Some("https://example.com/avatar.png".to_string()),
+                avatar_path: None,
+            }]
+        );
     }
 
     #[test]

@@ -31,6 +31,25 @@
       "XXS": "1"
     }
   },
+  "team": [
+    {
+      "name": "Erik Itland",
+      "email": "erik.vardal.itland@vegvesen.no"
+    },
+    {
+      "name": "Geir Ivar Jerstad",
+      "email": "geir.ivar.jerstad@vegvesen.no"
+    },
+    {
+      "name": "Sondre Bjerkerud",
+      "email": "sondre.bjerkerud@vegvesen.no"
+    },
+    {
+      "name": "Thomas Malt",
+      "email": "thomas.malt@vegvesen.no",
+      "avatarUrl": "https://ca.slack-edge.com/T09DFLSTHFF-U09KQUG0DTN-1782ec94ce12-512"
+    }
+  ],
   "web": {
     "port": 3000,
     "host": "127.0.0.1",
