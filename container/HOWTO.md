@@ -1,6 +1,6 @@
 # Kanban CLI — Containerized Quickstart
 
-The `kanban` CLI runs inside a long-lived Docker container so the binary is never compiled locally. This guide gets you from zero to a working `kanban` command in one terminal session.
+The `kanban` CLI and web UI run inside a long-lived Docker container. The binary is never compiled locally. This guide gets you from zero to a working `kanban` command and web UI in one terminal session.
 
 ---
 
@@ -12,33 +12,33 @@ The `kanban` CLI runs inside a long-lived Docker container so the binary is neve
 | Docker Compose plugin | v2 | `docker compose version` |
 | Bash | 5.x | `bash --version` |
 | Kanban repo cloned at | `/git/autopass-kanban` | `ls /git/autopass-kanban/Cargo.toml` |
-| AutoPASS IP 2.0 repo cloned at | `/git/ip-2.0` | `ls /git/ip-2.0/AGENTS.md` |
+| AutoPASS IP 2.0 repo cloned at | `/git/ip-2.0` | `ls /git/ip-2.0/.kanban/settings.json` |
 
-> **Default project path:** the compose file mounts sibling checkout `../ip-2.0` by default. Set `KANBAN_REPO_PATH=/path/to/project` to use another markdown backlog repository.
+> **Default project path:** the compose file mounts the sibling checkout `../ip-2.0` by default. Set `KANBAN_REPO_PATH=/path/to/project` to use another markdown backlog repository.
 
 ---
 
-## Step 1 — Build the image
+## Step 1 — Build and start the container
 
-Run this **once** (or after changes to the kanban source):
+Run this **once** from the repo root (or after changes to Rust or web source):
 
 ```bash
-cd /git/autopass-kanban/container
+cd /git/autopass-kanban
 ./docker-compose.up.sh
 ```
 
 This script:
-1. Builds `ip2-kanban-cli:local` from `Dockerfile.kanban` (multi-stage Rust build — takes ~2 min on first run, cached on subsequent runs)
-2. Starts the `aup-kanban-1` container with `restart: always`
-3. Drops you into a shell inside the container — press **Ctrl-D** to exit
+1. Builds `ip2-kanban-web:local` from `Dockerfile` (multi-stage: Vite web build → Rust CLI build → slim Debian runtime — takes ~2 min on first run, always `--no-cache`)
+2. Starts the `aup-kanban-web-1` container with `restart: always`
+3. Prints `kanban-web is running at http://localhost:3000`
 
-To build without entering the shell:
+Open `http://localhost:3000` to use the web UI.
+
+To start without rebuilding (uses cached layers):
 
 ```bash
-docker compose -f /git/autopass-kanban/container/docker-compose.kanban.yml \
-  build --progress plain aup-kanban
-docker compose -f /git/autopass-kanban/container/docker-compose.kanban.yml \
-  up -d aup-kanban
+cd /git/autopass-kanban
+KANBAN_UID="$(id -u)" KANBAN_GID="$(id -g)" docker compose up -d aup-kanban-web
 ```
 
 ---
@@ -48,7 +48,7 @@ docker compose -f /git/autopass-kanban/container/docker-compose.kanban.yml \
 Add one block to `~/.bashrc` (or `~/.zshrc`):
 
 ```bash
-# IP2_KANBAN_CONTAINER_PATH
+# kanban CLI wrapper
 if [[ -d /git/autopass-kanban/container ]]; then
   export PATH="/git/autopass-kanban/container:$PATH"
 fi
@@ -65,7 +65,7 @@ Verify:
 ```bash
 which kanban        # /git/autopass-kanban/container/kanban
 which kb            # /git/autopass-kanban/container/kb
-kanban --version    # kanban 26.6.801
+kanban --version    # kanban 26.6.2115
 ```
 
 ---
@@ -80,9 +80,9 @@ kb sprint sync      # kb is a short alias for kanban
 ```
 
 The wrapper (`container/kanban`) automatically:
-- Starts `aup-kanban-1` if it is not running (`docker compose up -d`)
+- Starts `aup-kanban-web-1` if it is not running (`docker compose up -d`)
 - Forwards all arguments and flags to the binary inside the container
-- Mounts the AutoPASS IP 2.0 repo (`/git/ip-2.0` by default) as `/workspace` inside the container so all backlog file reads/writes go to the real checkout
+- Mounts the project repo (`/git/ip-2.0` by default) as `/repo` inside the container so all backlog file reads/writes go to the real checkout
 
 ---
 
@@ -91,33 +91,61 @@ The wrapper (`container/kanban`) automatically:
 ### Check container status
 
 ```bash
-docker ps --filter name=aup-kanban-1
+docker ps --filter name=aup-kanban-web-1
 ```
 
 ### Open a shell inside the container
 
 ```bash
-/git/autopass-kanban/container/docker-compose.bash.sh
+/git/autopass-kanban/docker-compose.bash.sh
 # or directly:
-docker exec -it aup-kanban-1 /bin/bash
+docker exec -it aup-kanban-web-1 /bin/sh
 ```
 
-### Rebuild after Rust source changes
+### Rebuild after Rust or web source changes
 
 ```bash
-cd /git/autopass-kanban/container
+cd /git/autopass-kanban
 ./docker-compose.up.sh
 ```
 
-The script passes `--no-cache` to ensure a clean rebuild.
+The script always passes `--no-cache` to ensure a clean rebuild.
 
 ### Stop the container
 
 ```bash
-docker compose -f /git/autopass-kanban/container/docker-compose.kanban.yml down
+docker compose -f /git/autopass-kanban/docker-compose.yml down
 ```
 
 The container is configured with `restart: always`, so it restarts automatically on Docker daemon startup. Stop it explicitly only when needed.
+
+---
+
+## Architecture
+
+```
+browser :3000
+  -> aup-kanban-web-1  (ip2-kanban-web:local)
+       -> /usr/local/bin/kanban web serve
+          -> embedded Rust web server
+       -> /repo  <- bind mount -> /git/ip-2.0
+
+host shell
+  -> container/kanban  (wrapper)
+       -> docker compose exec aup-kanban-web kanban <args>
+          -> /usr/local/bin/kanban
+       -> /repo  <- bind mount -> /git/ip-2.0
+```
+
+| File | Purpose |
+|---|---|
+| `Dockerfile` | Multi-stage build: Vite web build, Rust CLI build, slim Debian runtime |
+| `docker-compose.yml` | Compose service with fixed container name, UID/GID passthrough, and repo bind mount |
+| `docker-compose.up.sh` | Clean build (`--no-cache`) and start helper |
+| `docker-compose.bash.sh` | Opens a shell (`/bin/sh`) in the running container |
+| `entrypoint.sh` | Starts `kanban web serve` from `/repo` so git and `.kanban` config resolve correctly |
+| `container/kanban` | Host-side wrapper: starts container if needed, then `docker compose exec` |
+| `container/kb` | Thin alias: calls `kanban "$@"` |
 
 ---
 
