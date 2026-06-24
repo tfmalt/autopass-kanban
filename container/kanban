@@ -2,8 +2,9 @@
 set -euo pipefail
 
 tool_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-compose_file="$tool_root/container/docker-compose.kanban.yml"
-service_name="aup-kanban"
+compose_file="$tool_root/docker-compose.yml"
+service_name="aup-kanban-web"
+
 kanban_uid="$(id -u)"
 kanban_gid="$(id -g)"
 
