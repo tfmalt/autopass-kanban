@@ -4,3 +4,4 @@ web/dist/
 .kanban/run/
 *.log
 .env*
+.kanban/.lock
