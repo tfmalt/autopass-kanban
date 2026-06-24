@@ -7,16 +7,58 @@ use crate::prelude::*;
 use crate::sprint::*;
 use crate::util::*;
 
+/// Atomically write `contents` to `path` using a temp-file-then-rename pattern
+/// (US-012).
+///
+/// The temp file is created in `path`'s parent directory so the final
+/// `persist` (rename) is a same-volume move on both Unix and Windows. The temp
+/// file is `fsync`ed before the rename so a crash mid-write cannot leave a
+/// truncated or empty file at the final path: the original remains intact until
+/// the rename succeeds. The parent directory is created if missing.
+///
+/// This replaces every direct `fs::write` in core and web-server backlog
+/// writers so the markdown source of truth stays crash-safe.
+pub fn atomic_write(path: impl AsRef<Path>, contents: &str) -> Result<()> {
+    use std::io::Write;
+
+    let path = path.as_ref();
+    let parent = path
+        .parent()
+        .with_context(|| format!("cannot determine parent directory of {}", path.display()))?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("create directory {}", parent.display()))?;
+
+    let mut temp = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("create temp file in {}", parent.display()))?;
+    temp.write_all(contents.as_bytes())
+        .with_context(|| format!("write temp file {}", temp.path().display()))?;
+    temp.as_file()
+        .sync_all()
+        .with_context(|| format!("fsync temp file {}", temp.path().display()))?;
+    temp.persist(path)
+        .map_err(|err| anyhow::anyhow!("persist temp file to {}: {err}", path.display()))?;
+    Ok(())
+}
+
 pub fn collect_user_story_files(repo_root: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
     let config = load_kanban_config(repo_root)?;
     let backlog_root = config.backlog_path();
+    let canonical_backlog = backlog_root
+        .canonicalize()
+        .unwrap_or_else(|_| backlog_root.clone());
     let mut files = Vec::new();
 
     for entry in WalkDir::new(&backlog_root)
+        .follow_links(false)
         .into_iter()
         .filter_entry(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
     {
         let entry = entry?;
+        // US-009: explicitly skip symlinks so a planted US-*.md symlink
+        // cannot resolve outside the backlog root and cause writes through it.
+        if entry.file_type().is_symlink() {
+            continue;
+        }
         if !entry.file_type().is_file() {
             continue;
         }
@@ -26,6 +68,13 @@ pub fn collect_user_story_files(repo_root: impl AsRef<Path>) -> Result<Vec<PathB
             && name.ends_with(STORY_FILE_SUFFIX)
             && !name.ends_with(TASK_FILE_SUFFIX)
         {
+            // Defense-in-depth: reject files whose canonicalized path is
+            // outside the canonicalized backlog root.
+            if let Ok(canonical) = entry.path().canonicalize()
+                && !canonical.starts_with(&canonical_backlog)
+            {
+                continue;
+            }
             files.push(entry.into_path());
         }
     }
@@ -38,19 +87,31 @@ pub fn collect_user_story_files(repo_root: impl AsRef<Path>) -> Result<Vec<PathB
 pub fn collect_epic_files(repo_root: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
     let config = load_kanban_config(repo_root)?;
     let backlog_root = config.backlog_path();
+    let canonical_backlog = backlog_root
+        .canonicalize()
+        .unwrap_or_else(|_| backlog_root.clone());
     let mut files = Vec::new();
 
     for entry in WalkDir::new(&backlog_root)
+        .follow_links(false)
         .into_iter()
         .filter_entry(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
     {
         let entry = entry?;
+        if entry.file_type().is_symlink() {
+            continue;
+        }
         if !entry.file_type().is_file() {
             continue;
         }
 
         let name = entry.file_name().to_string_lossy();
         if name.starts_with(EPIC_FILE_PREFIX) && name.ends_with(STORY_FILE_SUFFIX) {
+            if let Ok(canonical) = entry.path().canonicalize()
+                && !canonical.starts_with(&canonical_backlog)
+            {
+                continue;
+            }
             files.push(entry.into_path());
         }
     }
@@ -175,7 +236,23 @@ pub fn read_story_file(file_path: impl AsRef<Path>, repo_root: impl AsRef<Path>)
         .clone()
         .unwrap_or_else(|| sibling_task_file_path.clone());
     let task_file = if task_file_path.exists() {
-        Some(read_task_file(&task_file_path, repo_root)?)
+        // Containment check: refuse to read a task_file that resolves outside
+        // the canonicalized backlog root (e.g. `task_file: ../../etc/passwd` or
+        // a symlinked sibling). This bounds the read side per US-008 scenario 1
+        // even before `validate` flags the value.
+        let backlog_root = config.backlog_path();
+        let inside = ensure_path_inside(&backlog_root, &task_file_path);
+        match inside {
+            Ok(canonical) => Some(read_task_file(&canonical, repo_root)?),
+            Err(_) => Some(TaskFile {
+                exists: false,
+                file_path: task_file_path.clone(),
+                relative_path: relative_path(repo_root, &task_file_path),
+                tasks: Vec::new(),
+                summary: TaskSummary::default(),
+                markdown: None,
+            }),
+        }
     } else if referenced_task_file_path.is_some() {
         Some(TaskFile {
             exists: false,
@@ -326,5 +403,101 @@ mod tests {
         let task_file = story.task_file.as_ref().unwrap();
         assert!(task_file.exists);
         assert_eq!(task_file.tasks.len(), 1);
+    }
+
+    #[test]
+    fn atomic_write_replaces_existing_file_on_success() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("story.md");
+        fs::write(&path, "original\n").unwrap();
+
+        atomic_write(&path, "new contents\n").expect("atomic write succeeds");
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new contents\n");
+    }
+
+    #[test]
+    fn atomic_write_leaves_original_intact_when_target_persist_fails() {
+        // Simulate a mid-write crash: the temp file is written and fsynced, but
+        // the final rename targets a path whose parent does not exist and
+        // cannot be created, so `persist` fails. The original file must remain
+        // unchanged and no partial content may be visible at the final path
+        // (US-012 scenario 1).
+        let dir = tempdir().unwrap();
+        let original_path = dir.path().join("story.md");
+        let original_content = "---\nid: US-001\n---\n# original\n";
+        fs::write(&original_path, original_content).unwrap();
+
+        // Target a path in a missing directory whose parent is a regular file,
+        // so `atomic_write`'s `create_dir_all` (and therefore `persist`) fails.
+        let blocker = dir.path().join("blocker");
+        fs::write(&blocker, "not a directory\n").unwrap();
+        let unreachable_target = blocker.join("story.md");
+
+        let result = atomic_write(&unreachable_target, "partial\n");
+        assert!(result.is_err(), "expected persist to fail");
+
+        // Original is intact (no truncation, no partial write).
+        assert_eq!(
+            fs::read_to_string(&original_path).unwrap(),
+            original_content,
+            "original file must be unchanged after a failed atomic write"
+        );
+        // No file appeared at the unreachable target.
+        assert!(
+            !unreachable_target.exists(),
+            "no partial content may be visible at the final path"
+        );
+    }
+
+    #[test]
+    fn atomic_write_creates_parent_directory_if_missing() {
+        let dir = tempdir().unwrap();
+        let nested = dir.path().join("nested/deep/story.md");
+
+        atomic_write(&nested, "contents\n").expect("atomic write succeeds");
+
+        assert_eq!(fs::read_to_string(&nested).unwrap(), "contents\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_user_story_files_skips_symlinked_story_files() {
+        // US-009: a symlinked US-*.md pointing outside the backlog root must
+        // not appear in the collected story file list.
+        use crate::testutil::*;
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+
+        // Create a real story file inside the backlog.
+        let backlog_dir = temp_root.path().join("delivery/backlog/phase-1");
+        fs::create_dir_all(&backlog_dir).unwrap();
+        let real_story = backlog_dir.join("US-001-real.md");
+        fs::write(
+            &real_story,
+            "---\nid: US-001\ntype: user-story\nstatus: todo\n---\n# Real\n",
+        )
+        .unwrap();
+
+        // Create a file outside the backlog and symlink it in.
+        let outside = temp_root.path().join("evil.md");
+        fs::write(&outside, "---\nid: US-002\ntype: user-story\n---\n# Evil\n").unwrap();
+        let symlink = backlog_dir.join("US-002-symlink.md");
+        std::os::unix::fs::symlink(&outside, &symlink).unwrap();
+
+        let files = collect_user_story_files(temp_root.path()).unwrap();
+        let names: Vec<String> = files
+            .iter()
+            .map(|f| f.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+
+        assert!(
+            names.contains(&"US-001-real.md".to_string()),
+            "real story file must be collected"
+        );
+        assert!(
+            !names.contains(&"US-002-symlink.md".to_string()),
+            "symlinked story file must be skipped"
+        );
     }
 }

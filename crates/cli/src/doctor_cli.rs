@@ -289,6 +289,70 @@ pub(crate) fn run_doctor_fix_wizard(
     Ok(())
 }
 
+/// `true` when a doctor issue can be applied without any prompted input: an
+/// automatic fix that needs no text/choice value. Used by the non-interactive
+/// path (US-011) to decide which fixes to apply unattended.
+fn is_auto_applyable(issue: &DoctorIssue) -> bool {
+    matches!(issue.fix_kind, DoctorFixKind::Automatic) && matches!(issue.prompt, DoctorPrompt::None)
+}
+
+/// Apply every safe automatic doctor fix without prompting and skip guided or
+/// manual fixes with a summary (US-011 scenario 4). Re-resolves issues after
+/// each apply so dependent findings are not applied against stale state.
+pub(crate) fn run_doctor_fix_non_interactive(
+    theme: &Theme,
+    repo_root: &PathBuf,
+    target: Option<&str>,
+) -> Result<()> {
+    let issues = resolve_doctor_fix_issues(repo_root, target)?;
+    if issues.is_empty() {
+        println!("{} no doctor findings to fix.", theme.ok_label());
+        return Ok(());
+    }
+
+    let mut applied = 0usize;
+    loop {
+        let current = resolve_doctor_fix_issues(repo_root, target)?;
+        let Some(position) = current.iter().position(is_auto_applyable) else {
+            break;
+        };
+        let issue = current[position].clone();
+        let input = DoctorFixInput { value: None };
+        let result = apply_doctor_fix(repo_root, &issue, &input)?;
+        println!("{} applied: {}", theme.ok_label(), result.message);
+        for path in result.touched_paths {
+            println!(
+                "{} updated: {}",
+                theme.info_label(),
+                theme.path(path.display())
+            );
+        }
+        applied += 1;
+    }
+
+    let remaining = resolve_doctor_fix_issues(repo_root, target)?;
+    println!(
+        "{} applied {} automatic fix(es).",
+        theme.ok_label(),
+        applied
+    );
+    if remaining.is_empty() {
+        if applied > 0 {
+            println!(
+                "{} all scoped doctor findings are resolved.",
+                theme.ok_label()
+            );
+        }
+    } else {
+        println!(
+            "{} skipped {} guided/manual fix(es) requiring interaction.",
+            theme.info_label(),
+            remaining.len()
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

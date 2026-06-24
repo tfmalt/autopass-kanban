@@ -94,6 +94,12 @@ impl KanbanErrorBody {
     }
 
     pub fn from_anyhow(error: &anyhow::Error) -> Self {
+        // Prefer the typed `KanbanError` payload when present so the code
+        // derives from the enum variant, not from message prose (US-025).
+        if let Some(typed) = error.downcast_ref::<crate::error::KanbanError>() {
+            return Self::new(KanbanErrorCode::from(typed), error.to_string());
+        }
+        // Legacy fallback for errors not yet migrated to the typed enum.
         Self::new(KanbanErrorCode::classify(error), error.to_string())
     }
 }
@@ -2282,5 +2288,22 @@ mod tests {
             KanbanErrorCode::StoryNotFound,
             "'Sprint story not found' should map to StoryNotFound"
         );
+    }
+
+    #[test]
+    fn from_anyhow_prefers_typed_kanban_error_over_message_sniffing() {
+        // A typed SprintNotFound carried in the anyhow chain must classify via
+        // the enum, even if the message prose would not match the legacy
+        // string heuristic (US-025 scenario 1 and 3).
+        let typed: anyhow::Error = crate::error::KanbanError::sprint_not_found("S099").into();
+        let body = KanbanErrorBody::from_anyhow(&typed);
+        assert_eq!(body.code, KanbanErrorCode::SprintNotFound);
+        assert!(body.message.contains("S099"));
+
+        // A plain anyhow error with no typed payload still falls back to the
+        // legacy heuristic so existing unmigrated errors keep their codes.
+        let plain = anyhow::anyhow!("Story not found: US-1");
+        let body = KanbanErrorBody::from_anyhow(&plain);
+        assert_eq!(body.code, KanbanErrorCode::StoryNotFound);
     }
 }

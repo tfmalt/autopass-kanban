@@ -149,3 +149,78 @@ pub(crate) fn to_forward_slashes(path: &Path) -> String {
     path.to_string_lossy()
         .replace(std::path::MAIN_SEPARATOR, "/")
 }
+
+/// Canonicalize the repository root, resolving symlinks so that a planted
+/// symlinked backlog cannot spoof containment checks.
+pub(crate) fn canonical_repo_root(repo_root: &Path) -> Result<PathBuf> {
+    fs::canonicalize(repo_root)
+        .with_context(|| format!("canonicalize repository root {}", repo_root.display()))
+}
+
+/// Ensure that `resolved` stays inside the canonicalized `repo_root`.
+///
+/// Used by every writer that joins a user-derived path (notably `task_file`
+/// frontmatter and doctor `file_path` values) to the repository root, and by
+/// the task-file read path so `kanban story show` never reads outside the
+/// backlog root. Both `repo_root` and `resolved` are canonicalized so symlink
+/// planting cannot escape the check.
+///
+/// When `resolved` does not yet exist (a new file about to be written), its
+/// parent directory is canonicalized instead and the file name is rejoined,
+/// which still detects `..` traversal and symlinked parents.
+pub(crate) fn ensure_path_inside(repo_root: &Path, resolved: &Path) -> Result<PathBuf> {
+    let canonical_root = canonical_repo_root(repo_root)?;
+    let canonical_target = match fs::canonicalize(resolved) {
+        Ok(path) => path,
+        Err(_) => {
+            let parent = resolved.parent().unwrap_or_else(|| Path::new(""));
+            let file_name = resolved.file_name();
+            let Some(file_name) = file_name else {
+                bail!(
+                    "Path {} has no file name component and cannot be written inside the backlog root.",
+                    resolved.display()
+                );
+            };
+            let canonical_parent = fs::canonicalize(parent)
+                .with_context(|| format!("canonicalize parent {}", parent.display()))?;
+            canonical_parent.join(file_name)
+        }
+    };
+
+    if !canonical_target.starts_with(&canonical_root) {
+        bail!(
+            "Path {} resolves outside the backlog root {}.",
+            canonical_target.display(),
+            canonical_root.display()
+        );
+    }
+    Ok(canonical_target)
+}
+
+/// Validate a `task_file` frontmatter value before it is joined to a story's
+/// parent directory. The value must be a bare sibling file name: not absolute,
+/// containing no path separators, and no `.` or `..` components. This is the
+/// `invalid-task-file-path` validation rule shared by `validate` and the read
+/// path.
+pub(crate) fn validate_task_file_frontmatter_value(value: &str) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("task_file must not be empty when present.");
+    }
+    if trimmed.is_empty()
+        || trimmed.contains(std::path::MAIN_SEPARATOR)
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed == "."
+        || trimmed == ".."
+        || trimmed.contains("/..")
+        || trimmed.starts_with("../")
+        || trimmed.starts_with("..\\")
+        || Path::new(trimmed).is_absolute()
+    {
+        bail!(
+            "task_file must be a sibling file name without `..`, path separators, or absolute paths; got {trimmed:?}."
+        );
+    }
+    Ok(())
+}

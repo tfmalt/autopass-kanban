@@ -14,7 +14,7 @@ pub(crate) const REQUIRED_STORY_FIELDS: [&str; 10] = [
     "updated",
 ];
 
-pub(crate) const CANONICAL_STORY_STATUSES: [&str; 9] = [
+pub const CANONICAL_STORY_STATUSES: [&str; 9] = [
     "draft",
     "backlog",
     "ready",
@@ -47,7 +47,7 @@ pub(crate) const REQUIRED_SPRINT_README_FIELDS: [&str; 6] = [
     "wip_limit",
 ];
 
-pub(crate) const SPRINT_STATUS_DISPLAY_ORDER: [&str; 5] =
+pub const SPRINT_STATUS_DISPLAY_ORDER: [&str; 5] =
     ["todo", "in-progress", "ready-for-qa", "done", "blocked"];
 
 pub(crate) const STATUS_PROGRESSION: [&str; 6] = [
@@ -63,7 +63,7 @@ pub(crate) const SPRINT_STATUSES: [&str; 4] = ["planned", "active", "closed", "c
 
 pub(crate) const ROSTER_HEADING: &str = "## User Stories selected for sprint";
 
-pub(crate) const CANONICAL_TASK_STATUSES: [&str; 4] = ["todo", "in-progress", "blocked", "done"];
+pub const CANONICAL_TASK_STATUSES: [&str; 4] = ["todo", "in-progress", "blocked", "done"];
 
 pub(crate) fn status_rank(status: &str) -> Option<usize> {
     STATUS_PROGRESSION.iter().position(|s| *s == status)

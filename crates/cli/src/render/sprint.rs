@@ -61,7 +61,7 @@ pub(crate) fn render_sprint_overview(
     }
 
     // Status sections expanded with story rows.
-    for status in ["todo", "in-progress", "ready-for-qa", "done"] {
+    for status in SPRINT_STATUS_DISPLAY_ORDER {
         let stories = sprint
             .stories_by_status
             .get(status)

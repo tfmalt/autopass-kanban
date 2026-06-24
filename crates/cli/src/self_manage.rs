@@ -2,13 +2,19 @@
 use crate::prelude::*;
 use crate::theme::Theme;
 use kanban_core::ColorMode;
+use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const REMOTE_INSTALL_URL: &str =
-    "https://raw.githubusercontent.com/tfmalt/autopass-kanban/main/scripts/install.sh";
+const RAW_GITHUB_HOST: &str = "https://raw.githubusercontent.com/tfmalt/autopass-kanban";
 const GITHUB_API_BASE: &str = "https://api.github.com/repos/tfmalt/autopass-kanban";
+const INSTALL_SCRIPT_PATH: &str = "scripts/install.sh";
 const UNINSTALL_SCRIPT: &str = include_str!("../../../scripts/uninstall.sh");
+
+/// Env var that explicitly opts in to the unsafe `GITHUB_LATEST_TAG` /
+/// `GITHUB_API_BASE` overrides outside test configuration. Documents the trust
+/// implications to operators who need them (e.g. air-gapped mirrors).
+const ALLOW_UNSAFE_OVERRIDE_ENV: &str = "KANBAN_ALLOW_UNSAFE_OVERRIDE";
 
 #[derive(Debug)]
 pub(crate) struct UninstallOptions {
@@ -80,38 +86,98 @@ fn run_upgrade_with_latest(
         return Ok(());
     }
 
+    let tag = expected_tag_for_version(latest_version);
+    ensure_pinned_tag(&tag)?;
+    let script_url = pinned_install_script_url(&tag);
+    let checksum_url = format!("{}.sha256", script_url);
+
+    if !options.quiet {
+        println!("{} fetching pinned install script for {tag}", theme.brand());
+    }
+    let script_bytes = download_bytes(&script_url)
+        .with_context(|| format!("download install script {script_url}"))?;
+    let checksum_bytes = download_bytes(&checksum_url)
+        .with_context(|| format!("download install script checksum {checksum_url}"))?;
+    let expected_hex = parse_checksum_asset(&checksum_bytes)
+        .context("install script checksum asset is malformed")?;
+    verify_sha256(&script_bytes, &expected_hex)
+        .context("install script checksum verification failed")?;
+
     let install_path = temp_script_path("kanban-install");
+    fs::write(&install_path, &script_bytes)
+        .with_context(|| format!("write install script {}", install_path.display()))?;
     let status = ProcessCommand::new("sh")
-        .arg("-c")
-        .arg(
-            r#"set -eu
-_url=$1
-_tmp=$2
-shift 2
-cleanup() { rm -f "$_tmp"; }
-trap cleanup EXIT HUP INT TERM
-if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$_url" -o "$_tmp"
-elif command -v wget >/dev/null 2>&1; then
-    wget -q "$_url" -O "$_tmp"
-else
-    echo "kanban-upgrade: no downloader found (curl or wget required)" >&2
-    exit 1
-fi
-sh "$_tmp" "$@"
-"#,
-        )
-        .arg("kanban-upgrade")
-        .arg(REMOTE_INSTALL_URL)
         .arg(&install_path)
         .args(upgrade_args(&options, Some(latest_version)))
-        .status()
-        .context("failed to run remote kanban installer")?;
+        .status();
+    let _ = fs::remove_file(&install_path);
+    let status = status.context("failed to run verified kanban installer")?;
 
     if !status.success() {
         bail!("kanban upgrade failed with status {status}");
     }
 
+    Ok(())
+}
+
+/// Build the install script URL pinned to a specific release tag.
+/// `tag` must already be the `v<version>` form; `main` is hard-refused by the
+/// caller.
+pub(crate) fn pinned_install_script_url(tag: &str) -> String {
+    format!("{RAW_GITHUB_HOST}/{tag}/{INSTALL_SCRIPT_PATH}")
+}
+
+/// The release tag form kanban upgrade pins to (`v<version>`).
+pub(crate) fn expected_tag_for_version(version: &str) -> String {
+    let normalized = normalize_version(version);
+    if normalized == "main" {
+        "main".to_string()
+    } else {
+        format!("v{normalized}")
+    }
+}
+
+/// Hard-refuse to fetch the install script from `main` or an empty tag.
+/// `kanban upgrade` only executes scripts pinned to a release tag (US-010).
+pub(crate) fn ensure_pinned_tag(tag: &str) -> Result<()> {
+    if tag == "main" || tag.is_empty() {
+        bail!(
+            "Refusing to fetch the install script from `{tag}`. kanban upgrade only runs scripts pinned to a release tag."
+        );
+    }
+    Ok(())
+}
+
+/// Parse a `.sha256` checksum asset. Accepts `<hex>`, `<hex>  install.sh`,
+/// and `<hex> *install.sh` forms (the formats `sha256sum` produces).
+pub(crate) fn parse_checksum_asset(bytes: &[u8]) -> Result<String> {
+    let text = std::str::from_utf8(bytes).with_context(|| "checksum asset is not valid UTF-8")?;
+    let hex = text
+        .lines()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            // `sha256sum` output is `<hex> <mode><filename>`; the hex is first.
+            trimmed.split_whitespace().next()
+        })
+        .context("checksum asset is empty")?;
+    if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        bail!("checksum asset does not contain a 64-character hex SHA-256");
+    }
+    Ok(hex.to_lowercase())
+}
+
+/// Verify the SHA-256 of `script` against the expected lowercase hex digest.
+pub(crate) fn verify_sha256(script: &[u8], expected_hex: &str) -> Result<()> {
+    let mut hasher = Sha256::new();
+    hasher.update(script);
+    let actual = hasher.finalize();
+    let actual_hex: String = actual.iter().map(|b| format!("{b:02x}")).collect();
+    if actual_hex != expected_hex.to_lowercase() {
+        bail!("install script checksum mismatch: expected {expected_hex}, computed {actual_hex}");
+    }
     Ok(())
 }
 
@@ -131,12 +197,22 @@ fn resolve_latest_version() -> Result<String> {
 
 #[cfg(not(windows))]
 fn resolve_latest_version() -> Result<String> {
-    if let Ok(tag) = std::env::var("GITHUB_LATEST_TAG") {
+    // `GITHUB_LATEST_TAG` and `GITHUB_API_BASE` can redirect or suppress the
+    // update check and are therefore unsafe in production. They are honored
+    // only under test configuration or when an operator explicitly opts in via
+    // `KANBAN_ALLOW_UNSAFE_OVERRIDE=1` (US-010 scenario 3).
+    if unsafe_override_enabled()
+        && let Ok(tag) = std::env::var("GITHUB_LATEST_TAG")
+    {
         return Ok(normalize_version(&tag));
     }
 
-    let api_base = std::env::var("GITHUB_API_BASE").unwrap_or_else(|_| GITHUB_API_BASE.to_string());
-    let body = download_stdout(&format!("{api_base}/releases/latest"))?;
+    let api_base = if unsafe_override_enabled() {
+        std::env::var("GITHUB_API_BASE").unwrap_or_else(|_| GITHUB_API_BASE.to_string())
+    } else {
+        GITHUB_API_BASE.to_string()
+    };
+    let body = download_bytes(&format!("{api_base}/releases/latest"))?;
     let json: serde_json::Value =
         serde_json::from_slice(&body).context("failed to parse latest GitHub release metadata")?;
     let tag = json
@@ -146,15 +222,20 @@ fn resolve_latest_version() -> Result<String> {
     Ok(normalize_version(tag))
 }
 
+/// Whether the unsafe upgrade-flow env overrides are honored.
+fn unsafe_override_enabled() -> bool {
+    cfg!(test) || std::env::var(ALLOW_UNSAFE_OVERRIDE_ENV).as_deref() == Ok("1")
+}
+
 #[cfg(not(windows))]
-fn download_stdout(url: &str) -> Result<Vec<u8>> {
+fn download_bytes(url: &str) -> Result<Vec<u8>> {
     if let Some(output) = run_downloader("curl", &["-fsSL", url])? {
         return Ok(output);
     }
     if let Some(output) = run_downloader("wget", &["-qO-", url])? {
         return Ok(output);
     }
-    bail!("kanban upgrade requires curl or wget to check the latest release")
+    bail!("kanban upgrade requires curl or wget to download release artifacts")
 }
 
 #[cfg(not(windows))]
@@ -381,5 +462,78 @@ mod tests {
         }
 
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn pinned_install_script_url_uses_tag_not_main() {
+        let url = pinned_install_script_url("v26.6.2401");
+        assert!(
+            url.contains("/v26.6.2401/scripts/install.sh"),
+            "expected pinned tag URL, got {url}"
+        );
+        assert!(
+            !url.contains("/main/"),
+            "pinned URL must not reference main"
+        );
+    }
+
+    #[test]
+    fn expected_tag_for_version_prefixes_v() {
+        assert_eq!(expected_tag_for_version("26.6.2401"), "v26.6.2401");
+        assert_eq!(expected_tag_for_version("v26.6.2401"), "v26.6.2401");
+        assert_eq!(expected_tag_for_version("main"), "main");
+    }
+
+    #[test]
+    fn parse_checksum_asset_accepts_sha256sum_forms() {
+        // `sha256sum install.sh > install.sh.sha256` form.
+        let a = b"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  install.sh\n";
+        assert_eq!(
+            parse_checksum_asset(a).unwrap(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        // Binary mode marker and bare hex form.
+        let b = b"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 *install.sh\n";
+        assert_eq!(
+            parse_checksum_asset(b).unwrap(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let bare = b"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        assert_eq!(
+            parse_checksum_asset(bare).unwrap(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn parse_checksum_asset_rejects_malformed_hex() {
+        assert!(parse_checksum_asset(b"tooshort").is_err());
+        assert!(parse_checksum_asset(b"zz55".repeat(16).as_slice()).is_err());
+        assert!(parse_checksum_asset(b"").is_err());
+    }
+
+    #[test]
+    fn verify_sha256_accepts_match_and_rejects_mismatch() {
+        let script = b"#!/bin/sh\necho hello\n";
+        let mut hasher = sha2::Sha256::new();
+        sha2::Digest::update(&mut hasher, script);
+        let digest = sha2::Digest::finalize(hasher);
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+
+        verify_sha256(script, &hex).expect("matching checksum verifies");
+
+        let err = verify_sha256(script, "deadbeef").unwrap_err();
+        assert!(
+            err.to_string().contains("checksum mismatch"),
+            "expected mismatch error, got {err}"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ensure_pinned_tag_refuses_main_and_empty() {
+        assert!(ensure_pinned_tag("main").is_err());
+        assert!(ensure_pinned_tag("").is_err());
+        ensure_pinned_tag("v26.6.2401").expect("real tag is accepted");
     }
 }

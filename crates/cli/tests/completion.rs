@@ -952,3 +952,275 @@ fn zsh_completion_registers_kb_alias() {
         "zsh completion should register the kb alias via compdef"
     );
 }
+#[test]
+fn completion_status_lists_match_canonical_consts() {
+    // US-018: verify the completion scripts emit exactly the canonical story
+    // and task status lists, proving the single-source-of-truth invariant.
+    let story_statuses = kanban_core::CANONICAL_STORY_STATUSES;
+    let task_statuses = kanban_core::CANONICAL_TASK_STATUSES;
+
+    let bash = kanban(&["completion", "bash"]);
+    assert!(bash.status.success());
+    let bash_stdout = String::from_utf8(bash.stdout).expect("bash stdout utf8");
+
+    let zsh = kanban(&["completion", "zsh"]);
+    assert!(zsh.status.success());
+    let zsh_stdout = String::from_utf8(zsh.stdout).expect("zsh stdout utf8");
+
+    for status in story_statuses {
+        assert!(
+            bash_stdout.contains(status),
+            "bash completion must contain story status '{status}'"
+        );
+        assert!(
+            zsh_stdout.contains(status),
+            "zsh completion must contain story status '{status}'"
+        );
+    }
+    for status in task_statuses {
+        assert!(
+            bash_stdout.contains(status),
+            "bash completion must contain task status '{status}'"
+        );
+        assert!(
+            zsh_stdout.contains(status),
+            "zsh completion must contain task status '{status}'"
+        );
+    }
+
+    // Verify no extra statuses leaked into the bash story_statuses variable.
+    let story_statuses_line = bash_stdout
+        .lines()
+        .find(|line| line.contains("story_statuses="))
+        .expect("bash completion must define story_statuses");
+    let bash_story_values: Vec<&str> = story_statuses_line
+        .split('"')
+        .nth(1)
+        .unwrap_or("")
+        .split_whitespace()
+        .collect();
+    assert_eq!(
+        bash_story_values, story_statuses,
+        "bash story_statuses must exactly match CANONICAL_STORY_STATUSES"
+    );
+}
+
+// ── US-019: Round-trip tests for completion enhancement ─────────────────────
+
+/// Assert that a zsh helper is wired into a specific argument description,
+/// not left as `_default`. If the `str::replace` that wires the helper fails
+/// silently, the argument will still say `:_default` and this test will catch
+/// the regression.
+fn assert_zsh_helper_wired(stdout: &str, helper: &str, context: &str) {
+    assert!(
+        stdout.contains(helper),
+        "zsh completion must define helper '{helper}' ({context})"
+    );
+    // The helper must be attached to at least one argument line inside the
+    // `_arguments` block, not just defined as a standalone function. Argument
+    // lines carry the helper name after a `:` separator and are quoted. We
+    // check for the helper on a line that looks like an argument spec (starts
+    // with whitespace + quote, contains the helper name).
+    let wired = stdout.lines().any(|line| {
+        line.contains(helper)
+            && line.trim_start_matches(' ').starts_with('\'')
+            && !line.contains("()")
+    });
+    assert!(
+        wired,
+        "zsh completion must wire '{helper}' into an argument ({context}); \
+         it may have silently regressed to _default"
+    );
+}
+
+#[test]
+fn zsh_completion_wires_sprint_names_to_sprint_show() {
+    let output = kanban(&["completion", "zsh"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("zsh stdout utf8");
+    assert_zsh_helper_wired(&stdout, "_kanban_sprint_names", "sprint show argument");
+}
+
+#[test]
+fn zsh_completion_wires_story_ids_to_story_commands() {
+    let output = kanban(&["completion", "zsh"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("zsh stdout utf8");
+    assert_zsh_helper_wired(
+        &stdout,
+        "_kanban_story_ids",
+        "story show/move/delete argument",
+    );
+}
+
+#[test]
+fn zsh_completion_wires_status_helpers() {
+    let output = kanban(&["completion", "zsh"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("zsh stdout utf8");
+    assert_zsh_helper_wired(
+        &stdout,
+        "_kanban_story_statuses",
+        "story move status argument",
+    );
+    assert_zsh_helper_wired(
+        &stdout,
+        "_kanban_story_update_statuses",
+        "story update status argument",
+    );
+    assert_zsh_helper_wired(
+        &stdout,
+        "_kanban_task_statuses",
+        "task add/update status argument",
+    );
+}
+
+#[test]
+fn zsh_completion_wires_epic_and_phase_and_config_helpers() {
+    let output = kanban(&["completion", "zsh"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("zsh stdout utf8");
+    assert_zsh_helper_wired(&stdout, "_kanban_epic_ids", "story update epic argument");
+    assert_zsh_helper_wired(&stdout, "_kanban_phase_ids", "phase show argument");
+    assert_zsh_helper_wired(&stdout, "_kanban_config_keys", "config get key argument");
+}
+
+/// Assert that a marker string unique to an `inject_bash_*` replacement is
+/// present in the generated bash script. If the injection silently no-ops
+/// (because the `old` pattern no longer matches the generated output), the
+/// marker will be absent and this test will catch the regression.
+fn assert_bash_marker_present(stdout: &str, marker: &str, injection_name: &str) {
+    assert!(
+        stdout.contains(marker),
+        "bash completion must contain marker '{marker}' from {injection_name}; \
+         the injection may have silently failed to apply"
+    );
+}
+
+#[test]
+fn bash_completion_story_move_status_injection_applied() {
+    let output = kanban(&["completion", "bash"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("bash stdout utf8");
+    // The story_statuses variable is only defined in the injected replacement.
+    assert_bash_marker_present(&stdout, "story_statuses=", "inject_bash_story_move_status");
+    // Dynamic story ID lookup is only in the replacement.
+    assert_bash_marker_present(
+        &stdout,
+        "kanban list-ids stories",
+        "inject_bash_story_move_status",
+    );
+}
+
+#[test]
+fn bash_completion_task_status_injections_applied() {
+    let output = kanban(&["completion", "bash"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("bash stdout utf8");
+    // task_statuses is defined in both task add and task update replacements.
+    let count = stdout.matches("task_statuses=").count();
+    assert!(
+        count >= 2,
+        "bash completion must have task_statuses= from both inject_bash_task_add_status \
+         and inject_bash_task_update_status; found {count} occurrences"
+    );
+}
+
+#[test]
+fn bash_completion_doctor_fix_target_injection_applied() {
+    let output = kanban(&["completion", "bash"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("bash stdout utf8");
+    // `local -a matches=( current )` is only in the doctor fix target replacement.
+    assert_bash_marker_present(
+        &stdout,
+        "matches=( current )",
+        "inject_bash_doctor_fix_target",
+    );
+}
+
+#[test]
+fn bash_completion_sprint_create_injection_applied() {
+    let output = kanban(&["completion", "bash"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("bash stdout utf8");
+    // The sprint create replacement adds a dynamic sprint-number suggestion.
+    assert_bash_marker_present(
+        &stdout,
+        "kanban list-ids sprints",
+        "inject_bash_sprint_create",
+    );
+}
+
+#[test]
+fn bash_completion_story_plan_injection_applied() {
+    let output = kanban(&["completion", "bash"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("bash stdout utf8");
+    // The story plan replacement adds dynamic sprint-name and story-id lookup.
+    assert_bash_marker_present(&stdout, "kanban list-ids stories", "inject_bash_story_plan");
+}
+
+#[test]
+fn bash_completion_config_injections_applied() {
+    let output = kanban(&["completion", "bash"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("bash stdout utf8");
+    // Config get/set replacements add dynamic config-key lookup.
+    assert_bash_marker_present(&stdout, "kanban config get", "inject_bash_config_get/set");
+}
+
+#[test]
+fn bash_completion_story_update_injection_applied() {
+    let output = kanban(&["completion", "bash"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("bash stdout utf8");
+    // The story update replacement adds dynamic epic/sprint/status lookup.
+    assert_bash_marker_present(&stdout, "kanban list-ids epics", "inject_bash_story_update");
+}
+
+#[test]
+fn bash_completion_phase_show_injection_applied() {
+    let output = kanban(&["completion", "bash"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("bash stdout utf8");
+    // The phase show replacement adds a `phases=` variable with the phase
+    // identifiers — this marker only exists in the injected replacement.
+    assert_bash_marker_present(&stdout, "phases=\"F1", "inject_bash_phase_show");
+}
+
+#[test]
+fn bash_completion_task_delete_injection_applied() {
+    let output = kanban(&["completion", "bash"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("bash stdout utf8");
+    // The task delete replacement adds dynamic task ID lookup.
+    assert_bash_marker_present(&stdout, "kanban list-task-ids", "inject_bash_task_delete");
+}
+
+#[test]
+fn bash_completion_no_remaining_default_case_blocks_for_enhanced_commands() {
+    // US-019 scenario 3: if a `str::replace` fails silently, the original
+    // case block stays with a bare `COMPREPLY=()` default. Verify that key
+    // enhanced commands no longer have the unmodified default pattern.
+    let output = kanban(&["completion", "bash"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("bash stdout utf8");
+
+    // The story move case block must have been replaced — the original has
+    // no `story_statuses` variable. If it's still the original, the marker
+    // `story_statuses=` would be absent (already checked above), but we also
+    // verify the replacement's dynamic lookup block is present.
+    let story_move_block = stdout
+        .find("kanban__subcmd__story__subcmd__move)")
+        .and_then(|start| {
+            stdout[start..]
+                .find(";;")
+                .map(|end| &stdout[start..start + end])
+        })
+        .expect("story move case block must exist");
+    assert!(
+        story_move_block.contains("kanban list-ids stories"),
+        "story move case block must contain dynamic story ID lookup"
+    );
+}

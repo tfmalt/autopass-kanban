@@ -1,6 +1,7 @@
 use crate::config::*;
 use crate::constants::*;
 use crate::doctor::*;
+use crate::error::KanbanError;
 use crate::markdown::*;
 use crate::model::*;
 #[allow(unused_imports)]
@@ -62,7 +63,7 @@ pub fn summarize_sprint(repo_root: impl AsRef<Path>, sprint_name: &str) -> Resul
     sprints
         .into_iter()
         .find(|sprint| sprint.sprint_name == sprint_name)
-        .ok_or_else(|| anyhow!("Sprint not found: {sprint_name}"))
+        .ok_or_else(|| KanbanError::sprint_not_found(sprint_name).into())
 }
 
 pub fn list_current_sprint_stories(
@@ -190,7 +191,7 @@ pub fn create_sprint(
         .with_context(|| format!("create sprints dir {}", config.sprints_path().display()))?;
     let content =
         render_sprint_file_template(&sprint_id, &headline, input.start_date, input.end_date);
-    fs::write(&sprint_file, content)
+    atomic_write(&sprint_file, &content)
         .with_context(|| format!("write sprint file {}", sprint_file.display()))?;
 
     Ok(CreateSprintResult {
@@ -211,7 +212,7 @@ pub fn rollover_sprint(
     let current_spec = specs
         .iter()
         .find(|spec| spec.sprint_name == sprint_name)
-        .ok_or_else(|| anyhow!("Sprint not found: {sprint_name}"))?;
+        .ok_or_else(|| KanbanError::sprint_not_found(sprint_name))?;
 
     let expected_next_number = parse_sprint_number(sprint_name).map(|value| value + 1);
     let mut next_sprint_name = specs
@@ -259,7 +260,7 @@ pub fn rollover_sprint(
                 ),
             ],
         )?;
-        fs::write(&story.file_path, moved_story_markdown).with_context(|| {
+        atomic_write(&story.file_path, &moved_story_markdown).with_context(|| {
             format!("rewrite rolled sprint story {}", story.file_path.display())
         })?;
 
@@ -276,7 +277,7 @@ pub fn rollover_sprint(
         &completed_story_ids,
         &carried_story_ids,
     );
-    fs::write(&closed_readme_path, closed_readme)
+    atomic_write(&closed_readme_path, &closed_readme)
         .with_context(|| format!("write sprint summary {}", closed_readme_path.display()))?;
     regenerate_sprint_roster(&config, sprint_name)?;
     regenerate_sprint_roster(&config, &next_sprint_name)?;
@@ -839,7 +840,7 @@ pub(crate) fn regenerate_sprint_roster(config: &KanbanConfig, sprint_name: &str)
     if updated == content {
         return Ok(false);
     }
-    fs::write(&sprint_file, updated)
+    atomic_write(&sprint_file, &updated)
         .with_context(|| format!("write sprint file {}", sprint_file.display()))?;
     Ok(true)
 }

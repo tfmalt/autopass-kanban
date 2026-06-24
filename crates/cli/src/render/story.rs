@@ -38,16 +38,7 @@ pub(crate) fn render_story_list(
 
     let story_table_width = sprint_story_table_width(layout.width);
 
-    let status_order = [
-        "draft",
-        "ready",
-        "todo",
-        "in-progress",
-        "ready-for-qa",
-        "done",
-        "blocked",
-        "dropped",
-    ];
+    let status_order = CANONICAL_STORY_STATUSES;
     let mut by_status: BTreeMap<&str, Vec<&StoryOverview>> = BTreeMap::new();
     for story in stories {
         let normalized = normalize_story_status(&story.status);
@@ -391,7 +382,7 @@ pub(crate) fn push_story_tasks_section(
     }
 
     let mut rendered_group = false;
-    for status in ["todo", "in-progress", "blocked", "done"] {
+    for status in CANONICAL_TASK_STATUSES {
         let tasks = details
             .tasks
             .iter()

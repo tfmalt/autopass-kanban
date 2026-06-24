@@ -1,5 +1,7 @@
 use crate::config::*;
 use crate::constants::*;
+use crate::error::KanbanError;
+use crate::lock::RepoLock;
 use crate::markdown::*;
 use crate::model::*;
 #[allow(unused_imports)]
@@ -28,6 +30,7 @@ pub fn move_story_to_status_with_assignee(
     assignee_override: Option<&str>,
 ) -> Result<MoveStoryResult> {
     let config = load_kanban_config(repo_root)?;
+    let _lock = RepoLock::acquire(&config.repo_root)?;
     let sprints_enabled = config.features().sprints;
     let repository = read_repository(&config.repo_root)?;
     let normalized_story_id = story_id.trim().to_ascii_uppercase();
@@ -50,7 +53,7 @@ pub fn move_story_to_status_with_assignee(
                 .unwrap_or(false)
         })
         .cloned()
-        .ok_or_else(|| anyhow!("Story not found: {normalized_story_id}"))?;
+        .ok_or_else(|| KanbanError::story_not_found(&normalized_story_id))?;
 
     let sprint_name = if sprints_enabled {
         story
@@ -58,7 +61,11 @@ pub fn move_story_to_status_with_assignee(
             .get("sprint")
             .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
             .cloned()
-            .ok_or_else(|| anyhow!("Story {normalized_story_id} is not assigned to a sprint."))?
+            .ok_or_else(|| {
+                KanbanError::invalid_argument(format!(
+                    "Story {normalized_story_id} is not assigned to a sprint."
+                ))
+            })?
     } else {
         String::new()
     };
@@ -102,12 +109,11 @@ pub fn move_story_to_status_with_assignee(
             ("work_done", work_done_update),
         ],
     )?;
-    fs::write(&story.file_path, story_markdown)
+    atomic_write(&story.file_path, &story_markdown)
         .with_context(|| format!("rewrite story {}", story.file_path.display()))?;
     if sprints_enabled {
         regenerate_sprint_roster(&load_kanban_config(&repository.repo_root)?, &sprint_name)?;
     }
-
     Ok(MoveStoryResult {
         story_id: normalized_story_id,
         sprint_name,
@@ -133,11 +139,12 @@ pub fn plan_story_into_sprint(
         );
     }
     let repo_root = config.repo_root.clone();
+    let _lock = RepoLock::acquire(&repo_root)?;
     let normalized_story_id = story_id.trim().to_ascii_uppercase();
 
     let sprint_query = sprint_name.trim();
     if !config.sprints_path().is_dir() {
-        bail!("Sprint not found: {sprint_query}");
+        return Err(KanbanError::sprint_not_found(sprint_query).into());
     }
     let sprint_names = list_sprint_names(&repo_root)?;
     let sprint_name = sprint_names
@@ -149,7 +156,7 @@ pub fn plan_story_into_sprint(
                 .find(|name| name.starts_with(&format!("{sprint_query}.")))
         })
         .cloned()
-        .ok_or_else(|| anyhow!("Sprint not found: {sprint_query}"))?;
+        .ok_or_else(|| KanbanError::sprint_not_found(sprint_query))?;
 
     let repository = read_repository(&repo_root)?;
     let story = repository
@@ -163,7 +170,7 @@ pub fn plan_story_into_sprint(
                 .unwrap_or(false)
         })
         .cloned()
-        .ok_or_else(|| anyhow!("Story not found: {normalized_story_id}"))?;
+        .ok_or_else(|| KanbanError::story_not_found(&normalized_story_id))?;
 
     let now = current_timestamp_string();
     let activated_now = current_timestamp_string();
@@ -195,7 +202,7 @@ pub fn plan_story_into_sprint(
             ("updated", Some(now)),
         ],
     )?;
-    fs::write(&story.file_path, moved_markdown)
+    atomic_write(&story.file_path, &moved_markdown)
         .with_context(|| format!("rewrite planned story {}", story.file_path.display()))?;
     regenerate_sprint_roster(&config, &sprint_name)?;
 
@@ -212,6 +219,7 @@ pub fn plan_story_into_sprint(
 
 pub fn delete_story(repo_root: impl AsRef<Path>, story_id: &str) -> Result<DeleteStoryResult> {
     let config = load_kanban_config(repo_root)?;
+    let _lock = RepoLock::acquire(&config.repo_root)?;
     let repository = read_repository(&config.repo_root)?;
     let story = find_story_for_write(&repository, story_id)?.clone();
     let story_id_value = story.frontmatter.get("id").cloned().unwrap_or_default();
@@ -256,6 +264,7 @@ pub fn add_task_to_story(
     description: &str,
 ) -> Result<TaskMutationResult> {
     let repository = read_repository(repo_root)?;
+    let _lock = RepoLock::acquire(&repository.repo_root)?;
     let story = find_story_for_write(&repository, story_id)?;
     let empty_task_file;
     let task_file = if let Some(task_file) = story.task_file.as_ref() {
@@ -304,7 +313,7 @@ pub fn add_task_to_story(
         description,
     );
     let task_file_path = task_file.file_path.clone();
-    fs::write(&task_file_path, updated)
+    atomic_write(&task_file_path, &updated)
         .with_context(|| format!("write task file {}", task_file_path.display()))?;
 
     let task = Task {
@@ -334,6 +343,7 @@ pub fn update_task_in_story(
     description: Option<&str>,
 ) -> Result<TaskMutationResult> {
     let repository = read_repository(repo_root)?;
+    let _lock = RepoLock::acquire(&repository.repo_root)?;
     let story = find_story_for_write(&repository, story_id)?;
     let task_file = story
         .task_file
@@ -355,7 +365,7 @@ pub fn update_task_in_story(
         description,
     )?;
     let task_file_path = task_file.file_path.clone();
-    fs::write(&task_file_path, updated.clone())
+    atomic_write(&task_file_path, &updated.clone())
         .with_context(|| format!("write task file {}", task_file_path.display()))?;
 
     let normalized_task_id = task_id.trim().to_ascii_uppercase();
@@ -378,6 +388,7 @@ pub fn delete_task_from_story(
     task_id: &str,
 ) -> Result<TaskMutationResult> {
     let repository = read_repository(repo_root)?;
+    let _lock = RepoLock::acquire(&repository.repo_root)?;
     let story = find_story_for_write(&repository, story_id)?;
     let task_file = story
         .task_file
@@ -407,7 +418,7 @@ pub fn delete_task_from_story(
         .unwrap_or_else(|| "~".to_string());
     let updated = render_task_file(&story_id_value, &sprint_name, &remaining);
     let task_file_path = task_file.file_path.clone();
-    fs::write(&task_file_path, updated)
+    atomic_write(&task_file_path, &updated)
         .with_context(|| format!("write task file {}", task_file_path.display()))?;
 
     Ok(TaskMutationResult {
@@ -448,6 +459,7 @@ pub fn update_story_frontmatter(
     updates: &[(String, String)],
 ) -> Result<StoryUpdateResult> {
     let config = load_kanban_config(repo_root)?;
+    let _lock = RepoLock::acquire(&config.repo_root)?;
     let repository = read_repository(&config.repo_root)?;
     let story = find_story_for_write(&repository, story_id)?;
     if updates.is_empty() {
@@ -478,7 +490,7 @@ pub fn update_story_frontmatter(
         .map(|(field, value)| (field.as_str(), Some(value.clone())))
         .collect::<Vec<_>>();
     let updated = upsert_frontmatter_markdown(&story.markdown, &update_refs)?;
-    fs::write(&story.file_path, updated)
+    atomic_write(&story.file_path, &updated)
         .with_context(|| format!("write story file {}", story.file_path.display()))?;
 
     let mut affected_sprints = BTreeSet::new();
@@ -627,7 +639,7 @@ pub(crate) fn normalize_story_status_input(status: &str) -> Result<String> {
     if CANONICAL_STORY_STATUSES.contains(&normalized.as_str()) {
         Ok(normalized)
     } else {
-        bail!("Unsupported story status: {status}");
+        Err(KanbanError::invalid_status(status).into())
     }
 }
 
@@ -662,7 +674,7 @@ pub(crate) fn normalize_task_status_for_write(status: &str) -> Result<String> {
     if CANONICAL_TASK_STATUSES.contains(&normalized.as_str()) {
         Ok(normalized)
     } else {
-        bail!("Unsupported task status: {status}");
+        Err(KanbanError::invalid_status(status).into())
     }
 }
 
@@ -681,7 +693,7 @@ pub(crate) fn find_story_for_write<'a>(
                 .map(|id| id.eq_ignore_ascii_case(&normalized_story_id))
                 .unwrap_or(false)
         })
-        .ok_or_else(|| anyhow!("Story not found: {normalized_story_id}"))
+        .ok_or_else(|| KanbanError::story_not_found(&normalized_story_id).into())
 }
 
 pub(crate) fn story_overview(repo_root: &Path, story: &Story) -> StoryOverview {
@@ -1412,5 +1424,60 @@ mod tests {
         assert_eq!(removed.task_id, "TASK-US-F1-057-001");
         assert!(!task_markdown.contains("## TASK-US-F1-057-001 - First task"));
         assert!(task_markdown.contains("## TASK-US-F1-057-002 - Second task"));
+    }
+
+    #[test]
+    fn concurrent_story_moves_serialize_without_lost_updates() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let temp_root = Arc::new(tempdir().unwrap());
+        init_temp_repo(temp_root.path());
+        write_git_config(temp_root.path(), "Test User", "test@example.com");
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "planned",
+        );
+        // Two distinct stories so both moves can each record a `work_started`
+        // timestamp; the lock still serializes them at the repo level.
+        let story_a = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-080-concurrent-a.md",
+            "id: US-F1-080\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+        let story_b = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-081-concurrent-b.md",
+            "id: US-F1-081\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let root1 = temp_root.clone();
+        let root2 = temp_root.clone();
+        let h1 = thread::spawn(move || {
+            move_story_to_status(root1.path(), "US-F1-080", "in-progress").unwrap()
+        });
+        let h2 = thread::spawn(move || {
+            move_story_to_status(root2.path(), "US-F1-081", "in-progress").unwrap()
+        });
+        let r1 = h1.join().unwrap();
+        let r2 = h2.join().unwrap();
+
+        // Both updates land (no lost update): each story reflects its move.
+        assert_eq!(r1.to_status, "in-progress");
+        assert_eq!(r2.to_status, "in-progress");
+        let a = fs::read_to_string(&story_a).unwrap();
+        let b = fs::read_to_string(&story_b).unwrap();
+        assert!(a.contains("status: in-progress"));
+        assert!(b.contains("status: in-progress"));
+        // The shared sprint roster must be consistent (regenerated under lock).
+        let roster =
+            fs::read_to_string(temp_root.path().join("delivery/sprints/S001.foundation.md"))
+                .unwrap();
+        assert!(roster.contains("US-F1-080"));
+        assert!(roster.contains("US-F1-081"));
     }
 }

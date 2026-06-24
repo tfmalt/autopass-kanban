@@ -7,10 +7,9 @@ version.workspace = true
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+fs4.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-walkdir.workspace = true
-
-[dev-dependencies]
 tempfile.workspace = true
+walkdir.workspace = true

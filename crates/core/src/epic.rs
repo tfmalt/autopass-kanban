@@ -1,4 +1,6 @@
 use crate::config::*;
+use crate::error::KanbanError;
+use crate::lock::RepoLock;
 use crate::markdown::*;
 use crate::model::*;
 #[allow(unused_imports)]
@@ -49,6 +51,7 @@ pub fn update_epic_frontmatter(
     updates: &[(String, String)],
 ) -> Result<EpicUpdateResult> {
     let config = load_kanban_config(repo_root)?;
+    let _lock = RepoLock::acquire(&config.repo_root)?;
     let normalized_epic_id = epic_id.trim().to_ascii_uppercase();
     if updates.is_empty() {
         bail!("No epic frontmatter fields were provided.");
@@ -61,13 +64,13 @@ pub fn update_epic_frontmatter(
     }
 
     let epic = find_epic_source(&config.repo_root, &normalized_epic_id)?
-        .ok_or_else(|| anyhow!("Epic not found: {normalized_epic_id}"))?;
+        .ok_or_else(|| KanbanError::epic_not_found(&normalized_epic_id))?;
     let update_refs = updates
         .iter()
         .map(|(field, value)| (field.as_str(), Some(value.clone())))
         .collect::<Vec<_>>();
     let updated = upsert_frontmatter_markdown(&epic.markdown, &update_refs)?;
-    fs::write(&epic.file_path, updated)
+    atomic_write(&epic.file_path, &updated)
         .with_context(|| format!("write epic file {}", epic.file_path.display()))?;
 
     Ok(EpicUpdateResult {

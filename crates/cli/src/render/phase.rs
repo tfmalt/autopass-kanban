@@ -228,16 +228,7 @@ pub(crate) fn phase_stories_by_status<'a>(
 }
 
 pub(crate) fn phase_status_display_order() -> &'static [&'static str] {
-    &[
-        "draft",
-        "ready",
-        "todo",
-        "in-progress",
-        "ready-for-qa",
-        "blocked",
-        "done",
-        "dropped",
-    ]
+    &CANONICAL_STORY_STATUSES
 }
 
 pub(crate) fn phase_story_points_for_statuses(phase: &PhaseOverview, statuses: &[&str]) -> usize {

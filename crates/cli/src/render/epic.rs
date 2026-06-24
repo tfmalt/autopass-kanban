@@ -81,7 +81,7 @@ pub(crate) fn render_epic_details(
         push_terminal_markdown_indented(&mut output, theme, layout.width, full_body, 0);
     }
 
-    for status in ["todo", "in-progress", "ready-for-qa", "done", "blocked"] {
+    for status in SPRINT_STATUS_DISPLAY_ORDER {
         let stories = details
             .stories_by_status
             .get(status)

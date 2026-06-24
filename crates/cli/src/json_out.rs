@@ -2,7 +2,7 @@
 use crate::prelude::*;
 #[allow(unused_imports)]
 use crate::{
-    cli::*, completion::*, doctor_cli::*, layout::*, prompt::*, render::*, theme::*, web::*,
+    cli::*, completion::*, doctor_cli::*, layout::*, ops::*, prompt::*, render::*, theme::*, web::*,
 };
 #[allow(unused_imports)]
 use kanban_core::*;
@@ -387,55 +387,19 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
                 StoryCommand::List {
                     all,
                     next,
+                    current,
                     sprint,
                     repo_root,
-                    ..
                 },
         } => {
-            // Resolve scope label and story list; current/next return (name, stories) tuples.
-            let list_result: Result<(String, Vec<StoryOverview>), _> = if *all {
-                list_all_stories(repo_root).map(|stories| ("all".to_string(), stories))
-            } else {
-                let config = match load_kanban_config(repo_root) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        return print_envelope(&JsonEnvelope::<StoryListDto>::error(
-                            "story.list",
-                            KanbanErrorBody::new(KanbanErrorCode::NotInitialized, e.to_string()),
-                        ));
-                    }
-                };
-                let sprints_enabled = config.features().sprints;
-                if *next {
-                    if !sprints_enabled {
-                        let err = feature_disabled_error("sprints", &config.repo_root);
-                        return print_envelope(&JsonEnvelope::<StoryListDto>::error(
-                            "story.list",
-                            KanbanErrorBody::from_anyhow(&err),
-                        ));
-                    }
-                    list_next_sprint_stories(&config.repo_root)
-                        .map(|(_name, stories)| ("next".to_string(), stories))
-                } else if let Some(sprint_id) = sprint {
-                    if !sprints_enabled {
-                        let err = feature_disabled_error("sprints", &config.repo_root);
-                        return print_envelope(&JsonEnvelope::<StoryListDto>::error(
-                            "story.list",
-                            KanbanErrorBody::from_anyhow(&err),
-                        ));
-                    }
-                    list_stories_in_sprint(&config.repo_root, sprint_id)
-                        .map(|stories| (format!("sprint:{sprint_id}"), stories))
-                } else if !sprints_enabled {
-                    list_all_stories(&config.repo_root).map(|stories| ("all".to_string(), stories))
-                } else {
-                    list_current_sprint_stories(&config.repo_root)
-                        .map(|(_name, stories)| ("current".to_string(), stories))
-                }
-            };
-            match list_result {
+            // US-020: shared scope resolution — both human and JSON paths call
+            // resolve_story_list_scope so behavior cannot drift.
+            match resolve_story_list_scope(repo_root, *all, *next, *current, sprint.as_deref()) {
                 Ok((scope, stories)) => {
-                    let env = JsonEnvelope::ok("story.list", StoryListDto::new(scope, &stories));
+                    let env = JsonEnvelope::ok(
+                        "story.list",
+                        StoryListDto::new(scope.json_label(), &stories),
+                    );
                     print_envelope(&env)
                 }
                 Err(e) => {
@@ -922,33 +886,16 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
                     ));
                 }
             };
-            let build_input = || -> anyhow::Result<CreateSprintInput> {
-                let number_val = match number {
-                    Some(v) => *v,
-                    None => suggested_next_sprint_number(&root)?,
-                };
-                let repo_suggestion = suggested_next_sprint_dates(&root)?;
-                let today = chrono::Local::now().date_naive();
-                let start_date = match start {
-                    Some(v) => NaiveDate::parse_from_str(v.trim(), "%Y-%m-%d")
-                        .map_err(|_| anyhow::anyhow!("--start must be a date as YYYY-MM-DD."))?,
-                    None => repo_suggestion.map(|(s, _)| s).unwrap_or(today),
-                };
-                let end_date = match end {
-                    Some(v) => NaiveDate::parse_from_str(v.trim(), "%Y-%m-%d")
-                        .map_err(|_| anyhow::anyhow!("--end must be a date as YYYY-MM-DD."))?,
-                    None => repo_suggestion
-                        .map(|(_, e)| e)
-                        .unwrap_or_else(|| suggested_sprint_dates(start_date).1),
-                };
-                Ok(CreateSprintInput {
-                    number: number_val,
-                    start_date,
-                    end_date,
-                    headline: headline_val.clone(),
-                })
-            };
-            match build_input().and_then(|input| create_sprint(&root, &input)) {
+            // US-020: shared input builder — both human and JSON paths call
+            // build_create_sprint_input_from_flags so behavior cannot drift.
+            let input_result = build_create_sprint_input_from_flags(
+                &root,
+                *number,
+                headline_val,
+                start.as_deref(),
+                end.as_deref(),
+            );
+            match input_result.and_then(|input| create_sprint(&root, &input)) {
                 Ok(result) => print_envelope(&JsonEnvelope::ok(
                     "sprint.create",
                     SprintCreateDto::from_result(&result, &root),

@@ -20,6 +20,13 @@ These instructions apply to all files in this repository.
 - Use full local ISO 8601 timestamps with numeric timezone offset when writing backlog lifecycle fields.
 - Avoid adding new CLI command names, status names, or file layout conventions without checking how existing commands and the configured backlog directory use those names in practice.
 
+## Concurrency and write safety
+
+- The markdown backlog is a shared source of truth that can be mutated by the CLI and the local web server at the same time. Every public mutation in `crates/core` acquires an advisory, per-repo exclusive lock (`.kanban/.lock`, 5 s blocking timeout) for the duration of its read-modify-write sequence. See `delivery/decisions/ADR-001`.
+- The lock is advisory: processes that bypass the `RepoLock` helper (editors, git, scripts) are not stopped. When adding a new mutation entry point in `crates/core`, wrap it with `RepoLock::acquire(&config.repo_root)?` before the first write.
+- Web-server mutation handlers additionally serialize through `AppState::write_lock` (`tokio::sync::Mutex`).
+- Writers must keep user-derived paths inside the canonicalized backlog root using `ensure_path_inside` (see US-008). `task_file` frontmatter is validated by `validate_task_file_frontmatter_value` and bounded on read and write.
+
 ## Versioning
 
 - The kanban workspace version is defined in `Cargo.toml` under `[workspace.package]`.

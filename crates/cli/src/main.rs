@@ -3,6 +3,7 @@ mod completion;
 mod doctor_cli;
 mod json_out;
 mod layout;
+mod ops;
 mod prompt;
 mod render;
 mod self_manage;
@@ -43,7 +44,7 @@ pub(crate) mod prelude {
 use crate::prelude::*;
 #[allow(unused_imports)]
 use crate::{
-    cli::*, completion::*, doctor_cli::*, json_out::*, layout::*, prompt::*, render::*,
+    cli::*, completion::*, doctor_cli::*, json_out::*, layout::*, ops::*, prompt::*, render::*,
     self_manage::*, theme::*, web::*,
 };
 use clap::{CommandFactory, Parser};
@@ -312,34 +313,13 @@ fn run() -> Result<()> {
                             "--headline is required when creating a sprint non-interactively."
                         )
                     })?;
-                    let number = match number {
-                        Some(value) => value,
-                        None => suggested_sprint_defaults(&repo_root)?.0,
-                    };
-                    let repo_suggestion = suggested_sprint_defaults(&repo_root)?.1;
-                    let today = chrono::Local::now().date_naive();
-                    let start_date = match start {
-                        Some(value) => NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
-                            .map_err(|_| {
-                                anyhow::anyhow!("--start must be a date as YYYY-MM-DD.")
-                            })?,
-                        None => repo_suggestion
-                            .map(|(start_date, _)| start_date)
-                            .unwrap_or(today),
-                    };
-                    let end_date = match end {
-                        Some(value) => NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
-                            .map_err(|_| anyhow::anyhow!("--end must be a date as YYYY-MM-DD."))?,
-                        None => repo_suggestion
-                            .map(|(_, end_date)| end_date)
-                            .unwrap_or_else(|| suggested_sprint_dates(start_date).1),
-                    };
-                    CreateSprintInput {
+                    build_create_sprint_input_from_flags(
+                        &repo_root,
                         number,
-                        start_date,
-                        end_date,
-                        headline,
-                    }
+                        &headline,
+                        start.as_deref(),
+                        end.as_deref(),
+                    )?
                 } else {
                     prompt_create_sprint(&repo_root, None, None)?
                 };
@@ -473,38 +453,9 @@ fn run() -> Result<()> {
                 sprint,
                 repo_root,
             } => {
-                let (scope, stories) = if all {
-                    ("all stories".to_string(), list_all_stories(repo_root)?)
-                } else {
-                    let config = kanban_core::load_kanban_config(&repo_root)?;
-                    let sprints_enabled = config.features().sprints;
-                    if next {
-                        if !sprints_enabled {
-                            ensure_sprints_enabled(&repo_root)?;
-                        }
-                        let (sprint_name, stories) = list_next_sprint_stories(repo_root)?;
-                        (format!("next sprint ({sprint_name})"), stories)
-                    } else if let Some(sprint_name) = sprint {
-                        if !sprints_enabled {
-                            ensure_sprints_enabled(&repo_root)?;
-                        }
-                        (
-                            format!("sprint {sprint_name}"),
-                            list_stories_in_sprint(repo_root, &sprint_name)?,
-                        )
-                    } else if !sprints_enabled {
-                        ("all stories".to_string(), list_all_stories(repo_root)?)
-                    } else {
-                        let (sprint_name, stories) = list_current_sprint_stories(repo_root)?;
-                        let label = if current {
-                            format!("current sprint ({sprint_name})")
-                        } else {
-                            format!("active sprint ({sprint_name})")
-                        };
-                        (label, stories)
-                    }
-                };
-                print_story_list(&theme, &scope, &stories);
+                let (scope, stories) =
+                    resolve_story_list_scope(&repo_root, all, next, current, sprint.as_deref())?;
+                print_story_list(&theme, &scope.human_label(), &stories);
             }
             StoryCommand::Move {
                 id,
@@ -846,8 +797,16 @@ fn run() -> Result<()> {
                 let findings = doctor_repository(repo_root)?;
                 print_doctor_findings(&theme, &findings);
             }
-            DoctorCommand::Fix { target, repo_root } => {
-                run_doctor_fix_wizard(&theme, &repo_root, target.as_deref())?;
+            DoctorCommand::Fix {
+                target,
+                non_interactive,
+                repo_root,
+            } => {
+                if non_interactive {
+                    run_doctor_fix_non_interactive(&theme, &repo_root, target.as_deref())?;
+                } else {
+                    run_doctor_fix_wizard(&theme, &repo_root, target.as_deref())?;
+                }
             }
         },
         Command::Report { command } => match command {

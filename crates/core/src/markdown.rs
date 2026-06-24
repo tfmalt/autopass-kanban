@@ -2,6 +2,7 @@ use crate::constants::*;
 use crate::model::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::repository::atomic_write;
 use crate::util::*;
 
 pub fn parse_frontmatter(markdown: &str) -> ParsedFrontmatter {
@@ -256,7 +257,7 @@ pub(crate) fn upsert_story_frontmatter_file(
     let markdown = fs::read_to_string(file_path)
         .with_context(|| format!("read story file {}", file_path.display()))?;
     let updated = upsert_frontmatter_markdown(&markdown, updates)?;
-    fs::write(file_path, updated)
+    atomic_write(file_path, &updated)
         .with_context(|| format!("write story file {}", file_path.display()))?;
     Ok(())
 }

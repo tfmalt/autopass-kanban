@@ -6,6 +6,7 @@ use std::process::Command;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::repository::atomic_write;
 use crate::util::git_config_value;
 
 const CONFIG_DIR_NAME: &str = ".kanban";
@@ -569,7 +570,8 @@ where
     T: Serialize,
 {
     let json = serde_json::to_string_pretty(value).context("serialize config json")?;
-    fs::write(file_path, format!("{json}\n"))
+    let payload = format!("{json}\n");
+    atomic_write(file_path, &payload)
         .with_context(|| format!("write config file {}", file_path.display()))
 }
 

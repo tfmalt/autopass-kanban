@@ -1,6 +1,7 @@
 use crate::config::*;
 use crate::constants::*;
 use crate::epic::*;
+use crate::lock::RepoLock;
 use crate::markdown::*;
 use crate::model::*;
 #[allow(unused_imports)]
@@ -18,7 +19,7 @@ fn upsert_epic_frontmatter_file(
     let markdown = fs::read_to_string(file_path)
         .with_context(|| format!("read epic file {}", file_path.display()))?;
     let updated = upsert_frontmatter_markdown(&markdown, updates)?;
-    fs::write(file_path, updated)
+    atomic_write(file_path, &updated)
         .with_context(|| format!("write epic file {}", file_path.display()))?;
     Ok(())
 }
@@ -86,10 +87,15 @@ pub fn apply_doctor_fix(
     input: &DoctorFixInput,
 ) -> Result<DoctorFixResult> {
     let repo_root = resolve_repo_root(repo_root)?;
+    let _lock = RepoLock::acquire(&repo_root)?;
     let Some(file_path) = &issue.file_path else {
         bail!("Doctor issue cannot be fixed automatically: {}", issue.rule);
     };
     let absolute_path = repo_root.join(file_path);
+    // Containment check: refuse to write to any path that resolves outside the
+    // canonicalized backlog root (US-008 scenario 2). Bails before any write so
+    // no out-of-tree file is created or modified.
+    let absolute_path = ensure_path_inside(&repo_root, &absolute_path)?;
 
     match issue.rule.as_str() {
         "missing-field:assignee" => {
@@ -173,12 +179,15 @@ pub fn apply_doctor_fix(
                 .cloned()
                 .filter(|value| !value.trim().is_empty())
                 .ok_or_else(|| anyhow!("Sprint story is missing task_file frontmatter."))?;
+            validate_task_file_frontmatter_value(&task_file_name)?;
             let task_file_path = absolute_path.parent().unwrap().join(&task_file_name);
+            let backlog_root = load_kanban_config(&repo_root)?.backlog_path();
+            let task_file_path = ensure_path_inside(&backlog_root, &task_file_path)?;
             let story_id = story.frontmatter.get("id").cloned().unwrap_or_default();
             let sprint_name = story.frontmatter.get("sprint").cloned().unwrap_or_default();
-            fs::write(
+            atomic_write(
                 &task_file_path,
-                render_empty_task_file(&story_id, &sprint_name),
+                &render_empty_task_file(&story_id, &sprint_name),
             )
             .with_context(|| format!("write task file {}", task_file_path.display()))?;
             Ok(DoctorFixResult {
@@ -210,9 +219,9 @@ pub fn apply_doctor_fix(
                 .cloned()
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| "~".to_string());
-            fs::write(
+            atomic_write(
                 &task_file.file_path,
-                render_task_file(&story_id, &sprint_name, &task_file.tasks),
+                &render_task_file(&story_id, &sprint_name, &task_file.tasks),
             )
             .with_context(|| format!("write task file {}", task_file.file_path.display()))?;
             Ok(DoctorFixResult {
@@ -455,11 +464,7 @@ pub(crate) fn collect_doctor_issues_at_date(
                 });
             }
 
-            if matches!(
-                status,
-                "todo" | "in-progress" | "ready-for-qa" | "done" | "blocked"
-            ) && sprint_name.is_none()
-            {
+            if SPRINT_STATUS_DISPLAY_ORDER.contains(&status) && sprint_name.is_none() {
                 findings.push(DoctorIssue {
                     severity: "error".to_string(),
                     scope: story.relative_path.display().to_string(),
@@ -1456,5 +1461,37 @@ mod tests {
         assert!(updated.starts_with("# Tasks for US-F1-057\n\nParent User Story: US-F1-057\nSprint: ~\n\n## TASK-US-F1-057-001 - First task"));
         assert!(!updated.contains("\n---\n"));
         assert!(updated.contains("Status: todo"));
+    }
+
+    #[test]
+    fn apply_doctor_fix_refuses_to_write_outside_backlog_root() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_git_config(temp_root.path(), "Test User", "test@example.com");
+
+        // Fabricate a doctor issue whose file_path resolves outside the repo
+        // root via `..`. The fix must bail before any write occurs.
+        let outside = temp_root.path().join("outside-target.md");
+        let issue = DoctorIssue {
+            severity: "error".to_string(),
+            scope: "outside".to_string(),
+            file_path: Some(PathBuf::from("../../outside-target.md")),
+            story_id: None,
+            sprint_name: None,
+            rule: "missing-field:assignee".to_string(),
+            message: "Missing assignee.".to_string(),
+            suggestion: String::new(),
+            fix_preview: None,
+            fix_kind: DoctorFixKind::Guided,
+            prompt: DoctorPrompt::None,
+        };
+
+        let err =
+            apply_doctor_fix(temp_root.path(), &issue, &DoctorFixInput::default()).unwrap_err();
+        assert!(err.to_string().contains("outside the backlog root"));
+        assert!(
+            !outside.exists(),
+            "no file outside the backlog root must be created"
+        );
     }
 }

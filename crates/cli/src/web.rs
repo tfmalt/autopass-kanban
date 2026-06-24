@@ -401,7 +401,7 @@ pub(crate) fn read_web_process_state(paths: &WebRuntimePaths) -> Result<WebProce
         return Ok(WebProcessState::Stale(None));
     }
 
-    if process_exists(pid) {
+    if process_exists(pid) && process_is_kanban_web(pid) {
         Ok(WebProcessState::Running(pid))
     } else {
         Ok(WebProcessState::Stale(Some(pid)))
@@ -427,6 +427,27 @@ fn process_is_zombie(pid: u32) -> bool {
             .split_whitespace()
             .next()
             .is_some_and(|stat| stat.starts_with('Z')),
+        _ => false,
+    }
+}
+
+/// Verify that the process at `pid` is a `kanban` process before signalling it
+/// (US-015). On Unix, `ps -o comm= -p {pid}` returns the command name; we
+/// require it to contain `kanban` so a recycled PID owned by an unrelated
+/// process is not signalled.
+#[cfg(unix)]
+fn process_is_kanban_web(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let output = ProcessCommand::new("ps")
+        .args(["-o", "comm=", "-p", &pid.to_string()])
+        .output();
+    match output {
+        Ok(output) if output.status.success() => {
+            let comm = String::from_utf8_lossy(&output.stdout);
+            comm.trim().contains("kanban")
+        }
         _ => false,
     }
 }
@@ -461,6 +482,41 @@ pub(crate) fn process_exists(pid: u32) -> bool {
 
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn process_exists(_pid: u32) -> bool {
+    false
+}
+
+/// Verify that the process at `pid` is a `kanban` process before signalling it
+/// (US-015). On Windows, query the full process image name and require the
+/// executable stem to be `kanban`.
+#[cfg(windows)]
+fn process_is_kanban_web(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    };
+
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return false;
+    }
+    let mut buf = [0u16; 1024];
+    let mut len = buf.len() as u32;
+    let ok = unsafe { QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut len) != 0 };
+    unsafe {
+        let _ = windows_sys::Win32::Foundation::CloseHandle(handle);
+    }
+    if !ok {
+        return false;
+    }
+    let path = String::from_utf16_lossy(&buf[..len as usize]);
+    let exe_name = path.rsplit(['\\', '/']).next().unwrap_or(&path);
+    exe_name.to_ascii_lowercase().starts_with("kanban")
+}
+
+#[cfg(not(any(unix, windows)))]
+fn process_is_kanban_web(_pid: u32) -> bool {
     false
 }
 
@@ -1052,6 +1108,81 @@ mod tests {
         assert_eq!(
             child_process_path(Path::new(r"\\?\UNC\server\share\repo")),
             PathBuf::from(r"\\server\share\repo")
+        );
+    }
+
+    #[test]
+    fn process_is_kanban_web_rejects_pid_zero() {
+        assert!(!process_is_kanban_web(0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_is_kanban_web_rejects_non_kanban_process() {
+        // Spawn a `sleep` process whose command name is definitely not
+        // "kanban", so we can assert the identity check rejects it (US-015
+        // scenario 2: recycled PID).
+        let mut child = ProcessCommand::new("sleep").arg("2").spawn().unwrap();
+        let pid = child.id();
+        assert!(
+            !process_is_kanban_web(pid),
+            "sleep process must not be identified as kanban web"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_web_process_state_treats_recycled_pid_as_stale() {
+        // Write a PID file pointing at a non-kanban process and verify
+        // read_web_process_state returns Stale (not Running) so stop_web
+        // removes the file without signalling (US-015 scenario 2).
+        let temp = tempfile::tempdir().unwrap();
+        let run_dir = temp.path().join(".kanban/run");
+        fs::create_dir_all(&run_dir).unwrap();
+        let paths = WebRuntimePaths {
+            run_dir: run_dir.clone(),
+            pid_file: run_dir.join("web.pid"),
+            port_file: run_dir.join("web.port"),
+            log_file: run_dir.join("web.log"),
+        };
+        let mut child = ProcessCommand::new("sleep").arg("2").spawn().unwrap();
+        fs::write(&paths.pid_file, format!("{}\n", child.id())).unwrap();
+
+        let state = read_web_process_state(&paths).unwrap();
+        assert!(
+            matches!(state, WebProcessState::Stale(Some(_))),
+            "recycled PID must be Stale, not Running, got {state:?}"
+        );
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_web_process_state_treats_dead_pid_as_stale() {
+        // Write a PID file pointing at a PID that has already exited and
+        // verify read_web_process_state returns Stale (US-015 scenario 3).
+        let temp = tempfile::tempdir().unwrap();
+        let run_dir = temp.path().join(".kanban/run");
+        fs::create_dir_all(&run_dir).unwrap();
+        let paths = WebRuntimePaths {
+            run_dir: run_dir.clone(),
+            pid_file: run_dir.join("web.pid"),
+            port_file: run_dir.join("web.port"),
+            log_file: run_dir.join("web.log"),
+        };
+        let mut child = ProcessCommand::new("true").spawn().unwrap();
+        let pid = child.id();
+        let _ = child.wait();
+        fs::write(&paths.pid_file, format!("{pid}\n")).unwrap();
+
+        let state = read_web_process_state(&paths).unwrap();
+        assert!(
+            matches!(state, WebProcessState::Stale(Some(_))),
+            "dead PID must be Stale, got {state:?}"
         );
     }
 }

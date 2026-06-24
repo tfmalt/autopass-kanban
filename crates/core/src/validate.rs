@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::config::*;
 use crate::constants::*;
 use crate::markdown::*;
@@ -19,10 +21,20 @@ fn field_required_when_features(field_name: &str, features: &FeaturesConfig) -> 
 }
 
 pub fn validate_story(story: &Story, features: &FeaturesConfig) -> Vec<ValidationIssue> {
-    let config = story
-        .file_path
-        .parent()
-        .and_then(|parent| load_kanban_config(parent).ok());
+    validate_story_with_config(story, features, None)
+}
+
+/// Validate a story using an already-loaded [`KanbanConfig`] (US-026).
+///
+/// Unlike [`validate_story`], this does not call `load_kanban_config(parent)`
+/// to rediscover the config — the caller passes it in. When `config` is
+/// `None`, default story-point accepted values are used (for backward
+/// compatibility with tests that don't construct a full config).
+pub fn validate_story_with_config(
+    story: &Story,
+    features: &FeaturesConfig,
+    config: Option<&KanbanConfig>,
+) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
     for field_name in REQUIRED_STORY_FIELDS {
@@ -64,8 +76,7 @@ pub fn validate_story(story: &Story, features: &FeaturesConfig) -> Vec<Validatio
             .map(String::as_str)
             .unwrap_or_default();
         let accepted_values = config
-            .as_ref()
-            .map(|config| config.story_points.accepted_values())
+            .map(|c| c.story_points.accepted_values())
             .unwrap_or_else(|| {
                 ["2", "3", "5", "8", "13", "XS", "S", "M", "L", "XL"]
                     .into_iter()
@@ -91,6 +102,21 @@ pub fn validate_story(story: &Story, features: &FeaturesConfig) -> Vec<Validatio
         &story.frontmatter_keys,
         &mut issues,
     );
+
+    if story.frontmatter_keys.contains("task_file")
+        && let Some(value) = story.frontmatter.get("task_file")
+        && !value.trim().is_empty()
+        && validate_task_file_frontmatter_value(value).is_err()
+    {
+        add_issue(
+            story,
+            &mut issues,
+            "invalid-task-file-path",
+            format!(
+                "task_file must be a sibling file name without `..`, path separators, or absolute paths; got {value:?}."
+            ),
+        );
+    }
 
     validate_timestamp_field(story, &mut issues, "created", false, true);
     validate_timestamp_field(story, &mut issues, "updated", false, true);
@@ -159,6 +185,29 @@ pub fn validate_story(story: &Story, features: &FeaturesConfig) -> Vec<Validatio
         );
     }
 
+    // US-026: detect story files whose canonicalized path is outside the
+    // backlog root (defense-in-depth against symlink planting or moved files).
+    if let Some(config) = config {
+        let backlog_root = config.backlog_path();
+        let canonical_backlog = backlog_root
+            .canonicalize()
+            .unwrap_or_else(|_| backlog_root.clone());
+        if let Ok(canonical_story) = story.file_path.canonicalize()
+            && !canonical_story.starts_with(&canonical_backlog)
+        {
+            add_issue(
+                story,
+                &mut issues,
+                "out-of-tree-story-path",
+                format!(
+                    "Story file canonical path {} is outside the backlog root {}.",
+                    canonical_story.display(),
+                    canonical_backlog.display()
+                ),
+            );
+        }
+    }
+
     issues
 }
 
@@ -180,7 +229,7 @@ pub fn validate_repository(repo_root: impl AsRef<Path>) -> Result<ValidationRepo
     }
 
     for story in &repository.stories {
-        issues.extend(validate_story(story, &features));
+        issues.extend(validate_story_with_config(story, &features, Some(&config)));
         if let Some(task_file) = &story.task_file
             && !task_file.exists
             && story.frontmatter.get("status").map(String::as_str) != Some("todo")
@@ -194,6 +243,40 @@ pub fn validate_repository(repo_root: impl AsRef<Path>) -> Result<ValidationRepo
                     task_file.relative_path.display()
                 ),
             );
+        }
+    }
+
+    // US-026: detect duplicate story IDs across the backlog tree.
+    let mut ids_by_value: BTreeMap<&str, Vec<&Story>> = BTreeMap::new();
+    for story in &repository.stories {
+        let id = story
+            .frontmatter
+            .get("id")
+            .map(String::as_str)
+            .unwrap_or("");
+        if !id.is_empty() {
+            ids_by_value.entry(id).or_default().push(story);
+        }
+    }
+    for (id, stories) in &ids_by_value {
+        if stories.len() > 1 {
+            for story in stories {
+                add_issue(
+                    story,
+                    &mut issues,
+                    "duplicate-story-id",
+                    format!(
+                        "Story ID \"{id}\" appears in {} files (also at {}).",
+                        stories.len(),
+                        stories
+                            .iter()
+                            .filter(|s| s.relative_path != story.relative_path)
+                            .map(|s| s.relative_path.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                );
+            }
         }
     }
 
@@ -851,5 +934,210 @@ mod tests {
             !rules.contains(&"missing-field:epic"),
             "epic must not be required when the epics feature is off"
         );
+    }
+
+    #[test]
+    fn validate_story_rejects_unsafe_task_file_traversal() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-070-traversal.md");
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-070\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: ~\nassignee: TBD\nstory_points: 3\ntask_file: ../../../etc/passwd\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(&story_path, temp_root.path()).unwrap();
+        let issues = validate_story(&story, &FeaturesConfig::default());
+        let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+
+        assert!(
+            rules.contains(&"invalid-task-file-path"),
+            "expected invalid-task-file-path for traversal task_file"
+        );
+    }
+
+    #[test]
+    fn validate_story_rejects_absolute_and_separator_task_file_values() {
+        for value in ["/etc/passwd", "subdir/evil.tasks.md", "C:\\evil.md"] {
+            let temp_root = tempdir().unwrap();
+            init_temp_repo(temp_root.path());
+            let story_path = temp_root
+                .path()
+                .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-071-task-file.md");
+
+            fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+            fs::write(
+                &story_path,
+                format!(
+                    "---\nid: US-F1-071\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: ~\nassignee: TBD\nstory_points: 3\ntask_file: {value}\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n"
+                ),
+            )
+            .unwrap();
+
+            let story = read_story_file(&story_path, temp_root.path()).unwrap();
+            let issues = validate_story(&story, &FeaturesConfig::default());
+            let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+            assert!(
+                rules.contains(&"invalid-task-file-path"),
+                "expected invalid-task-file-path for task_file={value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn read_story_file_does_not_read_outside_backlog_for_unsafe_task_file() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let outside = temp_root.path().join("outside-target.txt");
+        fs::write(&outside, "SECRET").unwrap();
+
+        let story_path = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-072-escape.md");
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        // task_file points outside the temp root via `..`. The file exists on
+        // disk, but the read path must refuse to canonicalize-and-read it.
+        let relative_escape = pathdiff_from(story_path.parent().unwrap(), &outside);
+        fs::write(
+            &story_path,
+            format!(
+                "---\nid: US-F1-072\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: ~\nassignee: TBD\nstory_points: 3\ntask_file: {relative_escape}\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n"
+            ),
+        )
+        .unwrap();
+
+        let story = read_story_file(&story_path, temp_root.path()).unwrap();
+        let task_file = story.task_file.expect("task file metadata is present");
+        assert!(
+            !task_file.exists,
+            "unsafe task_file must not be read outside the backlog root"
+        );
+        assert!(
+            task_file.tasks.is_empty(),
+            "no task contents must leak from outside the backlog root"
+        );
+    }
+
+    #[test]
+    fn read_story_file_does_not_follow_symlinked_task_file_escape() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let outside_dir = temp_root.path().join("outside");
+        fs::create_dir_all(&outside_dir).unwrap();
+        let outside_target = outside_dir.join("evil.tasks.md");
+        fs::write(&outside_target, "# Tasks for SECRET\n").unwrap();
+
+        let story_dir = temp_root
+            .path()
+            .join("delivery/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling");
+        fs::create_dir_all(&story_dir).unwrap();
+        let link_path = story_dir.join("linked.tasks.md");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside_target, &link_path).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            // Symlink escape is Unix-specific; skip the assertion elsewhere.
+            fs::write(&link_path, "placeholder").unwrap();
+        }
+
+        let story_path = story_dir.join("US-F1-073-symlink.md");
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-073\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: ~\nassignee: TBD\nstory_points: 3\ntask_file: linked.tasks.md\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(&story_path, temp_root.path()).unwrap();
+        let task_file = story.task_file.expect("task file metadata is present");
+        #[cfg(unix)]
+        {
+            assert!(
+                !task_file.exists,
+                "symlinked task_file escaping the backlog root must not be read"
+            );
+        }
+        let _ = task_file;
+    }
+
+    /// Compute a relative `../...` style path from `from` to `to`, for fixtures.
+    #[test]
+    fn validate_repository_reports_duplicate_story_ids() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let dir = temp_root.path().join("delivery/backlog/phase-1");
+        fs::create_dir_all(&dir).unwrap();
+
+        let story_a = dir.join("US-001-alpha.md");
+        let story_b = dir.join("US-001-beta.md");
+        let frontmatter = "---\nid: US-001\ntype: user-story\nstatus: todo\nepic: EP-001\nsprint: ~\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-06-24T08:00:00+0200\nupdated: 2026-06-24T08:00:00+0200\n---\n# Story\n";
+        fs::write(&story_a, frontmatter).unwrap();
+        fs::write(&story_b, frontmatter).unwrap();
+
+        let report = validate_repository(temp_root.path()).unwrap();
+        let dup_issues: Vec<_> = report
+            .issues
+            .iter()
+            .filter(|i| i.rule == "duplicate-story-id")
+            .collect();
+        assert_eq!(
+            dup_issues.len(),
+            2,
+            "expected 2 duplicate-story-id issues (one per file), got {}",
+            dup_issues.len()
+        );
+    }
+
+    #[test]
+    fn validate_repository_reports_out_of_tree_story_path() {
+        // US-026: verify the out-of-tree-path check fires when a story's
+        // canonicalized file path is outside the backlog root. We test this
+        // at the validate_story_with_config level by constructing a story
+        // whose file_path resolves outside the config's backlog_path.
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let config = load_kanban_config(temp_root.path()).unwrap();
+
+        // Create a story file outside the backlog root.
+        let outside_dir = temp_root.path().join("outside");
+        fs::create_dir_all(&outside_dir).unwrap();
+        let outside_file = outside_dir.join("US-002-escaped.md");
+        fs::write(
+            &outside_file,
+            "---\nid: US-002\ntype: user-story\nstatus: todo\nepic: EP-001\nsprint: ~\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-06-24T08:00:00+0200\nupdated: 2026-06-24T08:00:00+0200\n---\n# Escaped\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(&outside_file, temp_root.path()).unwrap();
+        let issues = validate_story_with_config(&story, &config.features(), Some(&config));
+        let rules: Vec<&str> = issues.iter().map(|i| i.rule.as_str()).collect();
+        assert!(
+            rules.contains(&"out-of-tree-story-path"),
+            "expected out-of-tree-story-path issue for a story outside the backlog root, got rules: {rules:?}"
+        );
+    }
+
+    fn pathdiff_from(from: &Path, to: &Path) -> String {
+        let mut components = Vec::new();
+        let from_parts = from.components().collect::<Vec<_>>();
+        let to_parts = to.components().collect::<Vec<_>>();
+        // Strip common prefix.
+        let mut idx = 0;
+        while idx < from_parts.len() && idx < to_parts.len() && from_parts[idx] == to_parts[idx] {
+            idx += 1;
+        }
+        for _ in idx..from_parts.len() {
+            components.push("..".to_string());
+        }
+        for part in &to_parts[idx..] {
+            components.push(part.as_os_str().to_string_lossy().into_owned());
+        }
+        components.join("/")
     }
 }

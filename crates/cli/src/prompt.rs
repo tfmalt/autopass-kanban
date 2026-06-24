@@ -12,9 +12,28 @@ pub(crate) fn prompt(message: &str) -> Result<String> {
 
     print!("{message}");
     io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(input.trim().to_string())
+    let stdin = io::stdin();
+    let mut lock = stdin.lock();
+    read_prompted_line(&mut lock)
+}
+
+/// Read one trimmed line from `input`. Returns an error when the stream is at
+/// EOF (`read_line` returns `0` bytes) so interactive prompts cannot silently
+/// fall back to a default or busy-loop on closed stdin (US-011).
+///
+/// Note: we deliberately do not bail merely because stdin is not a TTY — piping
+/// a real response (`echo "y" | kanban doctor fix`) stays supported. EOF is the
+/// precise gate that the acceptance criteria require.
+fn read_prompted_line(input: &mut dyn std::io::BufRead) -> Result<String> {
+    let mut line = String::new();
+    let read = input.read_line(&mut line)?;
+    if read == 0 {
+        bail!(
+            "standard input is closed; cannot prompt for confirmation. \
+             Re-run in an interactive terminal or pass --non-interactive."
+        );
+    }
+    Ok(line.trim().to_string())
 }
 
 pub(crate) fn prompt_with_default(label: &str, default: &str) -> Result<String> {
@@ -148,6 +167,9 @@ pub(crate) fn prompt_create_sprint(
         break date;
     };
     let headline = prompt("Sprint headline: ")?;
+    if headline.trim().is_empty() {
+        bail!("Sprint headline must not be empty; re-run with a non-empty headline.");
+    }
     Ok(CreateSprintInput {
         number,
         start_date,
@@ -184,4 +206,38 @@ pub(crate) fn print_rollover_result(theme: &Theme, result: &RolloverResult) {
     );
     println!("{} completed stories: {completed}", theme.info_label());
     println!("{} carried stories: {carried}", theme.info_label());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_prompted_line_errors_on_eof_with_actionable_message() {
+        let mut empty = std::io::Cursor::new(Vec::<u8>::new());
+        let result = read_prompted_line(&mut empty);
+        assert!(result.is_err(), "EOF must produce an error, not a default");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("standard input is closed"),
+            "expected actionable EOF message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn read_prompted_line_returns_trimmed_value_when_input_present() {
+        let mut input = std::io::Cursor::new(b"  yes  \n".to_vec());
+        let value = read_prompted_line(&mut input).unwrap();
+        assert_eq!(value, "yes");
+    }
+
+    #[test]
+    fn read_prompted_line_treats_blank_line_as_empty_not_eof() {
+        // A real blank line (newline byte) is valid input, not EOF, so the
+        // doctor wizard can still interpret it as the default "y" when a human
+        // presses enter on a TTY.
+        let mut input = std::io::Cursor::new(b"\n".to_vec());
+        let value = read_prompted_line(&mut input).unwrap();
+        assert_eq!(value, "");
+    }
 }

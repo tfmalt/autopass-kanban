@@ -88,15 +88,7 @@ _kanban_story_types() {
 _kanban_story_update_statuses() {
     local -a statuses
     statuses=(
-        draft
-        backlog
-        ready
-        todo
-        in-progress
-        ready-for-qa
-        blocked
-        done
-        dropped
+        __KANBAN_STORY_STATUSES__
     )
     compadd -a statuses
 }
@@ -166,25 +158,14 @@ _kanban_epic_ids() {
 _kanban_task_statuses() {
     local -a statuses
     statuses=(
-        todo
-        in-progress
-        blocked
-        done
+        __KANBAN_TASK_STATUSES__
     )
     compadd -a statuses
 }
 _kanban_story_statuses() {
     local -a statuses
     statuses=(
-        draft
-        backlog
-        ready
-        todo
-        in-progress
-        ready-for-qa
-        blocked
-        done
-        dropped
+        __KANBAN_STORY_STATUSES__
     )
     compadd -a statuses
 }
@@ -420,7 +401,34 @@ pub(crate) fn enhance_zsh_completion(script: &str) -> String {
             "'--lines=[Only print the last N log lines.]:N:_default'",
             "'--lines=[Only print the last N log lines.]:N:'",
         );
-    format!("{enhanced}{ZSH_DYNAMIC_HELPERS}{ZSH_KB_ALIAS_REGISTRATION}")
+    let story_status_lines = CANONICAL_STORY_STATUSES
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            if i == 0 {
+                s.to_string()
+            } else {
+                format!("        {s}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let task_status_lines = CANONICAL_TASK_STATUSES
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            if i == 0 {
+                s.to_string()
+            } else {
+                format!("        {s}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let zsh_helpers = ZSH_DYNAMIC_HELPERS
+        .replace("__KANBAN_STORY_STATUSES__", &story_status_lines)
+        .replace("__KANBAN_TASK_STATUSES__", &task_status_lines);
+    format!("{enhanced}{zsh_helpers}{ZSH_KB_ALIAS_REGISTRATION}")
 }
 
 /// Register the documented `kb` alias for the same completion function as `kanban`.
@@ -567,7 +575,7 @@ pub(crate) fn inject_bash_list_task_ids(script: &str) -> String {
 
 pub(crate) fn inject_bash_doctor_fix_target(script: &str) -> String {
     let old = r#"        kanban__subcmd__doctor__subcmd__fix)
-            opts="-h --format --help [TARGET] [REPO_ROOT]"
+            opts="-h --non-interactive --format --help [TARGET] [REPO_ROOT]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -584,7 +592,7 @@ pub(crate) fn inject_bash_doctor_fix_target(script: &str) -> String {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0"#;
     let new = r#"        kanban__subcmd__doctor__subcmd__fix)
-            opts="-h --format --help [TARGET] [REPO_ROOT]"
+            opts="-h --non-interactive --format --help [TARGET] [REPO_ROOT]"
             if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
                 local -a matches=( current )
                 local id
@@ -919,9 +927,10 @@ pub(crate) fn inject_bash_story_plan(script: &str) -> String {
 }
 
 pub(crate) fn inject_bash_story_move_status(script: &str) -> String {
+    let story_statuses = CANONICAL_STORY_STATUSES.join(" ");
     let replacement = r#"        kanban__subcmd__story__subcmd__move)
              opts="-a -h --assignee --format --help <ID> <STATUS> [REPO_ROOT]"
-             story_statuses="draft backlog ready todo in-progress ready-for-qa blocked done dropped"
+             story_statuses="__KANBAN_STORY_STATUSES__"
               if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
                   local -a matches=()
                   local id
@@ -956,13 +965,15 @@ pub(crate) fn inject_bash_story_move_status(script: &str) -> String {
              return 0
              ;;
 "#;
-    replace_bash_case_block(script, "kanban__subcmd__story__subcmd__move", replacement)
+    let replacement = replacement.replace("__KANBAN_STORY_STATUSES__", &story_statuses);
+    replace_bash_case_block(script, "kanban__subcmd__story__subcmd__move", &replacement)
 }
 
 pub(crate) fn inject_bash_task_add_status(script: &str) -> String {
+    let task_statuses = CANONICAL_TASK_STATUSES.join(" ");
     let replacement = r#"        kanban__subcmd__task__subcmd__add)
              opts="-h --title --status --tags --description --format --help <STORY_ID> [REPO_ROOT]"
-             task_statuses="todo in-progress blocked done"
+             task_statuses="__KANBAN_TASK_STATUSES__"
               if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
                   local -a matches=()
                   local id
@@ -1001,13 +1012,15 @@ pub(crate) fn inject_bash_task_add_status(script: &str) -> String {
              return 0
              ;;
 "#;
-    replace_bash_case_block(script, "kanban__subcmd__task__subcmd__add", replacement)
+    let replacement = replacement.replace("__KANBAN_TASK_STATUSES__", &task_statuses);
+    replace_bash_case_block(script, "kanban__subcmd__task__subcmd__add", &replacement)
 }
 
 pub(crate) fn inject_bash_task_update_status(script: &str) -> String {
+    let task_statuses = CANONICAL_TASK_STATUSES.join(" ");
     let replacement = r#"        kanban__subcmd__task__subcmd__update)
              opts="-h --title --status --tags --description --format --help <STORY_ID> <TASK_ID> [REPO_ROOT]"
-             task_statuses="todo in-progress blocked done"
+             task_statuses="__KANBAN_TASK_STATUSES__"
               if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
                   local -a matches=()
                   local id
@@ -1061,7 +1074,8 @@ pub(crate) fn inject_bash_task_update_status(script: &str) -> String {
              return 0
              ;;
 "#;
-    replace_bash_case_block(script, "kanban__subcmd__task__subcmd__update", replacement)
+    let replacement = replacement.replace("__KANBAN_TASK_STATUSES__", &task_statuses);
+    replace_bash_case_block(script, "kanban__subcmd__task__subcmd__update", &replacement)
 }
 
 pub(crate) fn inject_bash_task_delete(script: &str) -> String {

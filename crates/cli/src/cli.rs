@@ -612,11 +612,16 @@ pub(crate) enum DoctorCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Guide fixes for doctor findings. Effect: rewrites affected markdown files one issue at a time. Side effects: prompts before each fix."
+        about = "Guide fixes for doctor findings. Effect: rewrites affected markdown files one issue at a time. Side effects: prompts before each fix. Pass --non-interactive to apply all safe automatic fixes without prompting; guided/manual fixes are skipped with a summary."
     )]
     Fix {
         #[arg(help = "Optional scope: a story id like US-F1-053 or the literal `current`.")]
         target: Option<String>,
+        #[arg(
+            long,
+            help = "Do not prompt. Apply every safe automatic fix and skip guided/manual fixes with a summary."
+        )]
+        non_interactive: bool,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
         #[arg(default_value = ".")]
         repo_root: PathBuf,
@@ -832,7 +837,7 @@ pub(crate) enum Command {
     },
     #[command(
         about = "Upgrade kanban using the remote GitHub installer. Effect: downloads and runs the latest release installer.",
-        long_about = "Upgrade kanban using the remote GitHub installer.\n\nThis command downloads the canonical install script from GitHub and runs it locally, preserving the installer's latest-release resolution, checksum verification, manifest reconciliation, completion refresh, and skill upgrade behavior."
+        long_about = "Upgrade kanban using the remote GitHub installer.\n\nThis command resolves the latest published release tag, downloads the canonical install script pinned to that tag (never `main`), verifies its SHA-256 against the release's checksum asset, and only then runs it locally. The installer's latest-release resolution, checksum verification, manifest reconciliation, completion refresh, and skill upgrade behavior are preserved. See delivery/decisions/ADR-002 for the trust model."
     )]
     Upgrade {
         #[arg(
@@ -1281,10 +1286,9 @@ mod tests {
 
         match args.command {
             Command::Doctor {
-                command: DoctorCommand::Fix { target, repo_root },
+                command: DoctorCommand::Fix { target, .. },
             } => {
                 assert_eq!(target.as_deref(), Some("current"));
-                assert_eq!(repo_root, PathBuf::from("."));
             }
             _ => panic!("unexpected command"),
         }
@@ -1296,9 +1300,31 @@ mod tests {
 
         match args.command {
             Command::Doctor {
-                command: DoctorCommand::Fix { target, repo_root },
+                command: DoctorCommand::Fix { target, .. },
             } => {
                 assert_eq!(target.as_deref(), Some("US-F1-053"));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn doctor_fix_non_interactive_flag_parses() {
+        let args =
+            Args::try_parse_from(["kanban", "doctor", "fix", "--non-interactive", "current"])
+                .unwrap();
+
+        match args.command {
+            Command::Doctor {
+                command:
+                    DoctorCommand::Fix {
+                        target,
+                        non_interactive,
+                        repo_root,
+                    },
+            } => {
+                assert_eq!(target.as_deref(), Some("current"));
+                assert!(non_interactive);
                 assert_eq!(repo_root, PathBuf::from("."));
             }
             _ => panic!("unexpected command"),
