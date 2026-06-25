@@ -180,7 +180,13 @@ pub fn apply_doctor_fix(
                 .filter(|value| !value.trim().is_empty())
                 .ok_or_else(|| anyhow!("Sprint story is missing task_file frontmatter."))?;
             validate_task_file_frontmatter_value(&task_file_name)?;
-            let task_file_path = absolute_path.parent().unwrap().join(&task_file_name);
+            let parent = absolute_path.parent().with_context(|| {
+                format!(
+                    "story file {} has no parent directory",
+                    absolute_path.display()
+                )
+            })?;
+            let task_file_path = parent.join(&task_file_name);
             let backlog_root = load_kanban_config(&repo_root)?.backlog_path();
             let task_file_path = ensure_path_inside(&backlog_root, &task_file_path)?;
             let story_id = story.frontmatter.get("id").cloned().unwrap_or_default();

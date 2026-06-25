@@ -231,7 +231,15 @@ pub fn read_story_file(file_path: impl AsRef<Path>, repo_root: impl AsRef<Path>)
         .get("task_file")
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
-        .map(|value| file_path.parent().unwrap().join(value));
+        .map(|value| {
+            file_path
+                .parent()
+                .with_context(|| {
+                    format!("story file {} has no parent directory", file_path.display())
+                })
+                .map(|parent| parent.join(value))
+        })
+        .transpose()?;
     let task_file_path = referenced_task_file_path
         .clone()
         .unwrap_or_else(|| sibling_task_file_path.clone());

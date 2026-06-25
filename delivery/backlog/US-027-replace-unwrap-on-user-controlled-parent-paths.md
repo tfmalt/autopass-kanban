@@ -1,15 +1,15 @@
 ---
 id: US-027
 type: user-story
-status: draft
+status: done
 epic: EP-003
 sprint: ~
 assignee: Thomas Malt <thomas.malt@vegvesen.no>
 story_points: 2
-work_started:
-work_done:
+work_started: 
+work_done: 2026-06-25T09:10:50+0200
 created: 2026-06-24T08:55:41+0200
-updated: 2026-06-24T08:55:41+0200
+updated: 2026-06-25T09:10:50+0200
 ---
 
 # User Story: Replace unwrap on user-controlled parent paths
