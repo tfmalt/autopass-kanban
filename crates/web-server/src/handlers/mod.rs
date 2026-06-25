@@ -2,6 +2,7 @@ use std::convert::Infallible;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use axum::Json;
@@ -11,7 +12,6 @@ use axum::http::{HeaderValue, StatusCode, Uri, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use chrono::{Days, Local};
-use futures::Stream;
 use include_dir::{Dir, include_dir};
 use kanban_core::*;
 use serde_json::{Value, json};
@@ -28,6 +28,17 @@ use crate::sprint_io::{
 use crate::team::load_team;
 
 static WEB_ASSETS: Dir<'_> = include_dir!("$KANBAN_WEB_ASSET_DIR");
+const SSE_SUBSCRIBER_CAP: usize = 64;
+
+struct SseSubscriberGuard {
+    count: Arc<AtomicUsize>,
+}
+
+impl Drop for SseSubscriberGuard {
+    fn drop(&mut self) {
+        self.count.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct ApiResponse {
@@ -65,9 +76,10 @@ impl IntoResponse for ApiResponse {
 
 impl From<anyhow::Error> for ApiResponse {
     fn from(error: anyhow::Error) -> Self {
+        eprintln!("kanban-web internal error: {error:#}");
         Self {
             status: StatusCode::UNPROCESSABLE_ENTITY,
-            message: error.to_string(),
+            message: "internal error".to_string(),
         }
     }
 }
@@ -161,11 +173,23 @@ pub(crate) async fn api_team_avatar(
 
     let data = fs::read(&canonical).map_err(|_| ApiResponse::not_found("not found"))?;
     let mime = mime_guess::from_path(&path).first_or_octet_stream();
+    if mime.type_().as_str() != "image" {
+        let mut response = ApiResponse::not_found("not found").into_response();
+        response.headers_mut().insert(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        );
+        return Ok(response);
+    }
     let mut response = Body::from(data).into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_str(mime.as_ref())
             .unwrap_or(HeaderValue::from_static("application/octet-stream")),
+    );
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
     );
     Ok(response)
 }
@@ -387,20 +411,33 @@ pub(crate) async fn api_update_sprint(
     Ok(Json(json!({ "ok": true, "data": result })))
 }
 
-pub(crate) async fn api_events(
-    State(state): State<Arc<AppState>>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+pub(crate) async fn api_events(State(state): State<Arc<AppState>>) -> Response {
+    let previous = state.sse_subscribers.fetch_add(1, Ordering::SeqCst);
+    if previous >= SSE_SUBSCRIBER_CAP {
+        state.sse_subscribers.fetch_sub(1, Ordering::SeqCst);
+        return (StatusCode::SERVICE_UNAVAILABLE, "too many SSE subscribers").into_response();
+    }
+    let _guard = SseSubscriberGuard {
+        count: state.sse_subscribers.clone(),
+    };
     let rx = state.events.subscribe();
     let stream = futures::stream::unfold(rx, |mut rx| async move {
         loop {
             match rx.recv().await {
-                Ok(()) => return Some((Ok(Event::default().event("change").data("{}")), rx)),
+                Ok(()) => {
+                    return Some((
+                        Ok::<Event, Infallible>(Event::default().event("change").data("{}")),
+                        rx,
+                    ));
+                }
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => return None,
             }
         }
     });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 pub(crate) async fn static_asset(uri: Uri) -> Response {
@@ -476,6 +513,7 @@ pub(crate) fn json_value_to_string(value: Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::StatusCode;
     use std::sync::Arc;
     use tokio::sync::{Mutex, broadcast};
 
@@ -487,6 +525,37 @@ mod tests {
         assert!(updated.ends_with("# New\n"));
     }
 
+    #[test]
+    fn propagated_anyhow_error_response_hides_absolute_paths() {
+        let leaked =
+            anyhow::anyhow!("read story file /Users/tm/src/vegvesen/autopass-kanban/secret.md");
+        let response = ApiResponse::from(leaked);
+        assert_eq!(response.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(response.message, "internal error");
+        assert!(!response.message.contains("/Users/"));
+        assert!(!response.message.contains("autopass-kanban"));
+    }
+
+    #[test]
+    fn explicit_not_found_message_is_preserved() {
+        let response = ApiResponse::not_found("story not found");
+        assert_eq!(response.status, StatusCode::NOT_FOUND);
+        assert_eq!(response.message, "story not found");
+    }
+
+    #[test]
+    fn avatar_non_image_response_uses_nosniff() {
+        let mut response = ApiResponse::not_found("not found").into_response();
+        response.headers_mut().insert(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        );
+        assert_eq!(
+            response.headers().get(header::X_CONTENT_TYPE_OPTIONS),
+            Some(&HeaderValue::from_static("nosniff"))
+        );
+    }
+
     #[tokio::test]
     async fn cached_git_branch_returns_cached_value_without_repo_access() {
         let (events, _) = broadcast::channel(8);
@@ -495,6 +564,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 8080,
             branch_cache: Arc::new(Mutex::new(Some("cached-branch".to_string()))),
+            sse_subscribers: Arc::new(AtomicUsize::new(0)),
             events,
             write_lock: Arc::new(Mutex::new(())),
         };
@@ -502,5 +572,25 @@ mod tests {
             .await
             .expect("cached branch should resolve");
         assert_eq!(branch, "cached-branch");
+    }
+
+    #[tokio::test]
+    async fn sse_subscriber_cap_rejects_over_limit() {
+        let (events, _) = broadcast::channel(8);
+        let state = Arc::new(crate::AppState {
+            repo_root: std::path::PathBuf::from("/tmp/nonexistent-csrf-test"),
+            host: "127.0.0.1".to_string(),
+            port: 8080,
+            branch_cache: Arc::new(Mutex::new(None)),
+            sse_subscribers: Arc::new(AtomicUsize::new(SSE_SUBSCRIBER_CAP)),
+            events,
+            write_lock: Arc::new(Mutex::new(())),
+        });
+        let response = api_events(State(state.clone())).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            state.sse_subscribers.load(Ordering::SeqCst),
+            SSE_SUBSCRIBER_CAP
+        );
     }
 }

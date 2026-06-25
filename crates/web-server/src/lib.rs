@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 use anyhow::{Context, Result};
 use axum::extract::State;
@@ -43,6 +44,7 @@ struct AppState {
     host: String,
     port: u16,
     branch_cache: Arc<Mutex<Option<String>>>,
+    sse_subscribers: Arc<AtomicUsize>,
     events: broadcast::Sender<()>,
     /// In-process write mutex that serializes web-server mutation handlers so
     /// concurrent UI actions cannot interleave read-modify-write sequences on
@@ -120,12 +122,14 @@ pub async fn serve(options: WebServeOptions) -> Result<()> {
     let repo_root = config.repo_root;
     let (events, _) = broadcast::channel(128);
     let branch_cache = Arc::new(Mutex::new(None));
+    let sse_subscribers = Arc::new(AtomicUsize::new(0));
     let _watcher = start_watcher(&repo_root, events.clone(), branch_cache.clone())?;
     let state = Arc::new(AppState {
         repo_root,
         host: options.host,
         port: options.port,
         branch_cache,
+        sse_subscribers,
         events,
         write_lock: Arc::new(Mutex::new(())),
     });
@@ -227,6 +231,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 8080,
             branch_cache: Arc::new(Mutex::new(None)),
+            sse_subscribers: Arc::new(AtomicUsize::new(0)),
             events,
             write_lock: Arc::new(Mutex::new(())),
         })
