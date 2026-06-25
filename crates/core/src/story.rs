@@ -557,7 +557,7 @@ pub fn find_story_with_source(
             // Build details from the same repository (second pass over the same Vec).
             let details =
                 find_story_in_repository(repository.repo_root.as_path(), &repository, story_id)
-                    .expect("story was found in the same repository scan");
+                    .ok_or_else(|| anyhow!("story {story_id} vanished during scan"))?;
             Ok(Some((details, raw_story)))
         }
     }
