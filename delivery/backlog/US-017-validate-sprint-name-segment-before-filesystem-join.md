@@ -1,15 +1,15 @@
 ---
 id: US-017
 type: user-story
-status: draft
+status: done
 epic: EP-003
 sprint: ~
 assignee: Thomas Malt <thomas.malt@vegvesen.no>
 story_points: 2
-work_started:
-work_done:
+work_started: 2026-06-24T18:07:26+0200
+work_done: 2026-06-25T09:08:45+0200
 created: 2026-06-24T08:55:41+0200
-updated: 2026-06-24T08:55:41+0200
+updated: 2026-06-25T09:08:45+0200
 ---
 
 # User Story: Validate sprint name segment before filesystem join

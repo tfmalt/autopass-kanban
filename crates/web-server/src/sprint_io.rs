@@ -10,6 +10,31 @@ use serde_json::{Value, json};
 
 use crate::snapshot::rel_to_root;
 
+fn validate_sprint_name_segment(name: &str) -> Result<()> {
+    if name.contains('/') || name.contains('\\') || name.contains("..") || name.contains('\0') {
+        bail!("invalid sprint name");
+    }
+    let Some((prefix, headline)) = name.split_once('.') else {
+        bail!("invalid sprint name");
+    };
+    if !prefix.starts_with('S')
+        || prefix.len() < 2
+        || !prefix[1..].chars().all(|ch| ch.is_ascii_digit())
+    {
+        bail!("invalid sprint name");
+    }
+    if headline.is_empty()
+        || !headline
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+        || headline.starts_with('-')
+        || headline.ends_with('-')
+    {
+        bail!("invalid sprint name");
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct CreateSprintInputWeb {
     pub(crate) headline: String,
@@ -34,6 +59,7 @@ pub(crate) fn update_sprint_file(
     name: &str,
     input: UpdateSprintInput,
 ) -> Result<Value> {
+    validate_sprint_name_segment(name)?;
     let config = load_kanban_config(repo_root)?;
     let old_path = config.sprints_path().join(format!("{name}.md"));
     let content = fs::read_to_string(&old_path)
@@ -49,6 +75,7 @@ pub(crate) fn update_sprint_file(
         bail!("Sprint headline must contain at least one ASCII letter or number.");
     }
     let new_name = format!("{sprint_id}.{headline}");
+    validate_sprint_name_segment(&new_name)?;
     let new_path = config.sprints_path().join(format!("{new_name}.md"));
     if new_name != name && new_path.exists() {
         bail!("Sprint file already exists: {new_name}.md");
@@ -203,9 +230,42 @@ pub(crate) fn slugify(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn slugify_headline_keeps_ascii_tokens() {
         assert_eq!(slugify("Foundation Sprint!"), "foundation-sprint");
+    }
+
+    #[test]
+    fn invalid_sprint_name_segment_is_rejected() {
+        for value in ["../settings", "S1/evil", "S1\\evil", "S1..evil", "bad"] {
+            let err = validate_sprint_name_segment(value).unwrap_err().to_string();
+            assert!(
+                err.contains("invalid sprint name"),
+                "value={value:?} err={err}"
+            );
+        }
+    }
+
+    #[test]
+    fn update_sprint_file_rejects_invalid_route_name_before_fs_join() {
+        let temp_root = tempdir().unwrap();
+        init_config(temp_root.path()).unwrap();
+        let result = update_sprint_file(
+            temp_root.path(),
+            "../settings",
+            UpdateSprintInput {
+                headline: "foundation".to_string(),
+                goal: String::new(),
+                start: "2026-06-01".to_string(),
+                end: "2026-06-12".to_string(),
+                status: "active".to_string(),
+                wip_limit: None,
+            },
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("invalid sprint name"));
+        assert!(!temp_root.path().join("settings.md").exists());
     }
 }
