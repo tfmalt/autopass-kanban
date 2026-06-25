@@ -1236,8 +1236,12 @@ fi
 }
 
 #[allow(dead_code)]
-pub(crate) fn inject_bash_story_update(script: &str) -> String {
-    let old = r#"        kanban__subcmd__story__subcmd__update)
+pub(crate) fn inject_bash_story_update(_script: &str) -> String {
+    String::new()
+}
+
+/*
+        kanban__subcmd__story__subcmd__update)
             opts="-h --id --type --status --epic --sprint --story-points --assignee --activated --work-started --work-done --created --updated --task-file --format --help <ID> [REPO_ROOT]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1400,12 +1404,7 @@ pub(crate) fn inject_bash_story_update(script: &str) -> String {
             esac
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0"#;
-    if script.contains(old) {
-        script.replacen(old, new, 1)
-    } else {
-        script.to_string()
-    }
-}
+*/
 
 pub(crate) fn inject_bash_story_update_dynamic(script: &str) -> String {
     let start_marker = "        kanban__subcmd__story__subcmd__update)\n";

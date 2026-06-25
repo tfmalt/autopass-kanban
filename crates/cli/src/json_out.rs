@@ -68,7 +68,7 @@ pub(crate) fn completion_output(target: CompletionTarget) -> CompletionDto {
     if let Some(generator) = target.generator() {
         let mut buf = Vec::new();
         clap_complete::generate(generator, &mut command, "kanban", &mut buf);
-        let script = String::from_utf8(buf).expect("clap_complete output should be utf8");
+        let script = String::from_utf8_lossy(&buf).into_owned();
         let content = match generator {
             clap_complete::Shell::Zsh => enhance_zsh_completion(&script),
             clap_complete::Shell::Bash => enhance_bash_completion(&script),
