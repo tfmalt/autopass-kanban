@@ -67,6 +67,15 @@ pub(crate) fn render_version_line(theme: &Theme) -> String {
     )
 }
 
+pub(crate) fn render_version_update_notice(theme: &Theme, latest: &str) -> String {
+    format!(
+        "{} A new version is available: {}. Run {} to update.",
+        theme.info_label(),
+        theme.version(latest),
+        theme.command("kanban upgrade")
+    )
+}
+
 pub(crate) fn render_no_args_help_output(theme: &Theme) -> Result<String> {
     let mut command = Args::command();
     let help = render_styled_output(command.render_help(), theme.color);
@@ -161,12 +170,7 @@ fn run() -> Result<()> {
         let theme = Theme::for_stdout(ColorMode::Auto);
         println!("{}", render_version_line(&theme));
         if let Some(latest) = latest_version_if_newer() {
-            println!(
-                "\n{} A new version is available: {}. Run {} to update.",
-                theme.warning_label(),
-                theme.version(&latest),
-                theme.command("kanban upgrade")
-            );
+            println!("\n{}", render_version_update_notice(&theme, &latest));
         }
         return Ok(());
     }
@@ -1061,6 +1065,16 @@ mod tests {
             "expected ansi color codes in help output"
         );
         assert!(output.contains("Commands:"));
+    }
+
+    #[test]
+    fn version_update_notice_uses_info_label() {
+        let output = render_version_update_notice(&Theme::plain(), "26.6.2501");
+
+        assert_eq!(
+            output,
+            "ℹ info A new version is available: 26.6.2501. Run kanban upgrade to update."
+        );
     }
 
     #[test]
