@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Story, StoryDetail } from "@shared/types.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { StoryModal } from "./StoryModal.js";
+import { StoryModal, type StoryStatusOption } from "./StoryModal.js";
 
 const hooks = vi.hoisted(() => ({
   useConfig: vi.fn(),
@@ -182,6 +182,29 @@ describe("StoryModal", () => {
         expect.any(Object),
       );
     });
+  });
+
+  it("supports caller-provided lifecycle status options", () => {
+    const story = baseStory();
+    story.status = "todo";
+    const statusOptions: StoryStatusOption[] = [
+      { value: "draft", label: "draft" },
+      { value: "ready", label: "ready" },
+      { value: "todo", label: "planned" },
+    ];
+    hooks.useStory.mockReturnValue({
+      data: baseDetail({ status: "todo" }),
+      isLoading: false,
+      isError: false,
+    });
+
+    render(<StoryModal story={story} onClose={vi.fn()} statusOptions={statusOptions} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    const status = screen.getByLabelText("Status") as HTMLSelectElement;
+    expect(Array.from(status.options).map((option) => option.textContent)).toEqual(["draft", "ready", "planned"]);
+    expect(Array.from(status.options).map((option) => option.value)).toEqual(["draft", "ready", "todo"]);
   });
 
   it("opens a task status picker and updates the selected task", async () => {

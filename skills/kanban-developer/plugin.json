@@ -1,5 +1,5 @@
 {
   "name": "kanban-developer",
   "description": "Implementation and maintenance workflow for the kanban CLI tooling workspace — builds, tests, and extends the Rust crates and web app in this repository using the kanban CLI for its own backlog tracking.",
-  "version": "26.6.2501"
+  "version": "26.6.2803"
 }

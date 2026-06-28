@@ -17,11 +17,20 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { STORY_STATUSES, type Epic, type Story } from "@shared/types.js";
 import { byPriorityThenId, useEpic, usePlanStory, useReorderEpics, useReorderStories, useRepository, useUnplanStory } from "../api/hooks.js";
-import { StoryModal } from "../components/StoryModal.js";
+import { StoryModal, type StoryStatusOption } from "../components/StoryModal.js";
 
 const SPRINT_DROP_ID = "backlog-target-sprint";
 const BACKLOG_DROP_ID = "backlog-source";
 const NO_EPIC_GROUP_ID = "(no epic)";
+const BACKLOG_STORY_STATUS_OPTIONS: StoryStatusOption[] = [
+  { value: "draft", label: "draft" },
+  { value: "ready", label: "ready" },
+  { value: "todo", label: "planned" },
+  { value: "in-progress", label: "in-progress" },
+  { value: "ready-for-qa", label: "ready-for-qa" },
+  { value: "done", label: "done" },
+  { value: "blocked", label: "blocked" },
+];
 
 function toTransformStyle(transform: { x: number; y: number } | null, transition?: string, opacity?: number) {
   return {
@@ -670,7 +679,7 @@ export function BacklogView() {
         )}
         {!activeStory && activeEpic && <EpicDragOverlay epic={activeEpic} />}
       </DragOverlay>
-      {open && <StoryModal story={open} onClose={() => setOpen(null)} />}
+      {open && <StoryModal story={open} onClose={() => setOpen(null)} statusOptions={BACKLOG_STORY_STATUS_OPTIONS} />}
     </DndContext>
   );
 }

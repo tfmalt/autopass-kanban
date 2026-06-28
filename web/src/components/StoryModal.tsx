@@ -12,7 +12,18 @@ marked.use({ gfm: true, breaks: false });
 interface Props {
   story: Story;
   onClose: () => void;
+  statusOptions?: StoryStatusOption[];
 }
+
+export interface StoryStatusOption {
+  value: string;
+  label: string;
+}
+
+const DEFAULT_STATUS_OPTIONS: StoryStatusOption[] = STORY_STATUSES.map((status) => ({
+  value: status,
+  label: status,
+}));
 
 function statusBadgeStyle(status: string): React.CSSProperties {
   const map: Record<string, React.CSSProperties> = {
@@ -61,7 +72,7 @@ function autocompleteAssigneeValue(value: string, cursor: number, options: strin
   return { nextValue, nextCursor };
 }
 
-export function StoryModal({ story, onClose }: Props) {
+export function StoryModal({ story, onClose, statusOptions = DEFAULT_STATUS_OPTIONS }: Props) {
   const { data: detail, isLoading, isError } = useStory(story.id);
   const config = useConfig();
   const repo = useRepository();
@@ -111,6 +122,13 @@ export function StoryModal({ story, onClose }: Props) {
     if (draftStoryPoints.trim()) options.add(draftStoryPoints.trim());
     return [...options];
   }, [config.data, currentStoryPointsValue, draftStoryPoints]);
+
+  const effectiveStatusOptions = useMemo(() => {
+    if (statusOptions.some((option) => option.value === currentStatus)) return statusOptions;
+    return [{ value: currentStatus, label: currentStatus }, ...statusOptions];
+  }, [currentStatus, statusOptions]);
+
+  const displayedStatusLabel = effectiveStatusOptions.find((option) => option.value === displayedStatus)?.label ?? displayedStatus;
 
   // Render markdown → HTML (synchronous in marked v9+) and sanitize against XSS
   const renderedHtml = useMemo<string>(() => {
@@ -243,7 +261,7 @@ export function StoryModal({ story, onClose }: Props) {
             {displayedStoryPoints !== "" && (
               <span className="pts">{displayedStoryPoints} pts</span>
             )}
-            <span style={statusBadgeStyle(displayedStatus)}>{displayedStatus}</span>
+            <span style={statusBadgeStyle(displayedStatus)}>{displayedStatusLabel}</span>
             <div className="story-panel-actions">
               {!editing && (
                 <button
@@ -335,8 +353,8 @@ export function StoryModal({ story, onClose }: Props) {
                   value={draftStatus}
                   onChange={(e) => setDraftStatus(e.target.value)}
                 >
-                  {STORY_STATUSES.map((status) => (
-                    <option key={status} value={status}>{status}</option>
+                  {effectiveStatusOptions.map((status) => (
+                    <option key={status.value} value={status.value}>{status.label}</option>
                   ))}
                 </select>
               </label>
