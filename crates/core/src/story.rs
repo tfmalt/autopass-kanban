@@ -111,6 +111,7 @@ pub fn move_story_to_status_with_assignee(
     )?;
     atomic_write(&story.file_path, &story_markdown)
         .with_context(|| format!("rewrite story {}", story.file_path.display()))?;
+    sync_parent_epic_status_for_story_move(&config, &repository, &story, &normalized_status, &now)?;
     if sprints_enabled {
         regenerate_sprint_roster(&load_kanban_config(&repository.repo_root)?, &sprint_name)?;
     }
@@ -125,6 +126,101 @@ pub fn move_story_to_status_with_assignee(
             .as_ref()
             .map(|task_file| task_file.relative_path.clone()),
     })
+}
+
+fn sync_parent_epic_status_for_story_move(
+    config: &KanbanConfig,
+    repository: &Repository,
+    moved_story: &Story,
+    target_status: &str,
+    timestamp: &str,
+) -> Result<()> {
+    if !config.features().epics || !matches!(target_status, "in-progress" | "done") {
+        return Ok(());
+    }
+
+    let Some(epic_id) = moved_story
+        .frontmatter
+        .get("epic")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+
+    let child_statuses = repository
+        .stories
+        .iter()
+        .filter(|story| {
+            story
+                .frontmatter
+                .get("epic")
+                .map(|value| value.eq_ignore_ascii_case(epic_id))
+                .unwrap_or(false)
+        })
+        .map(|story| {
+            if story.file_path == moved_story.file_path {
+                target_status.to_string()
+            } else {
+                normalize_status_alias(
+                    story
+                        .frontmatter
+                        .get("status")
+                        .map(String::as_str)
+                        .unwrap_or_default(),
+                )
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if child_statuses.is_empty() {
+        return Ok(());
+    }
+
+    let next_epic_status = if child_statuses.iter().any(|status| status == "in-progress") {
+        Some("in-progress")
+    } else if child_statuses.iter().all(|status| status == "done") {
+        Some("done")
+    } else {
+        None
+    };
+
+    let Some(next_epic_status) = next_epic_status else {
+        return Ok(());
+    };
+
+    let epic = collect_epic_files(&config.repo_root)?
+        .into_iter()
+        .map(|path| read_epic_file(path, &config.repo_root))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .find(|epic| {
+            epic.frontmatter
+                .get("id")
+                .map(|id| id.eq_ignore_ascii_case(epic_id))
+                .unwrap_or(false)
+        });
+
+    let Some(epic) = epic else {
+        return Ok(());
+    };
+
+    let current_status = epic.frontmatter.get("status").cloned().unwrap_or_default();
+    if current_status == next_epic_status {
+        return Ok(());
+    }
+
+    let epic_markdown = upsert_frontmatter_markdown(
+        &epic.markdown,
+        &[
+            ("status", Some(next_epic_status.to_string())),
+            ("updated", Some(timestamp.to_string())),
+        ],
+    )?;
+    atomic_write(&epic.file_path, &epic_markdown)
+        .with_context(|| format!("rewrite epic {}", epic.file_path.display()))?;
+
+    Ok(())
 }
 
 pub fn plan_story_into_sprint(
@@ -758,6 +854,21 @@ mod tests {
     use crate::testutil::*;
     use tempfile::tempdir;
 
+    fn write_epic(temp_root: &Path, status: &str) -> PathBuf {
+        let path = temp_root.join(
+            "delivery/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/EP-F1-06-git-driven-kanban-and-backlog-tooling.md",
+        );
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                "---\nid: EP-F1-06\ntype: epic\nstatus: {status}\nphase: 1\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n\n# Epic: Git-driven kanban and backlog tooling\n"
+            ),
+        )
+        .unwrap();
+        path
+    }
+
     #[test]
     fn update_story_frontmatter_writes_requested_fields() {
         let temp_root = tempdir().unwrap();
@@ -1157,6 +1268,69 @@ mod tests {
         assert!(!backlog_story.contains("work_done: 1999-01-01T00:00:00+0100"));
         assert!(moved_story.contains("work_done: 20"));
         assert!(backlog_story.contains("work_done: 20"));
+    }
+
+    #[test]
+    fn move_story_to_in_progress_updates_parent_epic_status() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_git_config(temp_root.path(), "Test User", "test@example.com");
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "active",
+        );
+        let epic_path = write_epic(temp_root.path(), "draft");
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md",
+            "id: US-F1-053\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 8\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-054-other-child.md",
+            "id: US-F1-054\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 3\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        move_story_to_status(temp_root.path(), "US-F1-053", "in-progress").unwrap();
+
+        let epic_markdown = fs::read_to_string(epic_path).unwrap();
+        assert!(epic_markdown.contains("status: in-progress"));
+        assert!(!epic_markdown.contains("updated: 2026-05-28T14:05:54+0200"));
+    }
+
+    #[test]
+    fn move_story_to_done_updates_parent_epic_when_all_child_stories_are_done() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "active",
+        );
+        let epic_path = write_epic(temp_root.path(), "in-progress");
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-add-cli-support-for-status-moves-and-sprint-rollover.md",
+            "id: US-F1-053\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 8\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-054-other-child.md",
+            "id: US-F1-054\ntype: user-story\nstatus: done\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: TBD\nstory_points: 3\nwork_started: 2026-05-28T14:05:54+0200\nwork_done: 2026-05-29T14:05:54+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-29T14:05:54+0200\n",
+        );
+
+        move_story_to_status(temp_root.path(), "US-F1-053", "done").unwrap();
+
+        let epic_markdown = fs::read_to_string(epic_path).unwrap();
+        assert!(epic_markdown.contains("status: done"));
+        assert!(!epic_markdown.contains("updated: 2026-05-28T14:05:54+0200"));
     }
 
     #[test]
