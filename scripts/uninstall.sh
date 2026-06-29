@@ -163,19 +163,42 @@ read_manifest_entries() {
 	grep -v '^#' "$_manifest" 2>/dev/null | grep -v '^$' || true
 }
 
+manifest_symlink_target() {
+	_source="$1"
+	case "$_source" in
+		generated:kanban-alias-symlink:*) printf '%s' "${_source#generated:kanban-alias-symlink:}" ;;
+		*) printf '' ;;
+	esac
+}
+
+manifest_entry_matches_disk() {
+	_path="$1"
+	_expected_hash="$2"
+	_source="${3:-}"
+	_symlink_target=$(manifest_symlink_target "$_source")
+
+	if [ -n "$_symlink_target" ]; then
+		[ -L "$_path" ] || return 1
+		[ "$(readlink "$_path" 2>/dev/null || true)" = "$_symlink_target" ]
+		return
+	fi
+
+	_disk_hash=$(compute_sha256 "$_path")
+	[ "$_disk_hash" = "$_expected_hash" ]
+}
+
 remove_if_hash_matches() {
 	_path="$1"
 	_expected_hash="$2"
+	_source="${3:-}"
 
-	if [ ! -f "$_path" ]; then
+	if [ ! -e "$_path" ] && [ ! -L "$_path" ]; then
 		log "! file not found, skipping: $_path"
 		FILES_SKIPPED=$((FILES_SKIPPED + 1))
 		return 0
 	fi
 
-	_disk_hash=$(compute_sha256 "$_path")
-
-	if [ "$_disk_hash" != "$_expected_hash" ]; then
+	if ! manifest_entry_matches_disk "$_path" "$_expected_hash" "$_source"; then
 		log "! hash mismatch, skipping (user-edited): $_path"
 		FILES_SKIPPED=$((FILES_SKIPPED + 1))
 		return 0
@@ -265,6 +288,7 @@ uninstall_files() {
 		[ -z "$_line" ] && continue
 		_path=$(printf '%s' "$_line" | awk -F'\t' '{print $1}')
 		_hash=$(printf '%s' "$_line" | awk -F'\t' '{print $2}')
+		_source=$(printf '%s' "$_line" | awk -F'\t' '{print $3}')
 
 		_path=$(resolve_path "$_path")
 		case "$_path" in
@@ -275,7 +299,7 @@ uninstall_files() {
 				;;
 		esac
 
-		remove_if_hash_matches "$_path" "$_hash"
+		remove_if_hash_matches "$_path" "$_hash" "$_source"
 	done < "$_tmp"
 
 	rm -f "$_tmp"

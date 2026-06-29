@@ -21,6 +21,19 @@ assert_file_exists() {
 	return 1
 }
 
+assert_symlink_target() {
+	if [ ! -L "$1" ]; then
+		fail "expected symlink not found: $1"
+		return 1
+	fi
+	_target=$(readlink "$1" 2>/dev/null || true)
+	if [ "$_target" = "$2" ]; then
+		return 0
+	fi
+	fail "symlink '$1' points to '$_target', expected '$2'"
+	return 1
+}
+
 assert_file_contains() {
 	if [ -f "$1" ] && grep -qF "$2" "$1" 2>/dev/null; then
 		return 0
@@ -190,6 +203,9 @@ assert_exit_code 0 $_exit "dry-run exit"
 if [ -f "$HOME_DIR/.local/bin/kanban" ]; then
 	fail "dry-run should not create binary"
 fi
+if [ -e "$HOME_DIR/.local/bin/kb" ] || [ -L "$HOME_DIR/.local/bin/kb" ]; then
+	fail "dry-run should not create kb symlink"
+fi
 # dry-run must not create manifest
 if [ -f "$HOME_DIR/.local/lib/kanban/manifest.txt" ]; then
 	fail "dry-run should not create manifest"
@@ -226,6 +242,7 @@ set -e
 
 assert_exit_code 0 $_exit "non-interactive install exit"
 assert_file_exists "$HOME_DIR/.local/bin/kanban"
+assert_symlink_target "$HOME_DIR/.local/bin/kb" "kanban"
 assert_file_not_contains "$HOME_DIR/.bashrc" "kanban-installer: PATH"
 if [ -f "$HOME_DIR/.local/share/bash-completion/completions/kanban" ]; then
 	fail "non-interactive install should not install completions without consent"
@@ -263,7 +280,9 @@ set -e
 
 assert_exit_code 0 $_exit "bash install exit"
 assert_file_exists "$HOME_DIR/.local/bin/kanban"
+assert_symlink_target "$HOME_DIR/.local/bin/kb" "kanban"
 assert_file_exists "$HOME_DIR/.local/lib/kanban/manifest.txt"
+assert_file_contains "$HOME_DIR/.local/lib/kanban/manifest.txt" "generated:kanban-alias-symlink:kanban"
 assert_file_contains "$HOME_DIR/.bashrc" "kanban-installer: PATH"
 assert_file_contains "$HOME_DIR/.bashrc" 'export PATH='
 assert_file_contains "$HOME_DIR/.local/share/bash-completion/completions/kanban" "stub kanban bash completion"
@@ -292,6 +311,7 @@ set -e
 
 assert_exit_code 0 $_exit "zsh install exit"
 assert_file_exists "$HOME_DIR/.local/bin/kanban"
+assert_symlink_target "$HOME_DIR/.local/bin/kb" "kanban"
 assert_file_exists "$HOME_DIR/.local/lib/kanban/manifest.txt"
 assert_file_contains "$HOME_DIR/.zshrc" "kanban-installer: PATH"
 assert_file_contains "$HOME_DIR/.zshrc" 'export PATH='
@@ -321,6 +341,7 @@ set -e
 
 assert_exit_code 0 $_exit "ash install exit"
 assert_file_exists "$HOME_DIR/.local/bin/kanban"
+assert_symlink_target "$HOME_DIR/.local/bin/kb" "kanban"
 assert_file_contains "$HOME_DIR/.profile" "kanban-installer: PATH"
 assert_file_contains "$HOME_DIR/.profile" 'export PATH='
 
@@ -356,6 +377,7 @@ set -e
 
 assert_exit_code 0 $_exit "custom prefix exit"
 assert_file_exists "$HOME_DIR/bin/kanban"
+assert_symlink_target "$HOME_DIR/bin/kb" "kanban"
 # default path must not exist
 if [ -f "$HOME_DIR/.local/bin/kanban" ]; then
 	fail "custom prefix should not create default location"
@@ -386,6 +408,7 @@ set -e
 
 assert_exit_code 0 $_exit "fish install exit"
 assert_file_exists "$HOME_DIR/.local/bin/kanban"
+assert_symlink_target "$HOME_DIR/.local/bin/kb" "kanban"
 # should print skip notice
 if ! grep -q "skipped for fish" "$HOME_DIR/stderr" 2>/dev/null && \
    ! grep -q "skipped for" "$HOME_DIR/stderr" 2>/dev/null; then
@@ -1020,6 +1043,7 @@ set +e
 sh "$INSTALL_SCRIPT" --binary "$HOME_DIR/stub-kanban" --yes --skills-dir "$HOME_DIR/.config/opencode/skills" > /dev/null 2>&1
 set -e
 assert_file_exists "$HOME_DIR/.local/bin/kanban"
+assert_symlink_target "$HOME_DIR/.local/bin/kb" "kanban"
 assert_file_exists "$HOME_DIR/.config/opencode/skills/kanban-backlog-maintainer/SKILL.md"
 assert_file_contains "$HOME_DIR/.bashrc" "kanban-installer: PATH"
 
@@ -1033,6 +1057,9 @@ assert_exit_code 0 $_exit "uninstall exit"
 # Binary should be gone
 if [ -f "$HOME_DIR/.local/bin/kanban" ]; then
 	fail "binary should be removed after uninstall"
+fi
+if [ -e "$HOME_DIR/.local/bin/kb" ] || [ -L "$HOME_DIR/.local/bin/kb" ]; then
+	fail "kb symlink should be removed after uninstall"
 fi
 # Skills should be gone
 if [ -f "$HOME_DIR/.config/opencode/skills/kanban-backlog-maintainer/SKILL.md" ]; then
@@ -1078,6 +1105,7 @@ assert_exit_code 0 $_exit "dry-run uninstall exit"
 
 # Files should still exist
 assert_file_exists "$HOME_DIR/.local/bin/kanban"
+assert_symlink_target "$HOME_DIR/.local/bin/kb" "kanban"
 assert_file_exists "$HOME_DIR/.config/opencode/skills/kanban-backlog-maintainer/SKILL.md"
 # Should preview
 if ! grep -q '\[dry-run\]' "$HOME_DIR/stderr" 2>/dev/null; then

@@ -61,6 +61,13 @@ EXISTING_MANIFEST_COMPLETIONS_SELECTED=""
 EXISTING_MANIFEST_SKILLS_DIR=""
 EXISTING_MANIFEST_HAS_SKILLS=0
 
+alias_binary_name() {
+	case "$BINARY_NAME" in
+		*.exe) printf 'kb.exe' ;;
+		*) printf 'kb' ;;
+	esac
+}
+
 cleanup() {
 	if [ -n "${UMASK_SAVED:-}" ]; then
 		umask "$UMASK_SAVED" 2>/dev/null || true
@@ -785,6 +792,42 @@ lookup_manifest_hash() {
 	done 2>/dev/null
 }
 
+lookup_manifest_source() {
+	_path="$1"
+	printf '%s' "$OLD_MANIFEST_ENTRIES" | while IFS= read -r _line; do
+		[ -z "$_line" ] && continue
+		_line_path=$(printf '%s' "$_line" | awk -F'\t' '{print $1}')
+		if [ "$_line_path" = "$_path" ]; then
+			printf '%s' "$_line" | awk -F'\t' '{print $3}'
+			return
+		fi
+	done 2>/dev/null
+}
+
+manifest_symlink_target() {
+	_source="$1"
+	case "$_source" in
+		generated:kanban-alias-symlink:*) printf '%s' "${_source#generated:kanban-alias-symlink:}" ;;
+		*) printf '' ;;
+	esac
+}
+
+manifest_entry_matches_disk() {
+	_path="$1"
+	_expected_hash="$2"
+	_source="${3:-}"
+	_symlink_target=$(manifest_symlink_target "$_source")
+
+	if [ -n "$_symlink_target" ]; then
+		[ -L "$_path" ] || return 1
+		[ "$(readlink "$_path" 2>/dev/null || true)" = "$_symlink_target" ]
+		return
+	fi
+
+	_disk_hash=$(compute_sha256 "$_path" 2>/dev/null || echo "")
+	[ -n "$_expected_hash" ] && [ "$_disk_hash" = "$_expected_hash" ]
+}
+
 remove_orphans() {
 	if [ -z "${TO_REMOVE:-}" ]; then
 		return 0
@@ -793,12 +836,12 @@ remove_orphans() {
 	printf '%s' "$TO_REMOVE" | while IFS= read -r _path; do
 		[ -z "$_path" ] && continue
 		_path=$(resolve_path "$_path")
-		if [ ! -f "$_path" ]; then
+		if [ ! -e "$_path" ] && [ ! -L "$_path" ]; then
 			continue
 		fi
-		_disk_hash=$(compute_sha256 "$_path" 2>/dev/null || echo "")
 		_manifest_hash=$(lookup_manifest_hash "$_path")
-		if [ -n "$_manifest_hash" ] && [ "$_disk_hash" != "$_manifest_hash" ]; then
+		_manifest_source=$(lookup_manifest_source "$_path")
+		if [ -n "$_manifest_hash" ] && ! manifest_entry_matches_disk "$_path" "$_manifest_hash" "$_manifest_source"; then
 			log "! skipping orphan removal of user-edited file: $_path"
 			continue
 		fi
@@ -917,6 +960,24 @@ atomic_copy() {
 
 	cp "$_src" "$_tmp"
 	chmod 755 "$_tmp"
+	mv -f "$_tmp" "$_dst"
+}
+
+atomic_symlink() {
+	_target_name="$1"
+	_dst="$2"
+	_dst_dir=$(dirname "$_dst")
+	_tmp="${_dst_dir}/.kanban-link.$$.tmp"
+
+	if [ "$DRY_RUN" -eq 1 ]; then
+		detail "[dry-run] would mkdir -p $_dst_dir"
+		detail "[dry-run] would ln -s $_target_name $_dst"
+		return 0
+	fi
+
+	mkdir -p "$_dst_dir"
+	rm -f "$_tmp"
+	ln -s "$_target_name" "$_tmp"
 	mv -f "$_tmp" "$_dst"
 }
 
@@ -1441,10 +1502,14 @@ decide_completion_install() {
 install_binary() {
 	_prefix_resolved=$(resolve_path "$PREFIX")
 	_dst="${_prefix_resolved}/${BINARY_NAME}"
+	_alias_name=$(alias_binary_name)
+	_alias_dst="${_prefix_resolved}/${_alias_name}"
 
 	log "installing $(brand) binary"
 	atomic_copy "$BINARY" "$_dst"
 	log "$(brand) binary copied to $(value "$_dst")"
+	atomic_symlink "$BINARY_NAME" "$_alias_dst"
+	log "$(brand) alias linked at $(value "$_alias_dst")"
 }
 
 append_path_export() {
@@ -1567,6 +1632,8 @@ gather_planned_files() {
 
 	_prefix_resolved=$(resolve_path "$PREFIX")
 	_bin_dst="${_prefix_resolved}/${BINARY_NAME}"
+	_alias_name=$(alias_binary_name)
+	_alias_dst="${_prefix_resolved}/${_alias_name}"
 	PLANNED_BIN_DST="$_bin_dst"
 
 	if [ -f "$BINARY" ]; then
@@ -1574,6 +1641,7 @@ gather_planned_files() {
 	else
 		_bin_hash="dry-run"
 	fi
+	add_planned_entry "$(printf '%s\t%s\tgenerated:kanban-alias-symlink:%s\t%s' "$_alias_dst" "$_bin_hash" "$BINARY_NAME" "$INSTALLER_VERSION")"
 	add_planned_entry "$(printf '%s\t%s\t%s\t%s' "$_bin_dst" "$_bin_hash" "$BINARY" "$INSTALLER_VERSION")"
 
 	if [ "${COMPLETIONS:-0}" -eq 1 ] && [ -n "$SHELL_NAME" ]; then
