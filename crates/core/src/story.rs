@@ -283,9 +283,11 @@ pub fn plan_story_into_sprint(
         .unwrap_or_default();
     let current_status_normalized = normalize_status_alias(current_status);
     let new_status = if current_status.is_empty()
-        || matches!(current_status_normalized.as_str(), "draft" | "ready")
-    {
-        "todo"
+        || matches!(
+            current_status_normalized.as_str(),
+            "draft" | "backlog" | "ready"
+        ) {
+        "planned"
     } else {
         current_status
     };

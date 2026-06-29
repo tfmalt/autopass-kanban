@@ -18,13 +18,14 @@ function snapshot(): RepositorySnapshot {
     ...activeStory,
     id: "US-F1-062",
     title: "Next",
+    status: "planned",
     sprint: "S001.next",
   };
   return {
     stories: [activeStory, plannedStory], epics: [],
     sprints: [
-      { name: "S001.next", id: "S001", headline: "next", goal: null, startDate: "2026-06-01", endDate: "2026-06-14", status: "planned", wipLimit: null, storiesByStatus: { todo: [], "in-progress": [plannedStory], "ready-for-qa": [], done: [], blocked: [] } },
-      { name: "S000.start", id: "S000", headline: "start", goal: null, startDate: "2026-05-18", endDate: "2026-05-31", status: "active", wipLimit: null, storiesByStatus: { todo: [], "in-progress": [activeStory], "ready-for-qa": [], done: [], blocked: [] } },
+      { name: "S001.next", id: "S001", headline: "next", goal: null, startDate: "2026-06-01", endDate: "2026-06-14", status: "planned", wipLimit: null, storiesByStatus: { planned: [plannedStory], todo: [], "in-progress": [], "ready-for-qa": [], done: [], blocked: [] } },
+      { name: "S000.start", id: "S000", headline: "start", goal: null, startDate: "2026-05-18", endDate: "2026-05-31", status: "active", wipLimit: null, storiesByStatus: { planned: [], todo: [], "in-progress": [activeStory], "ready-for-qa": [], done: [], blocked: [] } },
     ],
     progress: { donePoints: 0, totalPoints: 10, doneStories: 0, totalStories: 2, phases: [] },
   };

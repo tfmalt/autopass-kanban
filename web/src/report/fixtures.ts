@@ -76,7 +76,7 @@ export function repository(overrides?: Partial<RepositorySnapshot>): RepositoryS
         endDate: "2026-06-14",
         status: "closed",
         wipLimit: null,
-        storiesByStatus: { todo: [], "in-progress": [], "ready-for-qa": [], done: [done], blocked: [] },
+        storiesByStatus: { planned: [], todo: [], "in-progress": [], "ready-for-qa": [], done: [done], blocked: [] },
       },
     ],
     progress: {

@@ -44,6 +44,7 @@ Rules:
 - store `created`, `updated`, `work_started`, and `work_done` as full local ISO 8601 timestamps with numeric timezone offset
 - preserve existing date-only `created` and `updated` values in older phase backlog stories unless there is a real workflow edit that normalizes them
 - `work_started` and `work_done` may be blank when the story is created
+- planning a story into a sprint normally moves it to `planned`; move it to `todo` when it is ready for execution
 - set `work_started` when the story moves to `in-progress` for the first time
 - set `work_done` when the story moves to `done`
 

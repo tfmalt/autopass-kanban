@@ -31,6 +31,7 @@ function statusBadgeStyle(status: string): React.CSSProperties {
     "ready-for-qa": { background: "var(--green-soft)", color: "var(--green)" },
     done: { background: "var(--green-soft)", color: "var(--green)" },
     blocked: { background: "var(--red-soft)", color: "var(--red)" },
+    planned: { background: "var(--surface-2)", color: "var(--text-muted)" },
     todo: { background: "var(--surface-2)", color: "var(--text-muted)" },
   };
   return {

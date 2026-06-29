@@ -18,6 +18,7 @@ pub(crate) fn extract_assignee_name(assignee: &str) -> &str {
 pub(crate) fn status_icon(status: &str) -> &'static str {
     match status {
         "backlog" | "ready" => "·",
+        "planned" => "◌",
         "todo" => "○",
         "in-progress" => "→",
         "ready-for-qa" => "◎",

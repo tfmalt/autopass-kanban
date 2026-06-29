@@ -9,6 +9,7 @@ export const PHASE_META: Record<string, { title: string; milestone: string; peri
 export const STATUS_LABELS: Record<string, string> = {
   draft: "DRAFT",
   ready: "READY",
+  planned: "PLANNED",
   todo: "TODO",
   "in-progress": "IN PROGRESS",
   "ready-for-qa": "READY FOR QA",

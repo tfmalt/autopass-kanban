@@ -165,7 +165,7 @@ pub fn validate_story_with_config(
             story,
             &mut issues,
             "missing-field:assignee",
-            "Stories outside draft/ready/todo must have assignee set.".to_string(),
+            "Stories outside draft/ready/planned/todo must have assignee set.".to_string(),
         );
     }
 
@@ -232,7 +232,10 @@ pub fn validate_repository(repo_root: impl AsRef<Path>) -> Result<ValidationRepo
         issues.extend(validate_story_with_config(story, &features, Some(&config)));
         if let Some(task_file) = &story.task_file
             && !task_file.exists
-            && story.frontmatter.get("status").map(String::as_str) != Some("todo")
+            && !matches!(
+                story.frontmatter.get("status").map(String::as_str),
+                Some("planned" | "todo")
+            )
         {
             add_issue(
                 story,
@@ -452,8 +455,9 @@ pub(crate) fn validate_timestamp_field(
         .map(String::as_str)
         .unwrap_or_default();
     let status = story.frontmatter.get("status").map(String::as_str);
-    let status_allows_null_work_started =
-        field_name == "work_started" && value == "null" && matches!(status, Some("draft" | "todo"));
+    let status_allows_null_work_started = field_name == "work_started"
+        && value == "null"
+        && matches!(status, Some("draft" | "planned" | "todo"));
     let status_allows_null_work_done =
         field_name == "work_done" && value == "null" && !matches!(status, Some("done"));
     if status_allows_null_work_started || status_allows_null_work_done {
@@ -484,7 +488,7 @@ pub(crate) fn validate_timestamp_field(
 pub(crate) fn assignee_required(story: &Story) -> bool {
     !matches!(
         story.frontmatter.get("status").map(String::as_str),
-        Some("draft" | "todo" | "ready")
+        Some("draft" | "ready" | "planned" | "todo")
     )
 }
 
@@ -575,13 +579,13 @@ mod tests {
     }
 
     #[test]
-    fn validate_story_allows_null_work_started_for_draft_and_todo() {
-        for status in ["draft", "todo"] {
+    fn validate_story_allows_null_work_started_for_draft_planned_and_todo() {
+        for status in ["draft", "planned", "todo"] {
             let temp_root = tempdir().unwrap();
             init_temp_repo(temp_root.path());
             let story_path = temp_root
                 .path()
-                .join(format!("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-05{}-null-work-started.md", if status == "draft" { 0 } else { 1 }));
+                .join(format!("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-05-{status}-null-work-started.md"));
 
             fs::create_dir_all(story_path.parent().unwrap()).unwrap();
             fs::write(

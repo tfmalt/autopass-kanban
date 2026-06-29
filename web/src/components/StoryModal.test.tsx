@@ -190,7 +190,7 @@ describe("StoryModal", () => {
     const statusOptions: StoryStatusOption[] = [
       { value: "draft", label: "draft" },
       { value: "ready", label: "ready" },
-      { value: "todo", label: "planned" },
+      { value: "planned", label: "planned" },
     ];
     hooks.useStory.mockReturnValue({
       data: baseDetail({ status: "todo" }),
@@ -203,8 +203,8 @@ describe("StoryModal", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
 
     const status = screen.getByLabelText("Status") as HTMLSelectElement;
-    expect(Array.from(status.options).map((option) => option.textContent)).toEqual(["draft", "ready", "planned"]);
-    expect(Array.from(status.options).map((option) => option.value)).toEqual(["draft", "ready", "todo"]);
+    expect(Array.from(status.options).map((option) => option.textContent)).toEqual(["todo", "draft", "ready", "planned"]);
+    expect(Array.from(status.options).map((option) => option.value)).toEqual(["todo", "draft", "ready", "planned"]);
   });
 
   it("opens a task status picker and updates the selected task", async () => {

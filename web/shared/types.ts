@@ -1,4 +1,5 @@
 export type StoryStatus =
+  | "planned"
   | "todo"
   | "in-progress"
   | "ready-for-qa"
@@ -6,6 +7,7 @@ export type StoryStatus =
   | "blocked";
 
 export const STORY_STATUSES: StoryStatus[] = [
+  "planned",
   "todo",
   "in-progress",
   "ready-for-qa",
@@ -16,6 +18,7 @@ export const STORY_STATUSES: StoryStatus[] = [
 export type StoryLifecycleStatus =
   | "draft"
   | "ready"
+  | "planned"
   | "todo"
   | "in-progress"
   | "ready-for-qa"
@@ -26,6 +29,7 @@ export type StoryLifecycleStatus =
 export const STORY_LIFECYCLE_STATUSES: StoryLifecycleStatus[] = [
   "draft",
   "ready",
+  "planned",
   "todo",
   "in-progress",
   "ready-for-qa",

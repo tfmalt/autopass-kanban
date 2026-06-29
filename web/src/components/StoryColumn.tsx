@@ -4,6 +4,7 @@ import type { Story, StoryStatus } from "@shared/types.js";
 import { StoryCard } from "./StoryCard.js";
 
 const LABEL: Record<StoryStatus, string> = {
+  planned: "Planned",
   todo: "To Do",
   "in-progress": "In Progress",
   "ready-for-qa": "Ready for QA",

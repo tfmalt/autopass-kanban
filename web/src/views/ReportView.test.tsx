@@ -81,7 +81,7 @@ function repository(): RepositorySnapshot {
         endDate: "2026-06-14",
         status: "closed",
         wipLimit: null,
-        storiesByStatus: { todo: [], "in-progress": [], "ready-for-qa": [], done: [done], blocked: [] },
+        storiesByStatus: { planned: [], todo: [], "in-progress": [], "ready-for-qa": [], done: [done], blocked: [] },
       },
     ],
     progress: { donePoints: 5, totalPoints: 13, doneStories: 1, totalStories: 2, phases: [{ phase: "F1", donePoints: 5, totalPoints: 13, doneStories: 1, totalStories: 2 }] },

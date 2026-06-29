@@ -20,8 +20,9 @@ pub(crate) fn render_phase_overview(
     let mut output = String::new();
     let grouped = phase_stories_by_epic(phase);
     let story_count = phase.stories.len();
-    let drafted_points = phase_story_points_for_statuses(phase, &["draft", "ready"]);
-    let planned_points = phase_story_points_for_statuses(phase, &["todo"]);
+    let drafted_points = phase_story_points_for_statuses(phase, &["draft"]);
+    let planned_points =
+        phase_story_points_for_statuses(phase, &["backlog", "ready", "planned", "todo"]);
     let in_progress_points =
         phase_story_points_for_statuses(phase, &["in-progress", "ready-for-qa", "blocked"]);
     let done_points = phase_story_points_for_statuses(phase, &["done"]);

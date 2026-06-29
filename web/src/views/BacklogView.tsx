@@ -25,7 +25,8 @@ const NO_EPIC_GROUP_ID = "(no epic)";
 const BACKLOG_STORY_STATUS_OPTIONS: StoryStatusOption[] = [
   { value: "draft", label: "draft" },
   { value: "ready", label: "ready" },
-  { value: "todo", label: "planned" },
+  { value: "planned", label: "planned" },
+  { value: "todo", label: "todo" },
   { value: "in-progress", label: "in-progress" },
   { value: "ready-for-qa", label: "ready-for-qa" },
   { value: "done", label: "done" },

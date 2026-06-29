@@ -753,6 +753,7 @@ fn format_task_summary(summary: Option<&TaskSummary>) -> String {
 fn status_summary_label(status: &str) -> &'static str {
     match status {
         "backlog" | "ready" => "Ready",
+        "planned" => "Planned",
         "todo" => "Todo",
         "in-progress" => "In progress",
         "ready-for-qa" => "Ready for QA",

@@ -14,15 +14,16 @@ pub(crate) const REQUIRED_STORY_FIELDS: [&str; 10] = [
     "updated",
 ];
 
-pub const CANONICAL_STORY_STATUSES: [&str; 9] = [
+pub const CANONICAL_STORY_STATUSES: [&str; 10] = [
     "draft",
     "backlog",
     "ready",
+    "planned",
     "todo",
     "in-progress",
     "ready-for-qa",
-    "blocked",
     "done",
+    "blocked",
     "dropped",
 ];
 
@@ -47,12 +48,20 @@ pub(crate) const REQUIRED_SPRINT_README_FIELDS: [&str; 6] = [
     "wip_limit",
 ];
 
-pub const SPRINT_STATUS_DISPLAY_ORDER: [&str; 5] =
-    ["todo", "in-progress", "ready-for-qa", "done", "blocked"];
+pub const SPRINT_STATUS_DISPLAY_ORDER: [&str; 6] = [
+    "planned",
+    "todo",
+    "in-progress",
+    "ready-for-qa",
+    "done",
+    "blocked",
+];
 
-pub(crate) const STATUS_PROGRESSION: [&str; 6] = [
+pub(crate) const STATUS_PROGRESSION: [&str; 8] = [
     "draft",
+    "backlog",
     "ready",
+    "planned",
     "todo",
     "in-progress",
     "ready-for-qa",

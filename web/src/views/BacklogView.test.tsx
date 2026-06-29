@@ -30,7 +30,7 @@ function makeStory(overrides: Partial<Story> & Pick<Story, "id" | "title">): Sto
 }
 
 function snapshot(): RepositorySnapshot {
-  const sprintHigh = makeStory({ id: "US-F2-050", title: "Sprint high", epic: "EP-F2-02", sprint: "S001.plan", priority: 10, storyPoints: 5 });
+  const sprintHigh = makeStory({ id: "US-F2-050", title: "Sprint high", epic: "EP-F2-02", sprint: "S001.plan", priority: 10, status: "planned", storyPoints: 5 });
   const sprintLow = makeStory({ id: "US-F2-051", title: "Sprint low", epic: "EP-F2-02", sprint: "S001.plan", priority: 20, status: "in-progress", storyPoints: 2 });
   const epicOneHigh = makeStory({ id: "US-F2-002", title: "Backlog high", epic: "EP-F2-01", priority: 10, storyPoints: 8 });
   const epicOneLow = makeStory({ id: "US-F2-001", title: "Backlog low", epic: "EP-F2-01", priority: 20, storyPoints: 3 });
@@ -54,7 +54,8 @@ function snapshot(): RepositorySnapshot {
       status: "planned",
       wipLimit: null,
       storiesByStatus: {
-        todo: [sprintHigh],
+        planned: [sprintHigh],
+        todo: [],
         "in-progress": [sprintLow],
         "ready-for-qa": [],
         done: [],
@@ -89,6 +90,9 @@ beforeEach(() => {
         sprints: data.sprints.map((sprint) => ({
           ...sprint,
           storiesByStatus: {
+            planned: sprint.storiesByStatus.planned
+              .filter((candidate) => candidate.id !== id)
+              .concat(updatedStory.sprint === sprint.name && updatedStory.status === "planned" ? [updatedStory] : []),
             todo: sprint.storiesByStatus.todo
               .filter((candidate) => candidate.id !== id)
               .concat(updatedStory.sprint === sprint.name && updatedStory.status === "todo" ? [updatedStory] : []),
@@ -164,7 +168,7 @@ beforeEach(() => {
     if (input.includes("/plan")) {
       const id = decodeURIComponent(input.split("/api/stories/")[1]!.split("/plan")[0]!);
       const story = data.stories.find((candidate) => candidate.id === id)!;
-      const plannedStory = { ...story, status: "todo", sprint: "S001.plan" };
+      const plannedStory = { ...story, status: "planned", sprint: "S001.plan" };
       data = {
         ...data,
         stories: data.stories.map((candidate) => candidate.id === id ? plannedStory : candidate),
@@ -174,7 +178,7 @@ beforeEach(() => {
         })),
         sprints: data.sprints.map((sprint) =>
           sprint.name === "S001.plan"
-            ? { ...sprint, storiesByStatus: { ...sprint.storiesByStatus, todo: [...sprint.storiesByStatus.todo.filter((candidate) => candidate.id !== id), plannedStory] } }
+            ? { ...sprint, storiesByStatus: { ...sprint.storiesByStatus, planned: [...sprint.storiesByStatus.planned.filter((candidate) => candidate.id !== id), plannedStory] } }
             : sprint,
         ),
       };

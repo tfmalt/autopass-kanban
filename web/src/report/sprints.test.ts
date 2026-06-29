@@ -28,7 +28,7 @@ describe("buildSprintRows", () => {
           endDate: "2026-06-14",
           status: "planned" as const,
           wipLimit: null,
-          storiesByStatus: { todo: [planned], "in-progress": [], "ready-for-qa": [], done: [done], blocked: [] },
+          storiesByStatus: { planned: [planned], todo: [], "in-progress": [], "ready-for-qa": [], done: [done], blocked: [] },
         },
       ],
     };
@@ -66,7 +66,7 @@ describe("buildSprintRows", () => {
           endDate: "2026-06-14",
           status: "closed",
           wipLimit: null,
-          storiesByStatus: { todo: [], "in-progress": [], "ready-for-qa": [], done: [], blocked: [] },
+          storiesByStatus: { planned: [], todo: [], "in-progress": [], "ready-for-qa": [], done: [], blocked: [] },
         },
       ],
       progress: { donePoints: 0, totalPoints: 9999, doneStories: 0, totalStories: 1, phases: [] },

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const BOARD_STATUSES: [&str; 5] = kanban_core::SPRINT_STATUS_DISPLAY_ORDER;
+pub(crate) const BOARD_STATUSES: [&str; 6] = kanban_core::SPRINT_STATUS_DISPLAY_ORDER;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ApiError {

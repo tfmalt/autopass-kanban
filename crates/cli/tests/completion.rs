@@ -662,6 +662,7 @@ fn zsh_completion_includes_task_status_helper() {
         stdout.contains("_kanban_task_statuses"),
         "zsh completion should define _kanban_task_statuses"
     );
+    assert!(stdout.contains("planned"));
     assert!(stdout.contains("todo"));
     assert!(stdout.contains("in-progress"));
     assert!(stdout.contains("blocked"));
@@ -689,7 +690,7 @@ fn zsh_completion_replaces_story_move_status_with_helper() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     assert!(
-        stdout.contains("':status -- Target status, for example backlog, ready, todo, in-progress, ready-for-qa, done, or blocked.:_kanban_story_statuses'"),
+        stdout.contains("':status -- Target status, for example backlog, ready, planned, todo, in-progress, ready-for-qa, done, or blocked.:_kanban_story_statuses'"),
         "story move status arg should use _kanban_story_statuses"
     );
 }
@@ -843,7 +844,7 @@ fn bash_completion_replaces_remaining_domain_arguments() {
     assert!(stdout.contains("kanban__subcmd__story__subcmd__list"));
     assert!(stdout.contains("--sprint)\n                    COMPREPLY=( $(compgen -W \"$(kanban list-ids sprints 2>/dev/null)\" -- \"${cur}\") )"));
     assert!(stdout.contains(
-        "story_statuses=\"draft backlog ready todo in-progress ready-for-qa blocked done dropped\""
+        "story_statuses=\"draft backlog ready planned todo in-progress ready-for-qa done blocked dropped\""
     ));
     assert!(stdout.contains("resolved_story=$(_kanban_resolve_story_id \"${prev}\")"));
     assert!(stdout.contains("kanban list-task-ids \"${resolved_story}\" 2>/dev/null"));

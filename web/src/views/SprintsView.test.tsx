@@ -8,7 +8,7 @@ import { SprintsView } from "./SprintsView.js";
 function snapshot(): RepositorySnapshot {
   return {
     stories: [], epics: [],
-    sprints: [{ name: "S000.start", id: "S000", headline: "start", goal: "**Important**\n\n- first item\n- second item", startDate: "2026-05-18", endDate: "2026-05-31", status: "active", wipLimit: null, storiesByStatus: { todo: [], "in-progress": [], "ready-for-qa": [], done: [], blocked: [] } }],
+    sprints: [{ name: "S000.start", id: "S000", headline: "start", goal: "**Important**\n\n- first item\n- second item", startDate: "2026-05-18", endDate: "2026-05-31", status: "active", wipLimit: null, storiesByStatus: { planned: [], todo: [], "in-progress": [], "ready-for-qa": [], done: [], blocked: [] } }],
     progress: { donePoints: 0, totalPoints: 0, doneStories: 0, totalStories: 0, phases: [] },
   };
 }

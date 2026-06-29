@@ -34,10 +34,11 @@ export function sortStoriesForEstimates(stories: Story[]): Story[] {
   const statusOrder: Record<string, number> = {
     "in-progress": 0,
     "ready-for-qa": 1,
-    ready: 2,
-    todo: 3,
-    draft: 4,
-    blocked: 5,
+    todo: 2,
+    planned: 3,
+    ready: 4,
+    draft: 5,
+    blocked: 6,
   };
   return [...stories].sort((a, b) =>
     (statusOrder[normalizeStatus(a.status)] ?? 9) - (statusOrder[normalizeStatus(b.status)] ?? 9)

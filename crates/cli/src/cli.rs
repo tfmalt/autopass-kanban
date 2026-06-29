@@ -257,7 +257,7 @@ pub(crate) enum StoryCommand {
         #[arg(help = "Story id to move, for example US-F1-053.")]
         id: String,
         #[arg(
-            help = "Target status, for example backlog, ready, todo, in-progress, ready-for-qa, done, or blocked."
+            help = "Target status, for example backlog, ready, planned, todo, in-progress, ready-for-qa, done, or blocked."
         )]
         status: String,
         #[arg(
@@ -272,7 +272,7 @@ pub(crate) enum StoryCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Plan a backlog story into a sprint. Effect: updates the canonical story frontmatter (status=todo, sprint, activated, updated) and regenerates the sprint story table. Side effects: none beyond those markdown updates."
+        about = "Plan a backlog story into a sprint. Effect: updates the canonical story frontmatter (status=planned, sprint, activated, updated) and regenerates the sprint story table. Side effects: none beyond those markdown updates."
     )]
     Plan {
         #[arg(help = "Backlog story id to plan, for example US-F2-001.")]

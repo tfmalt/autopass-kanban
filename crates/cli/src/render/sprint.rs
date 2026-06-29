@@ -347,6 +347,11 @@ pub(crate) fn push_sprint_header_band(
         .get("ready-for-qa")
         .map(|v| v.len())
         .unwrap_or(0);
+    let planned = sprint
+        .stories_by_status
+        .get("planned")
+        .map(|v| v.len())
+        .unwrap_or(0);
     let todo = sprint
         .stories_by_status
         .get("todo")
@@ -397,6 +402,7 @@ pub(crate) fn push_sprint_header_band(
         (done, "done", Style::Green),
         (in_progress, "in progress", Style::Blue),
         (qa, "in qa", Style::Purple),
+        (planned, "planned", Style::Muted),
         (todo, "todo", Style::Muted),
         (blocked, "blocked", Style::Red),
     ]

@@ -115,6 +115,7 @@ function makeSnapshot(
         status: "active",
         wipLimit: null,
         storiesByStatus: {
+          planned: [],
           todo: [],
           "in-progress": [sprintStory],
           "ready-for-qa": [],
@@ -154,6 +155,7 @@ function makePrioritySnapshot(): RepositorySnapshot {
         status: "active",
         wipLimit: null,
         storiesByStatus: {
+          planned: [],
           todo: [storyA, storyB],
           "in-progress": [],
           "ready-for-qa": [],
@@ -426,14 +428,15 @@ describe("useUnplanStory", () => {
 
     const optimistic = qc.getQueryData<RepositorySnapshot>(["repository"])!;
 
-    // Top-level story: sprint should be null and status should be "todo"
+    // Top-level story: sprint should be null and status should be "ready"
     const topLevel = optimistic.stories.find((s) => s.id === "US-F1-001")!;
     expect(topLevel.sprint).toBeNull();
-    expect(topLevel.status).toBe("todo");
+    expect(topLevel.status).toBe("ready");
 
     // Story should be absent from every sprint bucket
     const sprint = optimistic.sprints[0]!;
     const allBucketIds = [
+      ...sprint.storiesByStatus.planned,
       ...sprint.storiesByStatus.todo,
       ...sprint.storiesByStatus["in-progress"],
       ...sprint.storiesByStatus["ready-for-qa"],
@@ -445,7 +448,7 @@ describe("useUnplanStory", () => {
     // Epic stories should also reflect the change
     const epicStory = optimistic.epics[0]!.stories.find((s) => s.id === "US-F1-001")!;
     expect(epicStory.sprint).toBeNull();
-    expect(epicStory.status).toBe("todo");
+    expect(epicStory.status).toBe("ready");
 
     resolveUpdate();
     await waitFor(() => expect(result.current.isIdle).toBe(true));

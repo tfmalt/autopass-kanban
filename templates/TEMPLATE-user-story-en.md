@@ -144,6 +144,7 @@ alias.
 - `created`, `updated`, `activated`, `work_started`, and `work_done` use full local ISO 8601 timestamps with numeric timezone offset (for example `2026-05-28T14:05:54+0200`)
 - `work_started` stays empty when a story is created
 - set `work_started` the first time the story moves from `todo` to `in-progress`
+- planning a story into a sprint normally moves it to `planned`; move it to `todo` when it is ready for execution
 - preserve `work_started` if the story moves back, is blocked, or carries over to
   a new sprint
 - set `work_done` when the story moves to `done`
