@@ -150,6 +150,26 @@ jobs:
           pattern: kanban-*
           merge-multiple: true
 
+      - name: Verify install script checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/install.sh.sha256 ]; then
+            echo "scripts/install.sh.sha256 is missing." >&2
+            echo "Run: shasum -a 256 scripts/install.sh > scripts/install.sh.sha256" >&2
+            echo "then commit and re-tag before releasing." >&2
+            exit 1
+          fi
+          expected=$(awk '{print $1}' scripts/install.sh.sha256)
+          actual=$(shasum -a 256 scripts/install.sh | awk '{print $1}')
+          if [ "$expected" != "$actual" ]; then
+            echo "scripts/install.sh.sha256 is stale (expected $expected, got $actual)." >&2
+            echo "Run: shasum -a 256 scripts/install.sh > scripts/install.sh.sha256" >&2
+            echo "then commit and re-tag before releasing." >&2
+            exit 1
+          fi
+          echo "install.sh checksum verified: $actual"
+
       - name: Generate checksums
         shell: bash
         run: |
