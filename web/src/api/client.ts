@@ -1,4 +1,4 @@
-import type { ConfigResponse, DashboardMetrics, EpicDetail, RepositorySnapshot, StoryDetail, TeamMember } from "@shared/types.js";
+import type { ConfigResponse, DashboardMetrics, EpicDetail, GitPullResponse, RepositorySnapshot, StoryDetail, TeamMember } from "@shared/types.js";
 
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -84,3 +84,5 @@ export const updateEpicFields = (id: string, fields: { priority: number }) =>
 
 export const updateTaskStatus = (storyId: string, taskId: string, status: string) =>
   patchJson(`/api/stories/${encodeURIComponent(storyId)}/tasks/${encodeURIComponent(taskId)}`, { status });
+
+export const gitPull = () => postJson<GitPullResponse>("/api/git-pull", {});

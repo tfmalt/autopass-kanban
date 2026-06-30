@@ -10,6 +10,7 @@ import {
   fetchRepository,
   fetchStory,
   fetchTeam,
+  gitPull,
   moveStory,
   planStory,
   updateEpicFields,
@@ -24,6 +25,18 @@ type Rankable = { id: string; priority: number | null };
 export const useRepository = () => useQuery({ queryKey: ["repository"], queryFn: fetchRepository });
 export const useMetrics = () => useQuery({ queryKey: ["metrics"], queryFn: fetchMetrics });
 export const useConfig = () => useQuery({ queryKey: ["config"], queryFn: fetchConfig, staleTime: Infinity });
+
+export function useGitPull() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: gitPull,
+    onSuccess: (data) => {
+      if (data.ok) {
+        void queryClient.invalidateQueries();
+      }
+    },
+  });
+}
 
 export function byPriorityThenId<T extends { priority: number | null; id: string }>(items: T[]): T[] {
   return [...items].sort((a, b) => {

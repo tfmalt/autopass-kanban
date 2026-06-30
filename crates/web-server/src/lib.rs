@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 use anyhow::{Context, Result};
 use axum::extract::State;
@@ -25,7 +25,7 @@ mod team;
 
 use dto::ApiError;
 use handlers::{
-    api_config, api_create_sprint, api_epic, api_events, api_metrics, api_move_story,
+    api_config, api_create_sprint, api_epic, api_events, api_git_pull, api_metrics, api_move_story,
     api_plan_story, api_repository, api_story, api_team, api_team_avatar, api_update_epic_fields,
     api_update_sprint, api_update_story_body, api_update_story_fields, api_update_task,
     static_asset,
@@ -51,6 +51,8 @@ struct AppState {
     /// the markdown source of truth (US-013). The core `RepoLock` provides the
     /// cross-process advisory lock; this mutex orders writes within the server.
     write_lock: Arc<Mutex<()>>,
+    /// Guard against concurrent git-pull operations triggered from the web UI.
+    pull_in_progress: Arc<AtomicBool>,
 }
 
 pub fn serve_blocking(options: WebServeOptions) -> Result<()> {
@@ -132,6 +134,7 @@ pub async fn serve(options: WebServeOptions) -> Result<()> {
         sse_subscribers,
         events,
         write_lock: Arc::new(Mutex::new(())),
+        pull_in_progress: Arc::new(AtomicBool::new(false)),
     });
     let app = Router::new()
         .route("/api/repository", get(api_repository))
@@ -151,6 +154,7 @@ pub async fn serve(options: WebServeOptions) -> Result<()> {
         .route("/api/stories/{id}/plan", post(api_plan_story))
         .route("/api/sprints", post(api_create_sprint))
         .route("/api/sprints/{name}", post(api_update_sprint))
+        .route("/api/git-pull", post(api_git_pull))
         .route("/api/events", get(api_events))
         .fallback(static_asset)
         .layer(middleware::from_fn_with_state(state.clone(), csrf_guard))

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchEpic, fetchRepository, moveStory, updateEpicFields, updateStoryFields } from "./client.js";
+import { fetchEpic, fetchRepository, gitPull, moveStory, updateEpicFields, updateStoryFields } from "./client.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -66,6 +66,39 @@ describe("api client", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ priority: 10 }),
       }),
+    );
+  });
+
+  it("gitPull returns success response", async () => {
+    const payload = { ok: true, status: "success", message: "Already up to date.", pulledAt: "2026-06-30T12:00:00Z" };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(payload), { status: 200 })));
+    const result = await gitPull();
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("success");
+  });
+
+  it("gitPull returns error response on non-OK status", async () => {
+    const payload = { ok: false, status: "error", message: "git pull failed: conflict" };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(payload), { status: 200 })));
+    const result = await gitPull();
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("error");
+  });
+
+  it("gitPull throws on HTTP error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "server error" }), { status: 500 })));
+    await expect(gitPull()).rejects.toThrow("server error");
+  });
+
+  it("gitPull POSTs to /api/git-pull", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, status: "success", message: "Already up to date." }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await gitPull();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/git-pull",
+      expect.objectContaining({ method: "POST" }),
     );
   });
 });
