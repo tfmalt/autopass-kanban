@@ -108,3 +108,30 @@ Check that the live repo is mounted at `/repo`:
 ```bash
 docker inspect aup-kanban-web-1 | grep -A3 Mounts
 ```
+
+## Pull latest data button
+
+The header of every page contains a small circular-arrow sync button.
+Clicking it runs `git pull --ff-only` inside the mounted data repository (`/repo` inside the container, or the `repo_root` path resolved from `.kanban/settings.json` when run locally) and refreshes all views with the newest data.
+
+**Repository path**: The server uses the same `repo_root` that `.kanban/settings.json` resolves to — the same path from which all story and sprint files are read.
+
+**Button states**:
+- Neutral: circular-arrow icon in muted grey — ready to sync.
+- Loading: spinning icon — pull in progress.
+- Success: green icon for ~2.5 s, then returns to neutral.
+- Error: red icon; hover or focus to read the failure message in the tooltip.
+
+**Common failure messages**:
+
+| Message | Cause |
+|---|---|
+| `Pull failed: merge conflict` | Local and remote have diverging changes — resolve manually. |
+| `Pull failed: local uncommitted changes would be overwritten` | Stage or stash local edits first. |
+| `Pull failed: authentication error` | SSH key or HTTPS credential not available to the container. |
+| `Pull failed: network error` | No route to the git remote — check DNS and firewall rules. |
+| `Pull failed: the data directory is not a git repository` | The bind mount target is not a git repo. |
+| `Pull failed: no remote tracking branch configured` | The repository has no upstream; run `git branch --set-upstream-to`. |
+| `git pull timed out after 60 seconds` | Network stall — retry or check connectivity. |
+| `A sync is already in progress` | Another pull is running — wait a moment and try again. |
+| `git executable not found` | `git` is not on `PATH` inside the container or host process. |

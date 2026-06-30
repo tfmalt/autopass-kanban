@@ -10,6 +10,20 @@ pub(crate) struct ApiError {
     pub(crate) error: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitPullResponse {
+    pub(crate) ok: bool,
+    pub(crate) status: &'static str,
+    pub(crate) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) stdout: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) stderr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) pulled_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WebTaskSummary {

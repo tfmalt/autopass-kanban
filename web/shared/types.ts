@@ -216,6 +216,15 @@ export interface ConfigResponse {
   };
 }
 
+export interface GitPullResponse {
+  ok: boolean;
+  status: "success" | "error" | "in_progress";
+  message: string;
+  stdout?: string;
+  stderr?: string;
+  pulledAt?: string;
+}
+
 const ASSIGNEE_PLACEHOLDER = /^Name <email@example\.com>$/i;
 
 export function parseAssignees(value: string | string[] | null | undefined): string[] {

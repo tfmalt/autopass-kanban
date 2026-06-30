@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useLiveReload, useConfig, useRepository } from "../api/hooks.js";
+import { GitPullButton } from "./GitPullButton.js";
 import { ProjectProgress } from "./ProjectProgress.js";
 
 export function AppShell() {
@@ -24,6 +25,7 @@ export function AppShell() {
         </nav>
         <span className="spacer" />
         {repo.data && <ProjectProgress progress={repo.data.progress} />}
+        <GitPullButton />
       </header>
       <main>
         <Outlet />

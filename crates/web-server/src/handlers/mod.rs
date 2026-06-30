@@ -2,7 +2,8 @@ use std::convert::Infallible;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::Json;
@@ -460,6 +461,132 @@ pub(crate) async fn static_asset(uri: Uri) -> Response {
             response
         }
         None => (StatusCode::NOT_FOUND, "kanban web assets are not embedded").into_response(),
+    }
+}
+
+const GIT_PULL_TIMEOUT_SECS: u64 = 60;
+
+pub(crate) async fn api_git_pull(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<GitPullResponse>, ApiResponse> {
+    // Prevent concurrent pulls
+    let was_running = state
+        .pull_in_progress
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err();
+    if was_running {
+        return Ok(Json(GitPullResponse {
+            ok: false,
+            status: "in_progress",
+            message: "A sync is already in progress.".to_string(),
+            stdout: None,
+            stderr: None,
+            pulled_at: None,
+        }));
+    }
+
+    let repo_root = state.repo_root.clone();
+    let pull_flag = state.pull_in_progress.clone();
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(GIT_PULL_TIMEOUT_SECS),
+        task::spawn_blocking(move || {
+            std::process::Command::new("git")
+                .args(["-C", &repo_root.to_string_lossy(), "pull", "--ff-only"])
+                .output()
+        }),
+    )
+    .await;
+
+    pull_flag.store(false, Ordering::SeqCst);
+
+    match result {
+        Err(_elapsed) => Ok(Json(GitPullResponse {
+            ok: false,
+            status: "error",
+            message: format!(
+                "git pull timed out after {} seconds.",
+                GIT_PULL_TIMEOUT_SECS
+            ),
+            stdout: None,
+            stderr: None,
+            pulled_at: None,
+        })),
+        Ok(Err(join_err)) => {
+            eprintln!("kanban git-pull task join error: {join_err}");
+            Ok(Json(GitPullResponse {
+                ok: false,
+                status: "error",
+                message: "Internal error running git pull.".to_string(),
+                stdout: None,
+                stderr: None,
+                pulled_at: None,
+            }))
+        }
+        Ok(Ok(Err(io_err))) => {
+            let message = if io_err.kind() == std::io::ErrorKind::NotFound {
+                "git executable not found. Ensure git is installed and on PATH.".to_string()
+            } else {
+                format!("Failed to run git: {io_err}")
+            };
+            Ok(Json(GitPullResponse {
+                ok: false,
+                status: "error",
+                message,
+                stdout: None,
+                stderr: None,
+                pulled_at: None,
+            }))
+        }
+        Ok(Ok(Ok(output))) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            if output.status.success() {
+                let _ = state.events.send(());
+                Ok(Json(GitPullResponse {
+                    ok: true,
+                    status: "success",
+                    message: stdout.trim().to_string(),
+                    stdout: Some(stdout),
+                    stderr: if stderr.trim().is_empty() { None } else { Some(stderr) },
+                    pulled_at: Some(Local::now().to_rfc3339()),
+                }))
+            } else {
+                let combined = format!("{}\n{}", stdout.trim(), stderr.trim())
+                    .trim()
+                    .to_string();
+                let message = classify_git_error(&combined);
+                Ok(Json(GitPullResponse {
+                    ok: false,
+                    status: "error",
+                    message,
+                    stdout: if stdout.trim().is_empty() { None } else { Some(stdout) },
+                    stderr: if stderr.trim().is_empty() { None } else { Some(stderr) },
+                    pulled_at: None,
+                }))
+            }
+        }
+    }
+}
+
+fn classify_git_error(output: &str) -> String {
+    let lower = output.to_lowercase();
+    if lower.contains("conflict") {
+        "Pull failed: merge conflict. Resolve conflicts locally before syncing.".to_string()
+    } else if lower.contains("local changes") || lower.contains("would be overwritten") {
+        "Pull failed: local uncommitted changes would be overwritten. Commit or stash them first.".to_string()
+    } else if lower.contains("authentication") || lower.contains("auth") || lower.contains("403") || lower.contains("401") {
+        "Pull failed: authentication error. Check your credentials.".to_string()
+    } else if lower.contains("could not resolve host") || lower.contains("network") || lower.contains("unable to connect") {
+        "Pull failed: network error. Check your internet connection.".to_string()
+    } else if lower.contains("not a git repository") {
+        "Pull failed: the data directory is not a git repository.".to_string()
+    } else if lower.contains("no remote") || lower.contains("no tracking") || lower.contains("no upstream") {
+        "Pull failed: no remote tracking branch configured.".to_string()
+    } else if output.is_empty() {
+        "git pull failed with no output.".to_string()
+    } else {
+        format!("git pull failed: {}", output.chars().take(200).collect::<String>())
     }
 }
 

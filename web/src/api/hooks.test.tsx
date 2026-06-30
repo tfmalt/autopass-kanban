@@ -23,6 +23,7 @@ vi.mock("./client.js", () => ({
   updateEpicFields: vi.fn(),
   updateStoryFields: vi.fn(),
   updateTaskStatus: vi.fn(),
+  gitPull: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
