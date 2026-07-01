@@ -545,7 +545,7 @@ def build_wbs_sheet(ws, hierarchy: list, estimates: dict,
                             ep_actual_start, ep_actual_end)
             _set_outline_level(ws, epic_row, 1)
 
-            pts_formula = (f"=SUM(H{first_story_row}:H{last_story_row})"
+            pts_formula = (f"=SUM(G{first_story_row}:G{last_story_row})"
                            if last_story_row >= first_story_row else 0)
             ws.cell(epic_row, COL_POINTS).value = pts_formula
             apply_row_style(ws, epic_row, level=3)
@@ -562,7 +562,7 @@ def build_wbs_sheet(ws, hierarchy: list, estimates: dict,
                          ph_actual_start, ph_actual_end)
 
         if epic_rows_this_phase:
-            refs = ",".join(f"H{r}" for r in epic_rows_this_phase)
+            refs = ",".join(f"G{r}" for r in epic_rows_this_phase)
             ws.cell(phase_row, COL_POINTS).value = f"=SUM({refs})"
         else:
             ws.cell(phase_row, COL_POINTS).value = 0

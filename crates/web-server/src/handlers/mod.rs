@@ -2,7 +2,7 @@ use std::convert::Infallible;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -548,7 +548,11 @@ pub(crate) async fn api_git_pull(
                     status: "success",
                     message: stdout.trim().to_string(),
                     stdout: Some(stdout),
-                    stderr: if stderr.trim().is_empty() { None } else { Some(stderr) },
+                    stderr: if stderr.trim().is_empty() {
+                        None
+                    } else {
+                        Some(stderr)
+                    },
                     pulled_at: Some(Local::now().to_rfc3339()),
                 }))
             } else {
@@ -560,8 +564,16 @@ pub(crate) async fn api_git_pull(
                     ok: false,
                     status: "error",
                     message,
-                    stdout: if stdout.trim().is_empty() { None } else { Some(stdout) },
-                    stderr: if stderr.trim().is_empty() { None } else { Some(stderr) },
+                    stdout: if stdout.trim().is_empty() {
+                        None
+                    } else {
+                        Some(stdout)
+                    },
+                    stderr: if stderr.trim().is_empty() {
+                        None
+                    } else {
+                        Some(stderr)
+                    },
                     pulled_at: None,
                 }))
             }
@@ -574,19 +586,33 @@ fn classify_git_error(output: &str) -> String {
     if lower.contains("conflict") {
         "Pull failed: merge conflict. Resolve conflicts locally before syncing.".to_string()
     } else if lower.contains("local changes") || lower.contains("would be overwritten") {
-        "Pull failed: local uncommitted changes would be overwritten. Commit or stash them first.".to_string()
-    } else if lower.contains("authentication") || lower.contains("auth") || lower.contains("403") || lower.contains("401") {
+        "Pull failed: local uncommitted changes would be overwritten. Commit or stash them first."
+            .to_string()
+    } else if lower.contains("authentication")
+        || lower.contains("auth")
+        || lower.contains("403")
+        || lower.contains("401")
+    {
         "Pull failed: authentication error. Check your credentials.".to_string()
-    } else if lower.contains("could not resolve host") || lower.contains("network") || lower.contains("unable to connect") {
+    } else if lower.contains("could not resolve host")
+        || lower.contains("network")
+        || lower.contains("unable to connect")
+    {
         "Pull failed: network error. Check your internet connection.".to_string()
     } else if lower.contains("not a git repository") {
         "Pull failed: the data directory is not a git repository.".to_string()
-    } else if lower.contains("no remote") || lower.contains("no tracking") || lower.contains("no upstream") {
+    } else if lower.contains("no remote")
+        || lower.contains("no tracking")
+        || lower.contains("no upstream")
+    {
         "Pull failed: no remote tracking branch configured.".to_string()
     } else if output.is_empty() {
         "git pull failed with no output.".to_string()
     } else {
-        format!("git pull failed: {}", output.chars().take(200).collect::<String>())
+        format!(
+            "git pull failed: {}",
+            output.chars().take(200).collect::<String>()
+        )
     }
 }
 
@@ -694,6 +720,7 @@ mod tests {
             sse_subscribers: Arc::new(AtomicUsize::new(0)),
             events,
             write_lock: Arc::new(Mutex::new(())),
+            pull_in_progress: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let branch = cached_git_branch(&state)
             .await
@@ -712,6 +739,7 @@ mod tests {
             sse_subscribers: Arc::new(AtomicUsize::new(SSE_SUBSCRIBER_CAP)),
             events,
             write_lock: Arc::new(Mutex::new(())),
+            pull_in_progress: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         });
         let response = api_events(State(state.clone())).await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);

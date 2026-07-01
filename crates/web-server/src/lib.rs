@@ -238,6 +238,7 @@ mod tests {
             sse_subscribers: Arc::new(AtomicUsize::new(0)),
             events,
             write_lock: Arc::new(Mutex::new(())),
+            pull_in_progress: Arc::new(AtomicBool::new(false)),
         })
     }
 
