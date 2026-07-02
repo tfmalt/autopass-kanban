@@ -1,6 +1,6 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { useMemo, type CSSProperties } from "react";
-import { type Story, type StoryStatus, type TeamMember } from "@shared/types.js";
+import type { Story, StoryStatus, TeamMember } from "@shared/generated/api.js";
 import { useTeam } from "../api/hooks.js";
 
 const AVATAR_PALETTE = [

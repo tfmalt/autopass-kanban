@@ -1,4 +1,4 @@
-import type { Story } from "@shared/types.js";
+import type { Story } from "@shared/generated/api.js";
 
 export function StoryDrawer({ story, onClose }: { story: Story; onClose: () => void }) {
   return (

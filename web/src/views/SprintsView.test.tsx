@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { RepositorySnapshot } from "@shared/types.js";
+import type { RepositorySnapshot } from "@shared/generated/api.js";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SprintsView } from "./SprintsView.js";

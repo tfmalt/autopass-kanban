@@ -1,9 +1,26 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { Epic, RepositorySnapshot, Story } from "@shared/types.js";
+import type { Epic, RepositorySnapshot, Story } from "@shared/generated/api.js";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { byPriorityThenId, computePriorityUpdates, useMoveStory, useReorderEpics, useReorderStories, useUnplanStory } from "./hooks.js";
+import {
+  useMoveStory,
+  usePlanStory,
+  useReorderEpics,
+  useReorderStories,
+  useUnplanStory,
+  useUpdateSprint,
+} from "./hooks.js";
+import {
+  applyMoveStorySnapshot,
+  applyPlanStorySnapshot,
+  applyUpdateSprintSnapshot,
+  byPriorityThenId,
+  computePriorityUpdates,
+  moveStoryToBucket,
+  patchStoryEverywhere,
+  removeStoryFromSprints,
+} from "./optimistic.js";
 
 // ---------------------------------------------------------------------------
 // Module mock — must come before any imports that exercise the module under test.
@@ -29,7 +46,7 @@ vi.mock("./client.js", () => ({
 // ---------------------------------------------------------------------------
 // Import mocked functions AFTER vi.mock so we get the mock instances.
 // ---------------------------------------------------------------------------
-import { moveStory, updateEpicFields, updateStoryFields } from "./client.js";
+import { moveStory, planStory, updateEpicFields, updateSprint, updateStoryFields } from "./client.js";
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -80,12 +97,16 @@ function makeStory(overrides: Partial<Story> & Pick<Story, "id" | "status">): St
 }
 
 function makeEpic(overrides: Partial<Epic> & Pick<Epic, "id">): Epic {
-  const { id, title, phase, priority, stories } = overrides;
+  const { id, title, phase, priority, planned_start, planned_end, work_started, work_done, stories } = overrides;
   return {
     id,
     title: title ?? id,
     phase: phase ?? "F1",
     priority: priority ?? null,
+    planned_start: planned_start ?? null,
+    planned_end: planned_end ?? null,
+    work_started: work_started ?? null,
+    work_done: work_done ?? null,
     stories: stories ?? [],
   };
 }
@@ -102,6 +123,10 @@ function makeSnapshot(
         title: "Platform",
         phase: "F1",
         priority: 10,
+        planned_start: null,
+        planned_end: null,
+        work_started: null,
+        work_done: null,
         stories: [sprintStory, backlogStory],
       },
     ],
@@ -276,6 +301,149 @@ describe("byPriorityThenId", () => {
       { id: "c", priority: 10 },
       { id: "b", priority: null },
     ]);
+  });
+});
+
+describe("optimistic snapshot helpers", () => {
+  it("patchStoryEverywhere updates top-level, epic, and sprint story objects", () => {
+    const sprintStory = makeStory({ id: "US-F1-001", status: "in-progress", sprint: "S000.start" });
+    const backlogStory = makeStory({ id: "US-F1-002", status: "todo", sprint: null });
+    const snapshot = makeSnapshot(sprintStory, backlogStory);
+
+    const next = patchStoryEverywhere(snapshot, "US-F1-001", { status: "done", sprint: "S000.start" });
+
+    expect(next.stories.find((story) => story.id === "US-F1-001")?.status).toBe("done");
+    expect(next.epics[0]?.stories.find((story) => story.id === "US-F1-001")?.status).toBe("done");
+    expect(next.sprints[0]?.storiesByStatus["in-progress"][0]?.status).toBe("done");
+  });
+
+  it("removeStoryFromSprints removes only the targeted story from every bucket", () => {
+    const sprintStory = makeStory({ id: "US-F1-001", status: "in-progress", sprint: "S000.start" });
+    const sibling = makeStory({ id: "US-F1-003", status: "todo", sprint: "S000.start" });
+    const snapshot = {
+      ...makeSnapshot(sprintStory, makeStory({ id: "US-F1-002", status: "todo", sprint: null })),
+      sprints: [
+        {
+          ...makeSnapshot(sprintStory, makeStory({ id: "US-F1-002", status: "todo", sprint: null })).sprints[0]!,
+          storiesByStatus: {
+            planned: [],
+            todo: [sibling],
+            "in-progress": [sprintStory],
+            "ready-for-qa": [],
+            done: [],
+            blocked: [],
+          },
+        },
+      ],
+    } satisfies RepositorySnapshot;
+
+    const next = removeStoryFromSprints(snapshot, "US-F1-001");
+
+    expect(next.sprints[0]?.storiesByStatus["in-progress"]).toEqual([]);
+    expect(next.sprints[0]?.storiesByStatus.todo.map((story) => story.id)).toEqual(["US-F1-003"]);
+  });
+
+  it("moveStoryToBucket removes the story from other buckets in the sprint and appends it to the target bucket", () => {
+    const sprintStory = makeStory({ id: "US-F1-001", status: "in-progress", sprint: "S000.start" });
+    const backlogStory = makeStory({ id: "US-F1-002", status: "todo", sprint: null });
+    const snapshot = makeSnapshot(sprintStory, backlogStory);
+    const movedStory = { ...sprintStory, status: "done" };
+
+    const next = moveStoryToBucket(snapshot, "S000.start", "done", movedStory);
+
+    expect(next.sprints[0]?.storiesByStatus["in-progress"]).toEqual([]);
+    expect(next.sprints[0]?.storiesByStatus.done).toEqual([movedStory]);
+  });
+
+  it("applyMoveStorySnapshot preserves existing sprint membership lookup instead of trusting story.sprint", () => {
+    const sprintStory = makeStory({ id: "US-F1-001", status: "in-progress", sprint: null });
+    const backlogStory = makeStory({ id: "US-F1-002", status: "todo", sprint: null });
+    const snapshot = makeSnapshot(sprintStory, backlogStory);
+
+    const next = applyMoveStorySnapshot(snapshot, { id: "US-F1-001", status: "done" });
+
+    expect(next.sprints[0]?.storiesByStatus.done.map((story) => story.id)).toEqual(["US-F1-001"]);
+    expect(next.sprints[0]?.storiesByStatus["in-progress"]).toEqual([]);
+  });
+
+  it("applyPlanStorySnapshot keeps the old sprint buckets untouched while adding to the new sprint todo bucket", () => {
+    const story = makeStory({ id: "US-F1-001", status: "ready", sprint: "S000.start" });
+    const other = makeStory({ id: "US-F1-002", status: "todo", sprint: null });
+    const snapshot: RepositorySnapshot = {
+      ...makeSnapshot(story, other),
+      stories: [story, other],
+      epics: [makeEpic({ id: "EP-F1-01", stories: [story, other] })],
+      sprints: [
+        {
+          ...makeSnapshot(story, other).sprints[0]!,
+          name: "S000.start",
+          storiesByStatus: {
+            planned: [],
+            todo: [],
+            "in-progress": [story],
+            "ready-for-qa": [],
+            done: [],
+            blocked: [],
+          },
+        },
+        {
+          ...makeSnapshot(story, other).sprints[0]!,
+          name: "S001.next",
+          id: "S001",
+          headline: "next",
+          storiesByStatus: {
+            planned: [],
+            todo: [],
+            "in-progress": [],
+            "ready-for-qa": [],
+            done: [],
+            blocked: [],
+          },
+        },
+      ],
+    };
+
+    const next = applyPlanStorySnapshot(snapshot, { id: "US-F1-001", sprint: "S001.next" });
+
+    expect(next.stories.find((candidate) => candidate.id === "US-F1-001")?.sprint).toBe("S001.next");
+    expect(next.sprints[0]?.storiesByStatus["in-progress"].map((candidate) => candidate.id)).toEqual(["US-F1-001"]);
+    expect(next.sprints[1]?.storiesByStatus.todo.map((candidate) => candidate.id)).toEqual(["US-F1-001"]);
+  });
+
+  it("applyUpdateSprintSnapshot renames sprint references in top-level and epic stories only", () => {
+    const sprintStory = makeStory({ id: "US-F1-001", status: "todo", sprint: "S000.start" });
+    const backlogStory = makeStory({ id: "US-F1-002", status: "todo", sprint: null });
+    const snapshot: RepositorySnapshot = {
+      ...makeSnapshot(sprintStory, backlogStory),
+      sprints: [
+        {
+          ...makeSnapshot(sprintStory, backlogStory).sprints[0]!,
+          storiesByStatus: {
+            planned: [],
+            todo: [sprintStory],
+            "in-progress": [],
+            "ready-for-qa": [],
+            done: [],
+            blocked: [],
+          },
+        },
+      ],
+    };
+
+    const next = applyUpdateSprintSnapshot(snapshot, {
+      name: "S000.start",
+      headline: "Renamed Sprint",
+      goal: "Goal",
+      start: "2026-05-20",
+      end: "2026-05-30",
+      status: "active",
+      wipLimit: 3,
+    });
+
+    expect(next.sprints[0]?.name).toBe("S000.renamed-sprint");
+    expect(next.stories.find((story) => story.id === "US-F1-001")?.sprint).toBe("S000.renamed-sprint");
+    expect(next.epics[0]?.stories.find((story) => story.id === "US-F1-001")?.sprint).toBe("S000.renamed-sprint");
+    expect(next.sprints[0]?.storiesByStatus.todo[0]?.sprint).toBe("S000.start");
   });
 });
 
@@ -524,6 +692,51 @@ describe("useUnplanStory", () => {
   });
 });
 
+describe("usePlanStory", () => {
+  let qc: QueryClient;
+  let sprintStory: Story;
+  let backlogStory: Story;
+  let snapshot: RepositorySnapshot;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    qc = makeQueryClient();
+    sprintStory = makeStory({ id: "US-F1-001", status: "ready", sprint: null });
+    backlogStory = makeStory({ id: "US-F1-002", status: "todo", sprint: null });
+    snapshot = makeSnapshot(sprintStory, backlogStory);
+    qc.setQueryData<RepositorySnapshot>(["repository"], snapshot);
+  });
+
+  it("optimistically plans a story into the target sprint todo bucket", async () => {
+    let resolvePlan!: () => void;
+    vi.mocked(planStory).mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolvePlan = resolve;
+      }),
+    );
+
+    const { result } = renderHook(() => usePlanStory(), { wrapper: wrapper(qc) });
+
+    act(() => {
+      result.current.mutate({ id: "US-F1-001", sprint: "S000.start" });
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const optimistic = qc.getQueryData<RepositorySnapshot>(["repository"])!;
+    expect(optimistic.stories.find((story) => story.id === "US-F1-001")).toMatchObject({
+      sprint: "S000.start",
+      status: "todo",
+    });
+    expect(optimistic.sprints[0]?.storiesByStatus.todo.map((story) => story.id)).toContain("US-F1-001");
+
+    resolvePlan();
+    await waitFor(() => expect(result.current.isIdle).toBe(true));
+  });
+});
+
 describe("useReorderStories", () => {
   let qc: QueryClient;
   let snapshot: RepositorySnapshot;
@@ -649,6 +862,76 @@ describe("useReorderEpics", () => {
     expect(optimistic.epics.map((epic) => epic.id)).toEqual(["EP-F1-02", "EP-F1-01"]);
     expect(optimistic.epics.find((epic) => epic.id === "EP-F1-02")?.priority).toBe(5);
     expect(updateEpicFields).toHaveBeenCalledWith("EP-F1-02", { priority: 5 });
+
+    resolveUpdate();
+    await waitFor(() => expect(result.current.isIdle).toBe(true));
+  });
+});
+
+describe("useUpdateSprint", () => {
+  let qc: QueryClient;
+  let snapshot: RepositorySnapshot;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    qc = makeQueryClient();
+    const sprintStory = makeStory({ id: "US-F1-001", status: "todo", sprint: "S000.start" });
+    snapshot = {
+      ...makeSnapshot(sprintStory, makeStory({ id: "US-F1-002", status: "todo", sprint: null })),
+      sprints: [
+        {
+          ...makeSnapshot(sprintStory, makeStory({ id: "US-F1-002", status: "todo", sprint: null })).sprints[0]!,
+          storiesByStatus: {
+            planned: [],
+            todo: [sprintStory],
+            "in-progress": [],
+            "ready-for-qa": [],
+            done: [],
+            blocked: [],
+          },
+        },
+      ],
+    };
+    qc.setQueryData<RepositorySnapshot>(["repository"], snapshot);
+  });
+
+  it("optimistically renames the sprint and rewrites top-level story sprint references", async () => {
+    let resolveUpdate!: () => void;
+    vi.mocked(updateSprint).mockReturnValue(
+      new Promise((resolve) => {
+        resolveUpdate = resolve as () => void;
+      }),
+    );
+
+    const { result } = renderHook(() => useUpdateSprint(), { wrapper: wrapper(qc) });
+
+    act(() => {
+      result.current.mutate({
+        name: "S000.start",
+        headline: "Renamed Sprint",
+        goal: "Goal",
+        start: "2026-05-20",
+        end: "2026-05-30",
+        status: "active",
+        wipLimit: 4,
+      });
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const optimistic = qc.getQueryData<RepositorySnapshot>(["repository"])!;
+    expect(optimistic.sprints[0]).toMatchObject({
+      name: "S000.renamed-sprint",
+      headline: "renamed-sprint",
+      goal: "Goal",
+      startDate: "2026-05-20",
+      endDate: "2026-05-30",
+      status: "active",
+      wipLimit: 4,
+    });
+    expect(optimistic.stories.find((story) => story.id === "US-F1-001")?.sprint).toBe("S000.renamed-sprint");
 
     resolveUpdate();
     await waitFor(() => expect(result.current.isIdle).toBe(true));

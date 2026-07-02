@@ -1,6 +1,6 @@
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import type { Story, StoryStatus } from "@shared/types.js";
+import type { Story, StoryStatus } from "@shared/generated/api.js";
 import { StoryCard } from "./StoryCard.js";
 
 const LABEL: Record<StoryStatus, string> = {

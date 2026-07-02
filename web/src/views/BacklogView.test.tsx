@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { RepositorySnapshot, Story } from "@shared/types.js";
+import type { RepositorySnapshot, Story } from "@shared/generated/api.js";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BacklogView } from "./BacklogView.js";
@@ -40,9 +40,9 @@ function snapshot(): RepositorySnapshot {
   return {
     stories: [epicOneLow, epicTwo, sprintLow, epicOneHigh, sprintHigh, noEpic],
     epics: [
-      { id: "EP-F2-02", title: "Second Epic", phase: "F2", priority: 10, stories: [epicTwo, sprintHigh, sprintLow] },
-      { id: "EP-F2-01", title: "Platform Epic", phase: "F2", priority: 20, stories: [epicOneLow, epicOneHigh] },
-      { id: "EP-F2-03", title: "Empty Epic", phase: "F2", priority: 30, stories: [] },
+      { id: "EP-F2-02", title: "Second Epic", phase: "F2", priority: 10, planned_start: null, planned_end: null, work_started: null, work_done: null, stories: [epicTwo, sprintHigh, sprintLow] },
+      { id: "EP-F2-01", title: "Platform Epic", phase: "F2", priority: 20, planned_start: null, planned_end: null, work_started: null, work_done: null, stories: [epicOneLow, epicOneHigh] },
+      { id: "EP-F2-03", title: "Empty Epic", phase: "F2", priority: 30, planned_start: null, planned_end: null, work_started: null, work_done: null, stories: [] },
     ],
     sprints: [{
       name: "S001.plan",

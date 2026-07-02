@@ -10,7 +10,8 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { arrayMove, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
-import { isBoardStatus, STORY_STATUSES, type Story } from "@shared/types.js";
+import type { Story } from "@shared/generated/api.js";
+import { isBoardStatus, STORY_STATUSES } from "@shared/domain.js";
 import { useMoveStory, useReorderStories, useRepository } from "../api/hooks.js";
 import { StoryCardOverlay } from "../components/StoryCard.js";
 import { StoryColumn } from "../components/StoryColumn.js";

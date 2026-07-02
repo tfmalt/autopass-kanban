@@ -1,4 +1,4 @@
-import type { ProjectProgress as Progress } from "@shared/types.js";
+import type { ProjectProgress as Progress } from "@shared/generated/api.js";
 
 export function ProjectProgress({ progress }: { progress: Progress }) {
   const pct = progress.totalPoints === 0 ? 0 : Math.round((progress.donePoints / progress.totalPoints) * 100);

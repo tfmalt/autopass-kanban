@@ -1,4 +1,4 @@
-import type { DashboardMetrics, RepositorySnapshot, Story } from "@shared/types.js";
+import type { DashboardMetrics, RepositorySnapshot, Story } from "@shared/generated/api.js";
 
 export function story(input: Partial<Story> & Pick<Story, "id" | "title" | "status" | "storyPoints">): Story {
   const {
@@ -65,7 +65,7 @@ export function repository(overrides?: Partial<RepositorySnapshot>): RepositoryS
   });
   return {
     stories: [done, todo],
-    epics: [{ id: "EP-F1-01", title: "Platform", phase: "F1", priority: null, stories: [done, todo] }],
+    epics: [{ id: "EP-F1-01", title: "Platform", phase: "F1", priority: null, planned_start: null, planned_end: null, work_started: null, work_done: null, stories: [done, todo] }],
     sprints: [
       {
         name: "S000.start",

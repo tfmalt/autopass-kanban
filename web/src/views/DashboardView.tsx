@@ -1,7 +1,7 @@
 import {
   Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
-import type { BurnupPoint, DashboardMetrics } from "@shared/types.js";
+import type { BurnupPoint, DashboardMetrics } from "@shared/generated/api.js";
 import { dateToTime, daysBetween, formatDate } from "@shared/dates.js";
 import { useMetrics, useRepository } from "../api/hooks.js";
 import { PhaseBreakdown } from "../components/PhaseBreakdown.js";

@@ -1,5 +1,5 @@
-import type { DashboardMetrics, RepositorySnapshot } from "@shared/types.js";
-import { normalizeStatus } from "@shared/types.js";
+import type { DashboardMetrics, RepositorySnapshot } from "@shared/generated/api.js";
+import { normalizeStatus } from "@shared/domain.js";
 import { addDays, workDaysInclusive } from "@shared/dates.js";
 import { PHASE_META } from "./meta.js";
 import { roundMetric, sumPoints } from "./estimates.js";

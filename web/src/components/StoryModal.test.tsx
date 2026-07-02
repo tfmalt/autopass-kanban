@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { Story, StoryDetail } from "@shared/types.js";
+import type { Story, StoryDetail } from "@shared/generated/api.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StoryModal, type StoryStatusOption } from "./StoryModal.js";
 

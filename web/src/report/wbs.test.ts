@@ -99,8 +99,8 @@ describe("buildWbsRows", () => {
       ...repository(),
       stories: [s1, s2],
       epics: [
-        { id: "EP-F1-01", title: "Platform F1", phase: "F1", priority: null, stories: [s1] },
-        { id: "EP-F2-01", title: "Platform F2", phase: "F2", priority: null, stories: [s2] },
+        { id: "EP-F1-01", title: "Platform F1", phase: "F1", priority: null, planned_start: null, planned_end: null, work_started: null, work_done: null, stories: [s1] },
+        { id: "EP-F2-01", title: "Platform F2", phase: "F2", priority: null, planned_start: null, planned_end: null, work_started: null, work_done: null, stories: [s2] },
       ],
     };
     const m = metrics();

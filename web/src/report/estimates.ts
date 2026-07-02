@@ -1,5 +1,5 @@
-import type { DashboardMetrics, RepositorySnapshot, Story } from "@shared/types.js";
-import { normalizeStatus } from "@shared/types.js";
+import type { DashboardMetrics, RepositorySnapshot, Story } from "@shared/generated/api.js";
+import { normalizeStatus } from "@shared/domain.js";
 import { addWorkingDays, parseDate } from "@shared/dates.js";
 
 export interface Estimate {

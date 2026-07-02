@@ -1,5 +1,5 @@
-import type { RepositorySnapshot, Story } from "@shared/types.js";
-import { normalizeStatus } from "@shared/types.js";
+import type { RepositorySnapshot, Story } from "@shared/generated/api.js";
+import { normalizeStatus } from "@shared/domain.js";
 import { parseDate } from "@shared/dates.js";
 import { PHASE_META, STATUS_LABELS } from "./meta.js";
 import { groupDates, roundMetric, sumPoints } from "./estimates.js";

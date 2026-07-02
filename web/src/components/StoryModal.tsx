@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { STORY_STATUSES, TASK_STATUSES, parseAssignees } from "@shared/types.js";
-import type { Story, TaskStatus } from "@shared/types.js";
+import type { Story, TaskStatus } from "@shared/generated/api.js";
+import { STORY_STATUSES, TASK_STATUSES, parseAssignees } from "@shared/domain.js";
 import { useConfig, useRepository, useTeam } from "../api/hooks.js";
 import { useStory, useUpdateStory, useUpdateStoryFields, useUpdateTaskStatus } from "../api/hooks.js";
 

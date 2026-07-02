@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
-import type { DashboardMetrics, RepositorySnapshot, Story } from "@shared/types.js";
+import type { DashboardMetrics, RepositorySnapshot, Story } from "@shared/generated/api.js";
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import { ReportView } from "./ReportView.js";
@@ -70,7 +70,7 @@ function repository(): RepositorySnapshot {
   });
   return {
     stories: [done, todo],
-    epics: [{ id: "EP-F1-01", title: "Platform", phase: "F1", priority: null, stories: [done, todo] }],
+    epics: [{ id: "EP-F1-01", title: "Platform", phase: "F1", priority: null, planned_start: null, planned_end: null, work_started: null, work_done: null, stories: [done, todo] }],
     sprints: [
       {
         name: "S000.start",

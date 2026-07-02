@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
-import type { DashboardMetrics, RepositorySnapshot, Story } from "@shared/types.js";
+import type { DashboardMetrics, RepositorySnapshot, Story } from "@shared/generated/api.js";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardView } from "./DashboardView.js";
@@ -85,7 +85,7 @@ function repository(): RepositorySnapshot {
   const todo = story({ id: "US-F1-002", title: "Todo", status: "todo", storyPoints: 8 });
   return {
     stories: [done, todo],
-    epics: [{ id: "EP-F1-01", title: "Platform", phase: "F1", priority: null, stories: [done, todo] }],
+    epics: [{ id: "EP-F1-01", title: "Platform", phase: "F1", priority: null, planned_start: null, planned_end: null, work_started: null, work_done: null, stories: [done, todo] }],
     sprints: [],
     progress: { donePoints: 5, totalPoints: 13, doneStories: 1, totalStories: 2, phases: [{ phase: "F1", donePoints: 5, totalPoints: 13, doneStories: 1, totalStories: 2 }] },
   };

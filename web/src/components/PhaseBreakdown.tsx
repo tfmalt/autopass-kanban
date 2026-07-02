@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Epic, PhaseSummary } from "@shared/types.js";
+import type { Epic, PhaseSummary } from "@shared/generated/api.js";
 
 const PHASE_NAMES: Record<string, string> = {
   F1: "Scaffolding",

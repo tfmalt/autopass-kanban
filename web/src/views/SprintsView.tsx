@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import type { Sprint } from "@shared/types.js";
-import { SPRINT_STATUSES } from "@shared/types.js";
+import type { Sprint } from "@shared/generated/api.js";
+import { SPRINT_STATUSES } from "@shared/domain.js";
 import { useCreateSprint, useRepository, useUpdateSprint } from "../api/hooks.js";
 
 function visibleScopePoints(stories: Sprint["storiesByStatus"][keyof Sprint["storiesByStatus"]]): number {

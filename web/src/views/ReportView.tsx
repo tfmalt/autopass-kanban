@@ -1,4 +1,4 @@
-import type { DashboardMetrics } from "@shared/types.js";
+import type { DashboardMetrics } from "@shared/generated/api.js";
 import type { ReactNode } from "react";
 import { useMetrics, useRepository } from "../api/hooks.js";
 import { roundMetric, computeEstimates } from "../report/estimates.js";
