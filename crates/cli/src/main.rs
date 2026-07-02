@@ -1,55 +1,62 @@
 mod cli;
 mod completion;
+mod dispatch;
 mod doctor_cli;
 mod json_out;
 mod layout;
 mod ops;
+mod outcome;
 mod prompt;
 mod render;
 mod self_manage;
 mod theme;
 mod web;
-
-pub(crate) mod prelude {
-    #[allow(unused_imports)]
-    pub(crate) use anyhow::{Context, Result, bail};
-    #[allow(unused_imports)]
-    pub(crate) use chrono::NaiveDate;
-    #[allow(unused_imports)]
-    pub(crate) use clap::{CommandFactory, Parser, ValueEnum};
-    #[allow(unused_imports)]
-    pub(crate) use serde::Serialize;
-    #[allow(unused_imports)]
-    pub(crate) use std::collections::BTreeMap;
-    #[allow(unused_imports)]
-    pub(crate) use std::fs::{self, OpenOptions};
-    #[allow(unused_imports)]
-    pub(crate) use std::io::{ErrorKind, IsTerminal, Read, Seek, SeekFrom, Write};
-    #[allow(unused_imports)]
-    pub(crate) use std::net::TcpListener;
-    #[cfg(unix)]
-    #[allow(unused_imports)]
-    pub(crate) use std::os::unix::process::CommandExt;
-    #[allow(unused_imports)]
-    pub(crate) use std::path::{Path, PathBuf};
-    #[allow(unused_imports)]
-    pub(crate) use std::process::{Command as ProcessCommand, Stdio};
-    #[allow(unused_imports)]
-    pub(crate) use std::thread;
-    #[allow(unused_imports)]
-    pub(crate) use std::time::Duration;
-}
-
-#[allow(unused_imports)]
-use crate::prelude::*;
-#[allow(unused_imports)]
-use crate::{
-    cli::*, completion::*, doctor_cli::*, json_out::*, layout::*, ops::*, prompt::*, render::*,
-    self_manage::*, theme::*, web::*,
-};
+mod web_process;
+use anyhow::{Result, bail};
+use chrono::NaiveDate;
 use clap::{CommandFactory, Parser};
-#[allow(unused_imports)]
-use kanban_core::*;
+use std::path::{Path, PathBuf};
+use std::process::{Command as ProcessCommand, Stdio};
+
+use crate::cli::{
+    Args, COMPLETION_HELP, Command, ConfigCommand, DoctorCommand, EpicCommand, FeatureName,
+    FeaturesCommand, ListIdsKind, OutputFormat, PhaseCommand, ReportCommand, SprintCommand,
+    StoryCommand, TaskCommand, WebCommand, command_repo_root, theme_for_command,
+};
+use crate::completion::{enhance_bash_completion, enhance_zsh_completion};
+use crate::dispatch::execute_shared;
+use crate::doctor_cli::{
+    print_doctor_findings, run_doctor_fix_non_interactive, run_doctor_fix_wizard,
+};
+use crate::json_out::{emit_json, emit_json_git_requirement_error};
+use crate::layout::OutputLayout;
+use crate::ops::{build_create_sprint_input_from_flags, resolve_story_list_scope};
+use crate::outcome::print_human_outcome;
+use crate::prompt::{
+    open_markdown_in_editor, open_story_markdown_in_editor, print_rollover_result,
+    prompt_create_sprint, prompt_with_default, story_frontmatter_update_value,
+};
+use crate::render::common::format_story_points;
+use crate::render::epic::print_epic_details;
+use crate::render::phase::print_phase_overview;
+use crate::render::sprint::{print_sprint_overview, print_sprint_overview_short};
+use crate::render::story::{print_story_details, print_story_list, render_task_list};
+use crate::self_manage::{
+    UninstallOptions, UpgradeOptions, latest_version_if_newer, run_uninstall, run_upgrade,
+};
+use crate::theme::{Style, Theme};
+use crate::web::{print_web_log, print_web_status, start_web, stop_web};
+use kanban_core::{
+    ColorMode, FeaturesConfig, ReportForecastDto, ReportWbsDto, add_task_to_story, create_sprint,
+    delete_story, delete_task_from_story, doctor_repository, find_epic, find_epic_with_source,
+    find_story, get_config_json, get_config_value, init_config_with_features, list_all_stories,
+    list_epic_ids, list_sprint_names, list_story_completion_items, list_story_ids,
+    list_tasks_for_story, load_kanban_config, move_story_to_status_with_assignee,
+    plan_story_into_sprint, read_story_file, rollover_sprint, set_config_value,
+    story_markdown_file, suggested_sprint_dates, summarize_current_sprint, summarize_phase,
+    summarize_sprint, summarize_sprints, sync_sprint_rosters, update_epic_frontmatter,
+    update_story_frontmatter, update_task_in_story, validate_repository,
+};
 
 pub(crate) fn render_styled_output(styled: clap::builder::StyledStr, color: bool) -> String {
     if color {
@@ -199,6 +206,11 @@ fn run() -> Result<()> {
     }
 
     let theme = theme_for_command(&args.command);
+
+    if let Some(result) = execute_shared(&args.command) {
+        print_human_outcome(&theme, result?);
+        return Ok(());
+    }
 
     match args.command {
         Command::Init {
@@ -1054,6 +1066,7 @@ fn ensure_phases_enabled(repo_root: impl AsRef<Path>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::ROOT_HELP_GIT_REQUIREMENT;
 
     #[test]
     fn no_args_output_starts_with_version_line() {

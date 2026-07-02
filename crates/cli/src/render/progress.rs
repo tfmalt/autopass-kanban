@@ -1,12 +1,4 @@
-#[allow(unused_imports)]
-use crate::prelude::*;
-#[allow(unused_imports)]
-use crate::{
-    cli::*, completion::*, doctor_cli::*, json_out::*, layout::*, prompt::*, render::*, theme::*,
-    web::*,
-};
-#[allow(unused_imports)]
-use kanban_core::*;
+use crate::theme::{Style, Theme};
 
 pub(crate) fn render_progress_bar(
     theme: &Theme,
@@ -114,6 +106,7 @@ pub(crate) fn progress_fraction_char(units: usize) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::table::display_width;
 
     #[test]
     fn progress_bar_scales_with_terminal_width() {

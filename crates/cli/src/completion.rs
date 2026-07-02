@@ -1,175 +1,38 @@
-#[allow(unused_imports)]
-use crate::prelude::*;
-#[allow(unused_imports)]
-use crate::{
-    cli::*, doctor_cli::*, json_out::*, layout::*, prompt::*, render::*, theme::*, web::*,
-};
-#[allow(unused_imports)]
-use kanban_core::*;
+use crate::cli::BASH_DATE_PLACEHOLDER;
+use kanban_core::{CANONICAL_STORY_STATUSES, CANONICAL_TASK_STATUSES};
 
-/// ZSH helper functions appended after the clap_complete-generated script.
-/// These provide dynamic completion for config keys/values, sprint names, story IDs,
-/// doctor fix targets, epic IDs, task statuses, story update option values, and phase IDs.
-pub(crate) const ZSH_DYNAMIC_HELPERS: &str = r#"
-_kanban_config_keys() {
-    local -a keys
-    keys=(
-        paths.backlog
-        paths.sprints
-        features.sprints
-        features.epics
-        features.phases
-        theme.color_mode
-        story_points.allowed_values
-        story_points.aliases.XS
-        story_points.aliases.S
-        story_points.aliases.M
-        story_points.aliases.L
-        story_points.aliases.XL
-    )
-    compadd -a keys
+const ZSH_DYNAMIC_SECTIONS: &str = include_str!("completion/dynamic.zsh");
+const BASH_DYNAMIC_SECTIONS: &str = include_str!("completion/dynamic.bash");
+
+fn completion_section(sections: &'static str, name: &str) -> &'static str {
+    let start_marker = format!("__KANBAN_SECTION__{name}__START__");
+    let end_marker = format!("__KANBAN_SECTION__{name}__END__");
+    let start = sections
+        .find(&start_marker)
+        .unwrap_or_else(|| panic!("missing completion section start marker: {name}"))
+        + start_marker.len();
+    let rest = &sections[start..];
+    let end = rest
+        .find(&end_marker)
+        .unwrap_or_else(|| panic!("missing completion section end marker: {name}"));
+    &rest[..end]
 }
-_kanban_config_values() {
-    local key="$words[3]"
-    case "$key" in
-        theme.color_mode)
-            compadd auto always never
-            ;;
-        features.sprints|features.epics|features.phases)
-            compadd true false on off yes no 1 0
-            ;;
-        paths.backlog|paths.sprints)
-            _files -/
-            ;;
-        *)
-            _default
-            ;;
-    esac
+
+fn zsh_section(name: &str) -> &'static str {
+    let section = completion_section(ZSH_DYNAMIC_SECTIONS, name);
+    section.strip_prefix('\n').unwrap_or(section)
 }
-_kanban_sprint_names() {
-    local -a names
-    local name
-    while IFS= read -r name; do
-        [[ -n "$name" ]] && names+=( "$name" )
-    done < <(kanban list-ids sprints 2>/dev/null)
-    compadd -a names
+
+fn bash_section(name: &str) -> &'static str {
+    let section = completion_section(BASH_DYNAMIC_SECTIONS, name);
+    let section = section.strip_prefix('\n').unwrap_or(section);
+    section.strip_suffix('\n').unwrap_or(section)
 }
-_kanban_story_ids() {
-    local -a ids descriptions
-    local id title
-    local needle="$PREFIX"
-    while IFS=$'\t' read -r id title; do
-        [[ -z "$id" ]] && continue
-        if [[ -z "$needle" || "${(L)id}" == *"${(L)needle}"* ]]; then
-            ids+=( "$id" )
-            if [[ -n "$title" ]]; then
-                descriptions+=( "$id -- $title" )
-            else
-                descriptions+=( "$id" )
-            fi
-        fi
-    done < <(kanban list-ids stories-with-titles 2>/dev/null)
-    compadd -U -d descriptions -a ids
+
+fn bash_helper_section(name: &str) -> &'static str {
+    let section = completion_section(BASH_DYNAMIC_SECTIONS, name);
+    section.strip_prefix('\n').unwrap_or(section)
 }
-_kanban_story_or_epic_ids() {
-    local -a ids
-    local id needle="$PREFIX"
-    while IFS= read -r id; do
-        [[ -n "$id" && ( -z "$needle" || "${(L)id}" == *"${(L)needle}"* ) ]] && ids+=( "$id" )
-    done < <(kanban list-ids stories 2>/dev/null)
-    while IFS= read -r id; do
-        [[ -n "$id" && ( -z "$needle" || "${(L)id}" == *"${(L)needle}"* ) ]] && ids+=( "$id" )
-    done < <(kanban list-ids epics 2>/dev/null)
-    compadd -U -a ids
-}
-_kanban_story_types() {
-    compadd user-story epic
-}
-_kanban_story_update_statuses() {
-    local -a statuses
-    statuses=(
-        __KANBAN_STORY_STATUSES__
-    )
-    compadd -a statuses
-}
-_kanban_story_point_values() {
-    local -a values
-    local value
-    while IFS= read -r value; do
-        [[ -n "$value" ]] && values+=( "$value" )
-    done < <(kanban config get story_points.allowed_values 2>/dev/null | tr -d '[]",' | tr '[:space:]' '\n')
-    compadd -a values
-}
-_kanban_resolve_story_id() {
-    local candidate="$1"
-    local id
-    [[ -z "$candidate" ]] && return 1
-    while IFS= read -r id; do
-        if [[ "$id" == "$candidate" ]]; then
-            print -r -- "$id"
-            return 0
-        fi
-    done < <(kanban list-ids stories 2>/dev/null)
-    return 1
-}
-_kanban_phase_ids() {
-    compadd F1 F2 F3 F4 F5 1 2 3 4 5
-}
-_kanban_task_ids_for_story() {
-    local -a ids
-    local id story_id
-    story_id=$(_kanban_resolve_story_id "${words[CURRENT-1]}")
-    [[ -z "$story_id" ]] && return 0
-    while IFS= read -r id; do
-        [[ -n "$id" ]] && ids+=( "$id" )
-    done < <(kanban list-task-ids "$story_id" 2>/dev/null)
-    compadd -a ids
-}
-_kanban_doctor_fix_targets() {
-    local -a ids descriptions
-    local id title
-    ids=( current )
-    descriptions=( "current -- current active sprint" )
-    while IFS=$'\t' read -r id title; do
-        [[ -z "$id" ]] && continue
-        ids+=( "$id" )
-        if [[ -n "$title" ]]; then
-            descriptions+=( "$id -- $title" )
-        else
-            descriptions+=( "$id" )
-        fi
-    done < <(kanban list-ids stories-with-titles 2>/dev/null)
-    compadd -U -d descriptions -a ids
-}
-_kanban_doctor_command_or_repo_root() {
-    _alternative \
-        'command:doctor command:(show fix help)' \
-        'repo-root:repository root:_files -/'
-}
-_kanban_epic_ids() {
-    local -a ids
-    local id
-    local needle="$PREFIX"
-    while IFS= read -r id; do
-        [[ -n "$id" && ( -z "$needle" || "${(L)id}" == *"${(L)needle}"* ) ]] && ids+=( "$id" )
-    done < <(kanban list-ids epics 2>/dev/null)
-    compadd -U -a ids
-}
-_kanban_task_statuses() {
-    local -a statuses
-    statuses=(
-        __KANBAN_TASK_STATUSES__
-    )
-    compadd -a statuses
-}
-_kanban_story_statuses() {
-    local -a statuses
-    statuses=(
-        __KANBAN_STORY_STATUSES__
-    )
-    compadd -a statuses
-}
-"#;
 
 /// Enhance the zsh completion script by replacing `_default` completions for
 /// sprint name, story/epic ID, story update options, task status, and doctor
@@ -450,19 +313,14 @@ pub(crate) fn enhance_zsh_completion(script: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let zsh_helpers = ZSH_DYNAMIC_HELPERS
+    let zsh_helpers = zsh_section("ZSH_DYNAMIC_HELPERS")
         .replace("__KANBAN_STORY_STATUSES__", &story_status_lines)
         .replace("__KANBAN_TASK_STATUSES__", &task_status_lines);
-    format!("{enhanced}{zsh_helpers}{ZSH_KB_ALIAS_REGISTRATION}")
+    format!(
+        "{enhanced}{zsh_helpers}{}",
+        zsh_section("ZSH_KB_ALIAS_REGISTRATION")
+    )
 }
-
-/// Register the documented `kb` alias for the same completion function as `kanban`.
-/// Appended after the clap_complete-generated `compdef _kanban kanban` registration.
-pub(crate) const ZSH_KB_ALIAS_REGISTRATION: &str = r#"
-if [ "$funcstack[1]" != "_kanban" ]; then
-    compdef _kanban kb
-fi
-"#;
 
 /// Inject dynamic completion into a single bash case block identified by its label and opts string.
 /// Inserts a story/sprint lookup BEFORE the standard opts fallback at the given word position.
@@ -508,89 +366,17 @@ pub(crate) fn replace_bash_case_block(script: &str, label: &str, replacement: &s
 }
 
 pub(crate) fn inject_bash_phase_show(script: &str) -> String {
-    let replacement = r#"        kanban__subcmd__phase__subcmd__show)
-            opts="-h --format --help <PHASE> [REPO_ROOT]"
-            phases="F1 F2 F3 F4 F5 1 2 3 4 5"
-            if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                COMPREPLY=( $(compgen -W "${phases}" -- "${cur}") )
-                return 0
-            fi
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-"#;
+    let replacement = bash_section("INJECT_BASH_PHASE_SHOW_REPLACEMENT");
     replace_bash_case_block(script, "kanban__subcmd__phase__subcmd__show", replacement)
 }
 
 pub(crate) fn inject_bash_story_list(script: &str) -> String {
-    let replacement = r#"        kanban__subcmd__story__subcmd__list)
-            opts="-h --current --all --next --sprint --format --help [REPO_ROOT]"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --sprint)
-                    COMPREPLY=( $(compgen -W "$(kanban list-ids sprints 2>/dev/null)" -- "${cur}") )
-                    return 0
-                    ;;
-                --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-"#;
+    let replacement = bash_section("INJECT_BASH_STORY_LIST_REPLACEMENT");
     replace_bash_case_block(script, "kanban__subcmd__story__subcmd__list", replacement)
 }
 
 pub(crate) fn inject_bash_list_task_ids(script: &str) -> String {
-    let replacement = r#"        kanban__subcmd__list__subcmd__task__subcmd__ids)
-            opts="-h --format --help <STORY_ID> [REPO_ROOT]"
-            if [[ ${COMP_CWORD} -eq 2 && ${cur} != -* ]] ; then
-                local -a matches=()
-                local id
-                while IFS= read -r id; do
-                    [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                done < <(kanban list-ids stories 2>/dev/null)
-                COMPREPLY=( "${matches[@]}" )
-                return 0
-            fi
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-"#;
+    let replacement = bash_section("INJECT_BASH_LIST_TASK_IDS_REPLACEMENT");
     replace_bash_case_block(
         script,
         "kanban__subcmd__list__subcmd__task__subcmd__ids",
@@ -599,49 +385,8 @@ pub(crate) fn inject_bash_list_task_ids(script: &str) -> String {
 }
 
 pub(crate) fn inject_bash_doctor_fix_target(script: &str) -> String {
-    let old = r#"        kanban__subcmd__doctor__subcmd__fix)
-            opts="-h --non-interactive --format --help [TARGET] [REPO_ROOT]"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0"#;
-    let new = r#"        kanban__subcmd__doctor__subcmd__fix)
-            opts="-h --non-interactive --format --help [TARGET] [REPO_ROOT]"
-            if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                local -a matches=( current )
-                local id
-                while IFS= read -r id; do
-                    [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                done < <(kanban list-ids stories 2>/dev/null)
-                COMPREPLY=( "${matches[@]}" )
-                return 0
-            fi
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0"#;
+    let old = bash_section("INJECT_BASH_DOCTOR_FIX_TARGET_OLD");
+    let new = bash_section("INJECT_BASH_DOCTOR_FIX_TARGET_NEW");
     if script.contains(old) {
         script.replacen(old, new, 1)
     } else {
@@ -650,41 +395,8 @@ pub(crate) fn inject_bash_doctor_fix_target(script: &str) -> String {
 }
 
 pub(crate) fn inject_bash_doctor_command_or_repo_root(script: &str) -> String {
-    let old = r#"        kanban__subcmd__doctor)
-            opts="-h --format --help show fix help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0"#;
-    let new = r#"        kanban__subcmd__doctor)
-            opts="-h --format --help show fix help"
-            doctor_commands="show fix help"
-            if [[ ${COMP_CWORD} -eq 2 && ${cur} != -* ]] ; then
-                COMPREPLY=( $(compgen -W "${doctor_commands}" -- "${cur}") $(compgen -d -- "${cur}") )
-                return 0
-            fi
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0"#;
+    let old = bash_section("INJECT_BASH_DOCTOR_COMMAND_OR_REPO_ROOT_OLD");
+    let new = bash_section("INJECT_BASH_DOCTOR_COMMAND_OR_REPO_ROOT_NEW");
     if script.contains(old) {
         script.replacen(old, new, 1)
     } else {
@@ -693,41 +405,8 @@ pub(crate) fn inject_bash_doctor_command_or_repo_root(script: &str) -> String {
 }
 
 pub(crate) fn inject_bash_config_get(script: &str) -> String {
-    let old = r#"        kanban__subcmd__config__subcmd__get)
-            opts="-h --format --help <KEY> [REPO_ROOT]"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0"#;
-    let new = r#"        kanban__subcmd__config__subcmd__get)
-            opts="-h --format --help <KEY> [REPO_ROOT]"
-            config_keys="paths.backlog paths.sprints features.sprints features.epics features.phases theme.color_mode story_points.allowed_values story_points.aliases.XS story_points.aliases.S story_points.aliases.M story_points.aliases.L story_points.aliases.XL"
-            if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                COMPREPLY=( $(compgen -W "${config_keys}" -- "${cur}") )
-                return 0
-            fi
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0"#;
+    let old = bash_section("INJECT_BASH_CONFIG_GET_OLD");
+    let new = bash_section("INJECT_BASH_CONFIG_GET_NEW");
     if script.contains(old) {
         script.replacen(old, new, 1)
     } else {
@@ -736,59 +415,8 @@ pub(crate) fn inject_bash_config_get(script: &str) -> String {
 }
 
 pub(crate) fn inject_bash_config_set(script: &str) -> String {
-    let old = r#"        kanban__subcmd__config__subcmd__set)
-            opts="-h --format --help <KEY> <VALUE> [REPO_ROOT]"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0"#;
-    let new = r#"        kanban__subcmd__config__subcmd__set)
-            opts="-h --format --help <KEY> <VALUE> [REPO_ROOT]"
-            config_keys="paths.backlog paths.sprints features.sprints features.epics features.phases theme.color_mode story_points.allowed_values story_points.aliases.XS story_points.aliases.S story_points.aliases.M story_points.aliases.L story_points.aliases.XL"
-            color_modes="auto always never"
-            feature_flags="true false on off yes no 1 0"
-            if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                COMPREPLY=( $(compgen -W "${config_keys}" -- "${cur}") )
-                return 0
-            fi
-            if [[ ${COMP_CWORD} -eq 4 && ${cur} != -* ]] ; then
-                case "${prev}" in
-                    theme.color_mode)
-                        COMPREPLY=( $(compgen -W "${color_modes}" -- "${cur}") )
-                        return 0
-                        ;;
-                    features.sprints|features.epics|features.phases)
-                        COMPREPLY=( $(compgen -W "${feature_flags}" -- "${cur}") )
-                        return 0
-                        ;;
-                    paths.backlog|paths.sprints)
-                        COMPREPLY=( $(compgen -d -- "${cur}") )
-                        return 0
-                        ;;
-                esac
-            fi
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0"#;
+    let old = bash_section("INJECT_BASH_CONFIG_SET_OLD");
+    let new = bash_section("INJECT_BASH_CONFIG_SET_NEW");
     if script.contains(old) {
         script.replacen(old, new, 1)
     } else {
@@ -797,71 +425,9 @@ pub(crate) fn inject_bash_config_set(script: &str) -> String {
 }
 
 pub(crate) fn inject_bash_sprint_create(script: &str) -> String {
-    let old = r#"        kanban__subcmd__sprint__subcmd__create)
-            opts="-h --number --headline --start --end --non-interactive --format --help [REPO_ROOT]"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --number)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --headline)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --start)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --end)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0"#;
-    let new = format!(
-        r#"        kanban__subcmd__sprint__subcmd__create)
-            opts="-h --number --headline --start --end --non-interactive --format --help [REPO_ROOT]"
-            if [[ ${{cur}} == -* || ${{COMP_CWORD}} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${{opts}}" -- "${{cur}}") )
-                return 0
-            fi
-            case "${{prev}}" in
-                --number)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --headline)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --start)
-                    COMPREPLY=( $(compgen -W "{date_placeholder}" -- "${{cur}}") )
-                    return 0
-                    ;;
-                --end)
-                    COMPREPLY=( $(compgen -W "{date_placeholder}" -- "${{cur}}") )
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${{opts}}" -- "${{cur}}") )
-            return 0"#,
-        date_placeholder = BASH_DATE_PLACEHOLDER,
-    );
+    let old = bash_section("INJECT_BASH_SPRINT_CREATE_OLD");
+    let new = bash_section("INJECT_BASH_SPRINT_CREATE_NEW")
+        .replace("__KANBAN_DATE_PLACEHOLDER__", BASH_DATE_PLACEHOLDER);
     if script.contains(old) {
         script.replacen(old, &new, 1)
     } else {
@@ -870,48 +436,8 @@ pub(crate) fn inject_bash_sprint_create(script: &str) -> String {
 }
 
 pub(crate) fn inject_bash_web_log(script: &str) -> String {
-    let old = r#"        kanban__subcmd__web__subcmd__log)
-            opts="-f -h --lines --follow --format --help [REPO_ROOT]"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --lines)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0"#;
-    let new = r#"        kanban__subcmd__web__subcmd__log)
-            opts="-f -h --lines --follow --format --help [REPO_ROOT]"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --lines)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0"#;
+    let old = bash_section("INJECT_BASH_WEB_LOG_OLD");
+    let new = bash_section("INJECT_BASH_WEB_LOG_NEW");
     if script.contains(old) {
         script.replacen(old, new, 1)
     } else {
@@ -920,229 +446,33 @@ pub(crate) fn inject_bash_web_log(script: &str) -> String {
 }
 
 pub(crate) fn inject_bash_story_plan(script: &str) -> String {
-    let replacement = r#"        kanban__subcmd__story__subcmd__plan)
-             opts="-h --sprint --format --help <ID> [REPO_ROOT]"
-              if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                  local -a matches=()
-                  local id
-                  while IFS= read -r id; do
-                      [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                  done < <(kanban list-ids stories 2>/dev/null)
-                  COMPREPLY=( "${matches[@]}" )
-                  return 0
-              fi
-             case "${prev}" in
-                 --sprint)
-                     COMPREPLY=( $(compgen -W "$(kanban list-ids sprints 2>/dev/null)" -- "${cur}") )
-                     return 0
-                     ;;
-                 --format)
-                     COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                     return 0
-                     ;;
-                 *)
-                     COMPREPLY=()
-                     ;;
-             esac
-             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-             return 0
-             ;;
-"#;
+    let replacement = bash_section("INJECT_BASH_STORY_PLAN_REPLACEMENT");
     replace_bash_case_block(script, "kanban__subcmd__story__subcmd__plan", replacement)
 }
 
 pub(crate) fn inject_bash_story_move_status(script: &str) -> String {
     let story_statuses = CANONICAL_STORY_STATUSES.join(" ");
-    let replacement = r#"        kanban__subcmd__story__subcmd__move)
-             opts="-a -h --assignee --format --help <ID> <STATUS> [REPO_ROOT]"
-             story_statuses="__KANBAN_STORY_STATUSES__"
-              if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                  local -a matches=()
-                  local id
-                  while IFS= read -r id; do
-                      [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                  done < <(kanban list-ids stories 2>/dev/null)
-                  COMPREPLY=( "${matches[@]}" )
-                  return 0
-              fi
-             if [[ ${COMP_CWORD} -eq 4 && ${cur} != -* ]] ; then
-                 COMPREPLY=( $(compgen -W "${story_statuses}" -- "${cur}") )
-                 return 0
-             fi
-             case "${prev}" in
-                 --assignee)
-                     COMPREPLY=()
-                     return 0
-                     ;;
-                 -a)
-                     COMPREPLY=()
-                     return 0
-                     ;;
-                 --format)
-                     COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                     return 0
-                     ;;
-                 *)
-                     COMPREPLY=()
-                     ;;
-             esac
-             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-             return 0
-             ;;
-"#;
+    let replacement = bash_section("INJECT_BASH_STORY_MOVE_STATUS_REPLACEMENT");
     let replacement = replacement.replace("__KANBAN_STORY_STATUSES__", &story_statuses);
     replace_bash_case_block(script, "kanban__subcmd__story__subcmd__move", &replacement)
 }
 
 pub(crate) fn inject_bash_task_add_status(script: &str) -> String {
     let task_statuses = CANONICAL_TASK_STATUSES.join(" ");
-    let replacement = r#"        kanban__subcmd__task__subcmd__add)
-             opts="-h --title --status --tags --description --format --help <STORY_ID> [REPO_ROOT]"
-             task_statuses="__KANBAN_TASK_STATUSES__"
-              if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                  local -a matches=()
-                  local id
-                  while IFS= read -r id; do
-                      [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                  done < <(kanban list-ids stories 2>/dev/null)
-                  COMPREPLY=( "${matches[@]}" )
-                  return 0
-              fi
-             case "${prev}" in
-                 --title)
-                     COMPREPLY=()
-                     return 0
-                     ;;
-                 --status)
-                     COMPREPLY=( $(compgen -W "${task_statuses}" -- "${cur}") )
-                     return 0
-                     ;;
-                 --tags)
-                     COMPREPLY=()
-                     return 0
-                     ;;
-                 --description)
-                     COMPREPLY=()
-                     return 0
-                     ;;
-                 --format)
-                     COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                     return 0
-                     ;;
-                 *)
-                     COMPREPLY=()
-                     ;;
-             esac
-             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-             return 0
-             ;;
-"#;
+    let replacement = bash_section("INJECT_BASH_TASK_ADD_STATUS_REPLACEMENT");
     let replacement = replacement.replace("__KANBAN_TASK_STATUSES__", &task_statuses);
     replace_bash_case_block(script, "kanban__subcmd__task__subcmd__add", &replacement)
 }
 
 pub(crate) fn inject_bash_task_update_status(script: &str) -> String {
     let task_statuses = CANONICAL_TASK_STATUSES.join(" ");
-    let replacement = r#"        kanban__subcmd__task__subcmd__update)
-             opts="-h --title --status --tags --description --format --help <STORY_ID> <TASK_ID> [REPO_ROOT]"
-             task_statuses="__KANBAN_TASK_STATUSES__"
-              if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                  local -a matches=()
-                  local id
-                  while IFS= read -r id; do
-                      [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                  done < <(kanban list-ids stories 2>/dev/null)
-                   COMPREPLY=( "${matches[@]}" )
-                   return 0
-               fi
-               if [[ ${COMP_CWORD} -eq 4 && ${cur} != -* ]] ; then
-                   local resolved_story
-                   resolved_story=$(_kanban_resolve_story_id "${prev}")
-                   if [[ -n "${resolved_story}" ]] ; then
-                       local -a matches=()
-                       local id
-                       while IFS= read -r id; do
-                           [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                       done < <(kanban list-task-ids "${resolved_story}" 2>/dev/null)
-                       COMPREPLY=( "${matches[@]}" )
-                   else
-                       COMPREPLY=()
-                   fi
-                   return 0
-               fi
-             case "${prev}" in
-                  --title)
-                      COMPREPLY=()
-                     return 0
-                     ;;
-                 --status)
-                     COMPREPLY=( $(compgen -W "${task_statuses}" -- "${cur}") )
-                     return 0
-                     ;;
-                 --tags)
-                     COMPREPLY=()
-                     return 0
-                     ;;
-                 --description)
-                     COMPREPLY=()
-                     return 0
-                     ;;
-                 --format)
-                     COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                     return 0
-                     ;;
-                 *)
-                     COMPREPLY=()
-                     ;;
-             esac
-             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-             return 0
-             ;;
-"#;
+    let replacement = bash_section("INJECT_BASH_TASK_UPDATE_STATUS_REPLACEMENT");
     let replacement = replacement.replace("__KANBAN_TASK_STATUSES__", &task_statuses);
     replace_bash_case_block(script, "kanban__subcmd__task__subcmd__update", &replacement)
 }
 
 pub(crate) fn inject_bash_task_delete(script: &str) -> String {
-    let replacement = r#"        kanban__subcmd__task__subcmd__delete)
-             opts="-h --format --help <STORY_ID> <TASK_ID> [REPO_ROOT]"
-              if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                  local -a matches=()
-                  local id
-                  while IFS= read -r id; do
-                      [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                  done < <(kanban list-ids stories 2>/dev/null)
-                  COMPREPLY=( "${matches[@]}" )
-                  return 0
-              fi
-              if [[ ${COMP_CWORD} -eq 4 && ${cur} != -* ]] ; then
-                  local resolved_story
-                  resolved_story=$(_kanban_resolve_story_id "${prev}")
-                  if [[ -n "${resolved_story}" ]] ; then
-                      local -a matches=()
-                      local id
-                      while IFS= read -r id; do
-                          [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                      done < <(kanban list-task-ids "${resolved_story}" 2>/dev/null)
-                      COMPREPLY=( "${matches[@]}" )
-                  else
-                      COMPREPLY=()
-                  fi
-                  return 0
-              fi
-             case "${prev}" in
-                 --format)
-                     COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                     return 0
-                     ;;
-                 *)
-                     COMPREPLY=()
-                     ;;
-             esac
-             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-             return 0
-             ;;
-"#;
+    let replacement = bash_section("INJECT_BASH_TASK_DELETE_REPLACEMENT");
     replace_bash_case_block(script, "kanban__subcmd__task__subcmd__delete", replacement)
 }
 
@@ -1218,34 +548,6 @@ pub(crate) fn enhance_bash_completion(script: &str) -> String {
     append_bash_kb_alias(&script)
 }
 
-/// Shared bash helper appended to the completion script. Returns success when
-/// `$1` contains `$2` as a case-insensitive substring (empty needle matches all).
-/// Uses `tr` so it works on bash 3.2 (the macOS system bash) as well as bash 4+.
-pub(crate) const BASH_CI_MATCH_HELPER: &str = r#"
-# Case-insensitive substring match used by kanban dynamic ID completions.
-_kanban_ci_match() {
-    local hay needle
-    needle="$2"
-    [[ -z "$needle" ]] && return 0
-    hay=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
-    needle=$(printf '%s' "$needle" | tr '[:upper:]' '[:lower:]')
-    [[ "$hay" == *"$needle"* ]]
-}
-"#;
-
-pub(crate) const BASH_RESOLVE_STORY_ID_HELPER: &str = r#"
-# Resolve a task's parent story only when it matches a real story ID exactly.
-_kanban_resolve_story_id() {
-    local candidate id
-    candidate="$1"
-    [[ -z "$candidate" ]] && return 1
-    while IFS= read -r id; do
-        [[ "$id" == "$candidate" ]] && printf '%s\n' "$id" && return 0
-    done < <(kanban list-ids stories 2>/dev/null)
-    return 1
-}
-"#;
-
 /// Rewrite the prefix/substring ID match used by the injected dynamic loops so
 /// it matches case-insensitively. The matched idiom is identical across every
 /// injected story/epic/task lookup, so a single replacement covers them all.
@@ -1258,19 +560,17 @@ pub(crate) fn make_bash_id_matches_case_insensitive(script: &str) -> String {
 
 /// Append the shared case-insensitive match helper to the bash script.
 pub(crate) fn append_bash_ci_helper(script: &str) -> String {
-    format!("{script}{BASH_CI_MATCH_HELPER}{BASH_RESOLVE_STORY_ID_HELPER}")
+    format!(
+        "{script}{}{}",
+        bash_helper_section("BASH_CI_MATCH_HELPER"),
+        bash_helper_section("BASH_RESOLVE_STORY_ID_HELPER")
+    )
 }
 
 /// Register the documented `kb` alias for the same completion function as
 /// `kanban`, mirroring clap_complete's bash-version-aware `complete` call.
 pub(crate) fn append_bash_kb_alias(script: &str) -> String {
-    let registration = r#"
-if [[ "${BASH_VERSINFO[0]}" -eq 4 && "${BASH_VERSINFO[1]}" -ge 4 || "${BASH_VERSINFO[0]}" -gt 4 ]]; then
-    complete -F _kanban -o nosort -o bashdefault -o default kb
-else
-    complete -F _kanban -o bashdefault -o default kb
-fi
-"#;
+    let registration = bash_helper_section("APPEND_BASH_KB_ALIAS_REGISTRATION");
     format!("{script}{registration}")
 }
 
@@ -1278,172 +578,6 @@ fi
 pub(crate) fn inject_bash_story_update(_script: &str) -> String {
     String::new()
 }
-
-/*
-        kanban__subcmd__story__subcmd__update)
-            opts="-h --id --type --status --epic --sprint --story-points --assignee --activated --work-started --work-done --created --updated --task-file --format --help <ID> [REPO_ROOT]"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --id)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --type)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --status)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --epic)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --sprint)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --story-points)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --assignee)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --activated)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --work-started)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --work-done)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --created)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --updated)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --task-file)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0"#;
-    let new = r#"        kanban__subcmd__story__subcmd__update)
-            opts="-h --id --type --status --epic --sprint --story-points --assignee --activated --work-started --work-done --created --updated --task-file --format --help <ID> [REPO_ROOT]"
-            if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                local -a matches=()
-                local id
-                while IFS= read -r id; do
-                    [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                done < <(kanban list-ids stories 2>/dev/null)
-                while IFS= read -r id; do
-                    [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                done < <(kanban list-ids epics 2>/dev/null)
-                COMPREPLY=( "${matches[@]}" )
-                return 0
-            fi
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --id)
-                    local -a matches=()
-                    local id
-                    while IFS= read -r id; do
-                        [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                    done < <(kanban list-ids stories 2>/dev/null)
-                    while IFS= read -r id; do
-                        [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                    done < <(kanban list-ids epics 2>/dev/null)
-                    COMPREPLY=( "${matches[@]}" )
-                    return 0
-                    ;;
-                --type)
-                    COMPREPLY=( $(compgen -W "user-story epic" -- "${cur}") )
-                    return 0
-                    ;;
-                --status)
-                    COMPREPLY=( $(compgen -W "draft backlog ready planned todo in-progress ready-for-qa done blocked dropped" -- "${cur}") )
-                    return 0
-                    ;;
-                --epic)
-                    local -a matches=()
-                    local id
-                    while IFS= read -r id; do
-                        [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                    done < <(kanban list-ids epics 2>/dev/null)
-                    COMPREPLY=( "${matches[@]}" )
-                    return 0
-                    ;;
-                --sprint)
-                    COMPREPLY=( $(compgen -W "$(kanban list-ids sprints 2>/dev/null)" -- "${cur}") )
-                    return 0
-                    ;;
-                --story-points)
-                    COMPREPLY=( $(compgen -W "$(kanban config get story_points.allowed_values 2>/dev/null | tr -d '[]",' | tr '[:space:]' ' ')" -- "${cur}") )
-                    return 0
-                    ;;
-                --assignee)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --activated)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --work-started)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --work-done)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --created)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --updated)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --task-file)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0"#;
-*/
 
 pub(crate) fn inject_bash_story_update_dynamic(script: &str) -> String {
     let start_marker = "        kanban__subcmd__story__subcmd__update)\n";
@@ -1458,102 +592,7 @@ pub(crate) fn inject_bash_story_update_dynamic(script: &str) -> String {
         return script.to_string();
     };
 
-    let replacement = r#"        kanban__subcmd__story__subcmd__update)
-            opts="-h --id --type --status --epic --sprint --story-points --assignee --activated --work-started --work-done --created --updated --task-file --format --help <ID> [REPO_ROOT]"
-            if [[ ${COMP_CWORD} -eq 3 && ${cur} != -* ]] ; then
-                local -a matches=()
-                local id
-                while IFS= read -r id; do
-                    [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                done < <(kanban list-ids stories 2>/dev/null)
-                while IFS= read -r id; do
-                    [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                done < <(kanban list-ids epics 2>/dev/null)
-                COMPREPLY=( "${matches[@]}" )
-                return 0
-            fi
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --id)
-                    local -a matches=()
-                    local id
-                    while IFS= read -r id; do
-                        [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                    done < <(kanban list-ids stories 2>/dev/null)
-                    while IFS= read -r id; do
-                        [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                    done < <(kanban list-ids epics 2>/dev/null)
-                    COMPREPLY=( "${matches[@]}" )
-                    return 0
-                    ;;
-                --type)
-                    COMPREPLY=( $(compgen -W "user-story epic" -- "${cur}") )
-                    return 0
-                    ;;
-                --status)
-                    COMPREPLY=( $(compgen -W "draft backlog ready planned todo in-progress ready-for-qa done blocked dropped" -- "${cur}") )
-                    return 0
-                    ;;
-                --epic)
-                    local -a matches=()
-                    local id
-                    while IFS= read -r id; do
-                        [[ -n "$id" && "$id" == *"${cur}"* ]] && matches+=( "$id" )
-                    done < <(kanban list-ids epics 2>/dev/null)
-                    COMPREPLY=( "${matches[@]}" )
-                    return 0
-                    ;;
-                --sprint)
-                    COMPREPLY=( $(compgen -W "$(kanban list-ids sprints 2>/dev/null)" -- "${cur}") )
-                    return 0
-                    ;;
-                --story-points)
-                    COMPREPLY=( $(compgen -W "$(kanban config get story_points.allowed_values 2>/dev/null | tr -d '[],\"' | tr '[:space:]' ' ')" -- "${cur}") )
-                    return 0
-                    ;;
-                --assignee)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --activated)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --work-started)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --work-done)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --created)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --updated)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                --task-file)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --format)
-                    COMPREPLY=( $(compgen -W "human json" -- "${cur}") )
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-"#;
+    let replacement = bash_section("INJECT_BASH_STORY_UPDATE_DYNAMIC_REPLACEMENT");
 
     let mut result =
         String::with_capacity(script.len() + replacement.len().saturating_sub(end - start));

@@ -1,9 +1,12 @@
-#[allow(unused_imports)]
-use crate::prelude::*;
 use crate::theme::Theme;
+use anyhow::{Context, Result, bail};
 use kanban_core::ColorMode;
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
+use std::fs;
+use std::io::ErrorKind;
+use std::path::PathBuf;
+use std::process::Command as ProcessCommand;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const RAW_GITHUB_HOST: &str = "https://raw.githubusercontent.com/tfmalt/autopass-kanban";
@@ -333,6 +336,12 @@ fn push_bool_arg(args: &mut Vec<OsString>, flag: &str, value: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn github_latest_tag_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     fn strings(args: Vec<OsString>) -> Vec<String> {
         args.into_iter()
@@ -430,6 +439,7 @@ mod tests {
 
     #[test]
     fn latest_version_if_newer_respects_github_latest_tag_env() {
+        let _guard = github_latest_tag_test_lock().lock().unwrap();
         // The GITHUB_LATEST_TAG env var short-circuits resolve_latest_version,
         // so we can exercise latest_version_if_newer without network access.
         let current = env!("CARGO_PKG_VERSION");
@@ -451,6 +461,7 @@ mod tests {
 
     #[test]
     fn latest_version_if_newer_returns_none_when_current_is_latest() {
+        let _guard = github_latest_tag_test_lock().lock().unwrap();
         // SAFETY: no other test touches GITHUB_LATEST_TAG, so there is no
         // concurrent mutation risk.
         unsafe {

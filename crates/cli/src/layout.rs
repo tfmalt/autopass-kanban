@@ -1,11 +1,5 @@
-#[allow(unused_imports)]
-use crate::prelude::*;
-#[allow(unused_imports)]
-use crate::{
-    cli::*, completion::*, doctor_cli::*, json_out::*, prompt::*, render::*, theme::*, web::*,
-};
-#[allow(unused_imports)]
-use kanban_core::*;
+use anyhow::{Result, bail};
+use std::io::IsTerminal;
 
 pub(crate) const MIN_TERMINAL_WIDTH: usize = 80;
 pub(crate) const DEFAULT_OUTPUT_WIDTH: usize = 100;

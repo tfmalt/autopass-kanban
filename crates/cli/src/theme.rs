@@ -1,11 +1,6 @@
-#[allow(unused_imports)]
-use crate::prelude::*;
-#[allow(unused_imports)]
-use crate::{
-    cli::*, completion::*, doctor_cli::*, json_out::*, layout::*, prompt::*, render::*, web::*,
-};
-#[allow(unused_imports)]
-use kanban_core::*;
+use std::io::IsTerminal;
+
+use kanban_core::ColorMode;
 
 #[derive(Copy, Clone)]
 pub(crate) struct Theme {

@@ -1,12 +1,24 @@
-#[allow(unused_imports)]
-use crate::prelude::*;
-#[allow(unused_imports)]
-use crate::{
-    cli::*, completion::*, doctor_cli::*, json_out::*, layout::*, prompt::*, render::*, theme::*,
-    web::*,
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use crate::layout::OutputLayout;
+use crate::layout::SPRINT_STORY_ROW_PREFIX;
+use crate::render::common::{
+    format_story_points, status_icon, story_points_column_width, sum_story_points,
 };
-#[allow(unused_imports)]
-use kanban_core::*;
+use crate::render::markdown::push_terminal_markdown;
+use crate::render::sprint::{
+    format_colored_task_summary, format_story_count, push_inset_line, push_line,
+    sprint_story_table_width,
+};
+use crate::render::table::{
+    CellStyle, DynamicTableColumn, TableCell, display_width, push_story_table, push_wrapped_table,
+    row_content_width, wrap_text,
+};
+use crate::theme::{Style, Theme};
+use kanban_core::{
+    CANONICAL_STORY_STATUSES, CANONICAL_TASK_STATUSES, StoryDetails, StoryOverview, Task,
+};
 
 pub(crate) fn print_story_list(theme: &Theme, scope: &str, stories: &[StoryOverview]) {
     let layout = OutputLayout::for_stdout().unwrap_or(OutputLayout { width: 80 });
@@ -577,6 +589,7 @@ pub(crate) fn task_table_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kanban_core::TaskSummary;
 
     #[test]
     fn print_story_list_renders_scope_and_story_rows() {

@@ -1,11 +1,13 @@
-#[allow(unused_imports)]
-use crate::prelude::*;
-#[allow(unused_imports)]
-use crate::{
-    cli::*, completion::*, json_out::*, layout::*, prompt::*, render::*, theme::*, web::*,
+use anyhow::Result;
+use std::path::PathBuf;
+
+use crate::prompt::{prompt, prompt_with_default};
+use crate::theme::Theme;
+use kanban_core::{
+    ColorMode, DoctorFinding, DoctorFixInput, DoctorFixKind, DoctorIssue, DoctorPrompt,
+    apply_doctor_fix, collect_doctor_issues, collect_doctor_issues_for_current_sprint,
+    collect_doctor_issues_for_story,
 };
-#[allow(unused_imports)]
-use kanban_core::*;
 
 pub(crate) fn print_doctor_findings(theme: &Theme, findings: &[DoctorFinding]) {
     if findings.is_empty() {

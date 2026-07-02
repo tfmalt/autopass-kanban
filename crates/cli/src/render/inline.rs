@@ -1,12 +1,6 @@
-#[allow(unused_imports)]
-use crate::prelude::*;
-#[allow(unused_imports)]
-use crate::{
-    cli::*, completion::*, doctor_cli::*, json_out::*, layout::*, prompt::*, render::*, theme::*,
-    web::*,
-};
-#[allow(unused_imports)]
-use kanban_core::*;
+use crate::render::sprint::push_line;
+use crate::render::table::display_width;
+use crate::theme::Theme;
 
 #[derive(Copy, Clone)]
 pub(crate) enum InlineStyle {

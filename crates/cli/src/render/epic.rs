@@ -1,12 +1,17 @@
-#[allow(unused_imports)]
-use crate::prelude::*;
-#[allow(unused_imports)]
-use crate::{
-    cli::*, completion::*, doctor_cli::*, json_out::*, layout::*, prompt::*, render::*, theme::*,
-    web::*,
+use crate::layout::OutputLayout;
+use crate::render::common::{
+    format_story_points, status_icon, story_points_column_width, sum_story_points,
 };
-#[allow(unused_imports)]
-use kanban_core::*;
+use crate::render::markdown::push_terminal_markdown_indented;
+use crate::render::progress::render_progress_bar;
+use crate::render::sprint::{
+    format_story_count, push_inset_line, push_line, push_sprint_section_divider_before_next,
+    push_wrapped_hanging_line_inset, sprint_story_table_width,
+};
+use crate::render::story::{metadata_row, simplify_story_path, two_column_table_columns};
+use crate::render::table::{display_width, push_story_table, push_wrapped_table};
+use crate::theme::{Style, Theme};
+use kanban_core::{EpicDetails, SPRINT_STATUS_DISPLAY_ORDER};
 
 pub(crate) fn print_epic_details(theme: &Theme, layout: OutputLayout, details: &EpicDetails) {
     print!("{}", render_epic_details(theme, layout, details));
@@ -357,6 +362,10 @@ fn push_epic_metadata_table(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    use kanban_core::{EpicOverview, StoryOverview};
 
     #[test]
     fn epic_details_render_progress_and_sections() {
@@ -367,6 +376,7 @@ mod tests {
                 title: "Git-driven kanban and backlog tooling".to_string(),
                 status: "draft".to_string(),
                 phase: Some("1".to_string()),
+                priority: None,
                 owner: Some("Solution Architect / Product Owner".to_string()),
                 milestone: Some("MP1".to_string()),
                 work_started: Some("2026-06-16T09:00:00+0200".to_string()),

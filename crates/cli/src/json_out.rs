@@ -1,11 +1,35 @@
-#[allow(unused_imports)]
-use crate::prelude::*;
-#[allow(unused_imports)]
-use crate::{
-    cli::*, completion::*, doctor_cli::*, layout::*, ops::*, prompt::*, render::*, theme::*, web::*,
+use anyhow::{Result, bail};
+use serde::Serialize;
+use std::path::Path;
+
+use crate::cli::{
+    Command, ConfigCommand, DoctorCommand, EpicCommand, FeatureName, FeaturesCommand, ListIdsKind,
+    PhaseCommand, ReportCommand, SprintCommand, StoryCommand, TaskCommand, WebCommand,
+    list_ids_kind_label,
 };
-#[allow(unused_imports)]
-use kanban_core::*;
+use crate::dispatch::{completion_output, config_show_json_value, execute_shared};
+use crate::ops::{build_create_sprint_input_from_flags, resolve_story_list_scope};
+use crate::outcome::CommandOutcome;
+use crate::theme::Theme;
+use crate::web::{
+    WebLogDto, WebRestartDto, WebStartDto, WebStatusDto, WebStopDto, stop_web, web_log_json,
+    web_start_json, web_status_json, web_stop_json,
+};
+use kanban_core::{
+    ColorMode, ConfigGetDto, ConfigInitDto, ConfigSetDto, DeleteStoryDto, DoctorDto, EpicShowDto,
+    EpicUpdateDto, JsonEnvelope, KanbanErrorBody, KanbanErrorCode, ListIdItemDto, ListIdsDto,
+    MoveStoryDto, NoData, PhaseShowDto, PlanStoryDto, ReportForecastDto, ReportWbsDto,
+    SprintCreateDto, SprintListDto, SprintOverviewDto, SprintRolloverDto, SprintSyncDto,
+    StoryListDto, StoryShowDto, StoryUpdateDto, TaskMutationDto, TaskShowDto, ValidateDto,
+    add_task_to_story, config_show_value, create_sprint, delete_story, delete_task_from_story,
+    doctor_repository, find_epic_with_source, find_story, find_story_with_source, get_config_json,
+    get_config_value, init_config_with_features, list_all_stories, list_epic_ids,
+    list_sprint_names, list_story_completion_items, list_story_ids, list_tasks_for_story,
+    load_kanban_config, move_story_to_status_with_assignee, plan_story_into_sprint,
+    rollover_sprint, set_config_value, summarize_current_sprint, summarize_phase, summarize_sprint,
+    summarize_sprints, sync_sprint_rosters, update_epic_frontmatter, update_story_frontmatter,
+    update_task_in_story, validate_repository,
+};
 
 /// Serialize a `JsonEnvelope` to stdout and return its exit code.
 pub(crate) fn print_envelope<T: Serialize>(env: &JsonEnvelope<T>) -> i32 {
@@ -33,10 +57,8 @@ pub(crate) fn invalid_argument_envelope<T: Serialize>(
 }
 
 fn feature_disabled_error(feature: &str, repo_root: &Path) -> anyhow::Error {
-    anyhow::anyhow!(
-        "Feature '{feature}' is disabled in .kanban/settings.json. Run `kanban features enable {feature}` to re-enable it. (repo: {})",
-        repo_root.display()
-    )
+    let _ = repo_root;
+    kanban_core::KanbanError::feature_disabled(feature).into()
 }
 
 pub(crate) fn ensure_sprints_enabled_json(repo_root: &Path) -> anyhow::Result<()> {
@@ -61,31 +83,6 @@ pub(crate) fn ensure_phases_enabled_json(repo_root: &Path) -> anyhow::Result<()>
         return Err(feature_disabled_error("phases", repo_root));
     }
     Ok(())
-}
-
-pub(crate) fn completion_output(target: CompletionTarget) -> CompletionDto {
-    let mut command = Args::command();
-    if let Some(generator) = target.generator() {
-        let mut buf = Vec::new();
-        clap_complete::generate(generator, &mut command, "kanban", &mut buf);
-        let script = String::from_utf8_lossy(&buf).into_owned();
-        let content = match generator {
-            clap_complete::Shell::Zsh => enhance_zsh_completion(&script),
-            clap_complete::Shell::Bash => enhance_bash_completion(&script),
-            _ => script,
-        };
-        CompletionDto {
-            target: completion_target_label(target).to_string(),
-            content_type: "shell-script".to_string(),
-            content,
-        }
-    } else {
-        CompletionDto {
-            target: completion_target_label(target).to_string(),
-            content_type: "help".to_string(),
-            content: COMPLETION_HELP.to_string(),
-        }
-    }
 }
 
 pub(crate) fn json_story_frontmatter_updates(
@@ -183,8 +180,150 @@ pub(crate) fn emit_json_git_requirement_error(
     ))
 }
 
+fn emit_shared_outcome(outcome: CommandOutcome) -> i32 {
+    let kind = outcome.kind();
+    match outcome {
+        CommandOutcome::Init(result) => {
+            print_envelope(&JsonEnvelope::ok(kind, ConfigInitDto::from_result(&result)))
+        }
+        CommandOutcome::ConfigShow(raw) => match config_show_json_value(&raw) {
+            Ok(value) => print_envelope(&JsonEnvelope::ok(kind, value)),
+            Err(error) => print_envelope(&JsonEnvelope::<serde_json::Value>::error(
+                kind,
+                KanbanErrorBody::from_anyhow(&error),
+            )),
+        },
+        CommandOutcome::ConfigGet { key, value } => {
+            print_envelope(&JsonEnvelope::ok(kind, ConfigGetDto { key, value }))
+        }
+        CommandOutcome::ConfigSet(result) => {
+            print_envelope(&JsonEnvelope::ok(kind, ConfigSetDto::from_result(&result)))
+        }
+        CommandOutcome::FeaturesList {
+            phases,
+            sprints,
+            epics,
+        } => print_envelope(&JsonEnvelope::ok(
+            kind,
+            serde_json::json!({
+                "phases": phases,
+                "sprints": sprints,
+                "epics": epics,
+            }),
+        )),
+        CommandOutcome::FeatureToggle { action: _, result } => {
+            print_envelope(&JsonEnvelope::ok(kind, ConfigSetDto::from_result(&result)))
+        }
+        CommandOutcome::Completion(dto) => print_envelope(&JsonEnvelope::ok(kind, dto)),
+        CommandOutcome::ListIds {
+            kind: item_kind,
+            items,
+        } => print_envelope(&JsonEnvelope::ok(kind, ListIdsDto::new(item_kind, items))),
+        CommandOutcome::SprintOverview { sprint, .. } => print_envelope(&JsonEnvelope::ok(
+            kind,
+            SprintOverviewDto::from_overview(&sprint),
+        )),
+        CommandOutcome::SprintList {
+            sprints,
+            current_name,
+        } => print_envelope(&JsonEnvelope::ok(
+            kind,
+            SprintListDto::new(&sprints, current_name.as_deref()),
+        )),
+        CommandOutcome::PhaseShow(phase) => {
+            print_envelope(&JsonEnvelope::ok(kind, PhaseShowDto::from_overview(&phase)))
+        }
+        CommandOutcome::EpicShow { id, result } => match *result {
+            Some((details, source)) => print_envelope(&JsonEnvelope::ok(
+                kind,
+                EpicShowDto::from_details_and_source(&details, &source),
+            )),
+            None => print_envelope(&JsonEnvelope::<EpicShowDto>::error(
+                kind,
+                KanbanErrorBody::new(
+                    KanbanErrorCode::EpicNotFound,
+                    format!("No epic matches id '{id}'"),
+                ),
+            )),
+        },
+        CommandOutcome::StoryShow { id, result } => match *result {
+            Some((details, source)) => print_envelope(&JsonEnvelope::ok(
+                kind,
+                StoryShowDto::from_details_and_source(&details, &source),
+            )),
+            None => print_envelope(&JsonEnvelope::<StoryShowDto>::error(
+                kind,
+                KanbanErrorBody::new(
+                    KanbanErrorCode::StoryNotFound,
+                    format!("No story matches id '{id}'"),
+                ),
+            )),
+        },
+        CommandOutcome::StoryList { scope, stories } => print_envelope(&JsonEnvelope::ok(
+            kind,
+            StoryListDto::new(scope.json_label(), &stories),
+        )),
+        CommandOutcome::TaskShow { details, repo_root } => print_envelope(&JsonEnvelope::ok(
+            kind,
+            TaskShowDto::from_result(&details, &repo_root),
+        )),
+        CommandOutcome::Validate(report) => {
+            let dto = ValidateDto::from_report(&report, &report.repo_root);
+            let env = if dto.valid {
+                JsonEnvelope::ok(kind, dto)
+            } else {
+                JsonEnvelope::warning(kind, dto)
+            };
+            print_envelope(&env)
+        }
+        CommandOutcome::DoctorShow(findings) => {
+            let dto = DoctorDto::from_findings(&findings);
+            let env = if dto.healthy {
+                JsonEnvelope::ok(kind, dto)
+            } else {
+                JsonEnvelope::warning(kind, dto)
+            };
+            print_envelope(&env)
+        }
+        CommandOutcome::ReportWbs(dto) => print_envelope(&JsonEnvelope::ok(kind, dto)),
+        CommandOutcome::ReportForecast(dto) => print_envelope(&JsonEnvelope::ok(kind, dto)),
+        CommandOutcome::StoryMove { result, repo_root } => print_envelope(&JsonEnvelope::ok(
+            kind,
+            MoveStoryDto::from_result(&result, &repo_root),
+        )),
+        CommandOutcome::StoryPlan { result, repo_root } => print_envelope(&JsonEnvelope::ok(
+            kind,
+            PlanStoryDto::from_result(&result, &repo_root),
+        )),
+        CommandOutcome::StoryDelete { result, repo_root } => print_envelope(&JsonEnvelope::ok(
+            kind,
+            DeleteStoryDto::from_result(&result, &repo_root),
+        )),
+        CommandOutcome::TaskMutation {
+            result, repo_root, ..
+        } => print_envelope(&JsonEnvelope::ok(
+            kind,
+            TaskMutationDto::from_result(&result, &repo_root),
+        )),
+        CommandOutcome::SprintSync(changed) => print_envelope(&JsonEnvelope::ok(
+            kind,
+            SprintSyncDto::from_changed(changed),
+        )),
+    }
+}
+
 /// Dispatch the JSON output path for a supported command.
 pub(crate) fn emit_json(command: &Command) -> i32 {
+    if let Some(result) = execute_shared(command) {
+        return match result {
+            Ok(outcome) => emit_shared_outcome(outcome),
+            Err(error) => print_envelope(&JsonEnvelope::<serde_json::Value>::error(
+                command_json_kind(command),
+                KanbanErrorBody::from_anyhow(&error),
+            )),
+        };
+    }
+
     match command {
         Command::Init {
             repo_root,
@@ -588,14 +727,10 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
                     "story.move",
                     MoveStoryDto::from_result(&result, &root),
                 )),
-                Err(e) => {
-                    let body = if e.to_string().to_lowercase().contains("status") {
-                        KanbanErrorBody::new(KanbanErrorCode::InvalidStatus, e.to_string())
-                    } else {
-                        KanbanErrorBody::from_anyhow(&e)
-                    };
-                    print_envelope(&JsonEnvelope::<MoveStoryDto>::error("story.move", body))
-                }
+                Err(e) => print_envelope(&JsonEnvelope::<MoveStoryDto>::error(
+                    "story.move",
+                    KanbanErrorBody::from_anyhow(&e),
+                )),
             }
         }
         Command::Story {

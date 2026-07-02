@@ -1,12 +1,13 @@
-#[allow(unused_imports)]
-use crate::prelude::*;
-#[allow(unused_imports)]
-use crate::{
-    cli::*, completion::*, doctor_cli::*, json_out::*, layout::*, prompt::*, render::*, theme::*,
-    web::*,
+use crate::layout::{OutputLayout, SPRINT_CONTENT_INSET, SPRINT_STORY_ROW_PREFIX};
+use crate::render::common::{
+    format_story_points, sprint_status_label, status_icon, story_points_column_width,
+    sum_story_points,
 };
-#[allow(unused_imports)]
-use kanban_core::*;
+use crate::render::markdown::push_terminal_markdown_indented;
+use crate::render::progress::render_progress_bar;
+use crate::render::table::{display_width, push_blocked_work_table, push_story_table, wrap_text};
+use crate::theme::{Style, Theme};
+use kanban_core::{SPRINT_STATUS_DISPLAY_ORDER, SprintOverview, TaskSummary};
 
 pub(crate) fn print_sprint_overview(theme: &Theme, layout: OutputLayout, sprint: &SprintOverview) {
     print!("{}", render_sprint_overview(theme, layout, sprint));
@@ -432,6 +433,11 @@ pub(crate) fn format_compact_task_summary(summary: Option<&TaskSummary>) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    use crate::render::common::format_colored_story_status_label;
+    use kanban_core::StoryOverview;
 
     #[test]
     fn sprint_overview_wraps_story_rows_to_terminal_width() {
@@ -472,6 +478,7 @@ mod tests {
             end_date: "2026-06-12".to_string(),
             readme_path: PathBuf::from("delivery/sprints/S999.test.md"),
             readme_status: Some("active".to_string()),
+            wip_limit: None,
             stories_by_status,
             blocked_work: vec![kanban_core::BlockedWorkItem {
                 story_id: "US-F1-999".to_string(),
@@ -512,6 +519,7 @@ mod tests {
             end_date: "2026-06-30".to_string(),
             readme_path: PathBuf::from("delivery/sprints/S100.goal.md"),
             readme_status: Some("active".to_string()),
+            wip_limit: None,
             stories_by_status: BTreeMap::new(),
             blocked_work: vec![],
             warnings: vec![],
@@ -537,6 +545,7 @@ mod tests {
             end_date: "2026-06-30".to_string(),
             readme_path: PathBuf::from("delivery/sprints/S001.foundation.md"),
             readme_status: Some("active".to_string()),
+            wip_limit: None,
             stories_by_status: BTreeMap::new(),
             blocked_work: vec![],
             warnings: vec![],
@@ -612,6 +621,7 @@ mod tests {
             end_date: "2026-06-30".to_string(),
             readme_path: PathBuf::from("README.md"),
             readme_status: None,
+            wip_limit: None,
             stories_by_status,
             blocked_work: vec![],
             warnings: vec![],
@@ -698,6 +708,7 @@ mod tests {
             end_date: "2026-06-30".to_string(),
             readme_path: PathBuf::from("README.md"),
             readme_status: None,
+            wip_limit: None,
             stories_by_status,
             blocked_work: vec![],
             warnings: vec![],
@@ -786,6 +797,7 @@ mod tests {
             end_date: "2026-06-30".to_string(),
             readme_path: PathBuf::from("README.md"),
             readme_status: None,
+            wip_limit: None,
             stories_by_status,
             blocked_work: vec![],
             warnings: vec![],
@@ -812,6 +824,7 @@ mod tests {
             end_date: "2026-06-30".to_string(),
             readme_path: PathBuf::from("README.md"),
             readme_status: None,
+            wip_limit: None,
             stories_by_status: BTreeMap::new(),
             blocked_work: vec![],
             warnings: vec![],
@@ -862,6 +875,7 @@ mod tests {
             end_date: "2026-06-30".to_string(),
             readme_path: PathBuf::from("README.md"),
             readme_status: None,
+            wip_limit: None,
             stories_by_status,
             blocked_work: vec![],
             warnings: vec!["A warning line".to_string()],
@@ -897,6 +911,7 @@ mod tests {
             end_date: "2026-06-30".to_string(),
             readme_path: PathBuf::from("README.md"),
             readme_status: None,
+            wip_limit: None,
             stories_by_status: BTreeMap::new(),
             blocked_work: vec![],
             warnings: vec![],
@@ -921,6 +936,7 @@ mod tests {
             end_date: "2026-06-30".to_string(),
             readme_path: PathBuf::from("README.md"),
             readme_status: None,
+            wip_limit: None,
             stories_by_status: BTreeMap::new(),
             blocked_work: vec![],
             warnings: vec![],

@@ -1,13 +1,10 @@
-#[allow(unused_imports)]
-use crate::prelude::*;
-#[allow(unused_imports)]
-use crate::{
-    completion::*, doctor_cli::*, json_out::*, layout::*, prompt::*, render::*, theme::*, web::*,
-};
+use std::path::PathBuf;
+
 use clap::builder::styling::{AnsiColor, Effects, Style as ClapStyle, Styles};
 use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
-#[allow(unused_imports)]
-use kanban_core::*;
+
+use crate::theme::Theme;
+use kanban_core::ColorMode;
 
 pub(crate) const CLAP_STYLING: Styles = Styles::styled()
     .header(
