@@ -88,7 +88,7 @@ async fn csrf_guard(
         .or_else(|| request.headers().get(axum::http::header::REFERER))
         .and_then(|value| value.to_str().ok())
         .and_then(authority_from_origin_or_referer)
-        .is_some_and(|authority| authority == bound_authority);
+        .is_some_and(|authority| authorities_match(&authority, &bound_authority));
 
     if allowed {
         next.run(request).await
@@ -116,6 +116,20 @@ fn authority_from_origin_or_referer(value: &str) -> Option<String> {
         None
     } else {
         Some(authority.to_string())
+    }
+}
+
+fn authorities_match(candidate: &str, bound: &str) -> bool {
+    candidate == bound
+        || normalize_loopback_authority(candidate) == normalize_loopback_authority(bound)
+}
+
+fn normalize_loopback_authority(authority: &str) -> String {
+    match authority.rsplit_once(':') {
+        Some(("127.0.0.1" | "localhost", port)) => {
+            format!("loopback:{port}")
+        }
+        _ => authority.to_string(),
     }
 }
 
@@ -263,6 +277,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn csrf_allows_localhost_origin_for_loopback_bound_server() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+        let app = csrf_test_router(csrf_test_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/stories/US-001/move")
+                    .header("Origin", "http://localhost:8080")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn csrf_rejects_cross_origin_mutation() {
         use axum::body::Body;
         use axum::http::{Request, StatusCode};
@@ -357,5 +391,13 @@ mod tests {
         );
         assert_eq!(authority_from_origin_or_referer(""), None);
         assert_eq!(authority_from_origin_or_referer("not a url"), None);
+    }
+
+    #[test]
+    fn authorities_match_treats_localhost_and_loopback_as_equivalent() {
+        assert!(authorities_match("localhost:3000", "127.0.0.1:3000"));
+        assert!(authorities_match("127.0.0.1:3000", "localhost:3000"));
+        assert!(!authorities_match("localhost:3001", "127.0.0.1:3000"));
+        assert!(!authorities_match("localhost:3000", "evil.example:3000"));
     }
 }
