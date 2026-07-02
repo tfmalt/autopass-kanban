@@ -10,6 +10,8 @@ mod model;
 mod phase;
 mod repository;
 mod sprint;
+mod sprint_roster;
+mod status;
 mod story;
 #[cfg(test)]
 mod testutil;
@@ -44,5 +46,7 @@ pub use model::*;
 pub use phase::*;
 pub use repository::*;
 pub use sprint::*;
+pub use status::*;
 pub use story::*;
+pub use util::parse_assignee_list;
 pub use validate::*;

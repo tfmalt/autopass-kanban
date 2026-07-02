@@ -1,4 +1,5 @@
 use crate::config::*;
+use crate::error::KanbanError;
 use crate::model::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -32,9 +33,7 @@ pub(crate) fn normalize_phase_input(phase: &str) -> Result<String> {
         .filter(|ch| ch.is_ascii_digit())
         .collect::<String>();
     if digits.is_empty() {
-        return Err(anyhow!(
-            "Phase must contain a numeric identifier, for example `1` or `F1`."
-        ));
+        return Err(KanbanError::phase_not_found(phase).into());
     }
 
     let trimmed = digits.trim_start_matches('0');

@@ -1,5 +1,6 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::{StoryStatus, parse_assignee_list};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedFrontmatter {
@@ -38,12 +39,89 @@ pub struct TaskFile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoryFields {
+    pub id: String,
+    pub kind: Option<String>,
+    pub status_raw: String,
+    pub status: Option<StoryStatus>,
+    pub epic: Option<String>,
+    pub sprint: Option<String>,
+    pub priority_raw: Option<String>,
+    pub priority: Option<i64>,
+    pub story_points_raw: String,
+    pub story_points: Option<i64>,
+    pub assignee_raw: String,
+    pub assignee: Option<String>,
+    pub assignees: Vec<String>,
+    pub work_started: Option<String>,
+    pub work_done: Option<String>,
+    pub activated: Option<String>,
+    pub created: Option<String>,
+    pub updated: Option<String>,
+    pub planned_start: Option<String>,
+    pub planned_end: Option<String>,
+}
+
+impl StoryFields {
+    pub fn from_frontmatter(frontmatter: &BTreeMap<String, String>) -> Self {
+        let status_raw = frontmatter.get("status").cloned().unwrap_or_default();
+        let story_points_raw = frontmatter.get("story_points").cloned().unwrap_or_default();
+        let assignee_raw = frontmatter.get("assignee").cloned().unwrap_or_default();
+
+        Self {
+            id: frontmatter.get("id").cloned().unwrap_or_default(),
+            kind: non_empty(frontmatter.get("type")),
+            status: StoryStatus::parse(&status_raw),
+            status_raw,
+            epic: web_option(frontmatter.get("epic")),
+            sprint: web_option(frontmatter.get("sprint")),
+            priority_raw: frontmatter.get("priority").cloned(),
+            priority: frontmatter
+                .get("priority")
+                .and_then(|value| value.trim().parse::<i64>().ok())
+                .filter(|value| *value >= 0),
+            story_points: story_points_raw.trim().parse::<i64>().ok(),
+            story_points_raw,
+            assignee: web_option(frontmatter.get("assignee")),
+            assignees: parse_assignee_list(&assignee_raw),
+            assignee_raw,
+            work_started: non_empty(frontmatter.get("work_started")),
+            work_done: non_empty(frontmatter.get("work_done")),
+            activated: non_empty(frontmatter.get("activated")),
+            created: non_empty(frontmatter.get("created")),
+            updated: non_empty(frontmatter.get("updated")),
+            planned_start: non_empty(frontmatter.get("planned_start")),
+            planned_end: non_empty(frontmatter.get("planned_end")),
+        }
+    }
+
+    pub fn sprint_frontmatter_value(&self) -> Option<&str> {
+        self.sprint.as_deref()
+    }
+}
+
+fn non_empty(value: Option<&String>) -> Option<String> {
+    value
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn web_option(value: Option<&String>) -> Option<String> {
+    value
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty() && *value != "~" && *value != "null")
+        .map(ToOwned::to_owned)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Story {
     pub file_path: PathBuf,
     pub relative_path: PathBuf,
     pub file_name: String,
     pub frontmatter: BTreeMap<String, String>,
     pub frontmatter_keys: BTreeSet<String>,
+    pub fields: StoryFields,
     pub markdown: String,
     pub body: String,
     pub sprint_name: Option<String>,
@@ -106,6 +184,7 @@ pub struct EpicOverview {
     pub title: String,
     pub status: String,
     pub phase: Option<String>,
+    pub priority: Option<i64>,
     pub owner: Option<String>,
     pub milestone: Option<String>,
     pub work_started: Option<String>,
@@ -132,6 +211,7 @@ pub struct SprintOverview {
     pub end_date: String,
     pub readme_path: PathBuf,
     pub readme_status: Option<String>,
+    pub wip_limit: Option<i64>,
     pub stories_by_status: BTreeMap<String, Vec<StoryOverview>>,
     pub blocked_work: Vec<BlockedWorkItem>,
     pub warnings: Vec<String>,

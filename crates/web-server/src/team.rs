@@ -24,10 +24,9 @@ pub(crate) fn load_team(repo_root: &Path) -> Result<Vec<WebTeamMember>> {
     let mut seen: BTreeMap<String, (String, String)> = BTreeMap::new();
     for story in repository.stories {
         if let Some(assignee) = story.frontmatter.get("assignee") {
-            for person in parse_assignees(assignee) {
+            for person in parse_assignee_list(assignee) {
                 if person.contains('<')
                     && person.contains('@')
-                    && !person.eq_ignore_ascii_case("Name <email@example.com>")
                     && let Some((name, email)) = person.split_once('<')
                 {
                     let name = name.trim().to_string();
@@ -84,19 +83,6 @@ pub(crate) fn map_team_members(team: Vec<TeamMemberConfig>) -> Vec<WebTeamMember
                 email,
             })
         })
-        .collect()
-}
-
-pub(crate) fn parse_assignees(raw: &str) -> Vec<String> {
-    raw.split(',')
-        .map(str::trim)
-        .filter(|value| {
-            !value.is_empty()
-                && *value != "~"
-                && !value.eq_ignore_ascii_case("TBD")
-                && !value.eq_ignore_ascii_case("Name <email@example.com>")
-        })
-        .map(str::to_string)
         .collect()
 }
 
@@ -158,5 +144,41 @@ mod tests {
             team[0].avatar_url.as_deref(),
             Some("https://example.com/avatar.png")
         );
+    }
+
+    #[test]
+    fn load_team_ignores_placeholder_assignees_from_stories() {
+        let temp_root = tempdir().unwrap();
+        init_config(temp_root.path()).unwrap();
+        let settings_path = temp_root.path().join(".kanban/settings.json");
+        let mut settings =
+            serde_json::from_str::<Value>(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+        settings["team"] = json!([]);
+        fs::write(
+            &settings_path,
+            format!("{}\n", serde_json::to_string_pretty(&settings).unwrap()),
+        )
+        .unwrap();
+        let config = load_kanban_config(temp_root.path()).unwrap();
+        let story_path = config.backlog_path().join("US-F1-001-placeholder.md");
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            concat!(
+                "---\n",
+                "id: US-F1-001\n",
+                "status: todo\n",
+                "assignee: Name <email@example.com>, Real User <real@example.com>, TBD, ~\n",
+                "---\n\n",
+                "# User Story: Placeholder filtering\n"
+            ),
+        )
+        .unwrap();
+
+        let team = load_team(temp_root.path()).unwrap();
+
+        assert_eq!(team.len(), 1);
+        assert_eq!(team[0].name, "Real User");
+        assert_eq!(team[0].email, "real@example.com");
     }
 }

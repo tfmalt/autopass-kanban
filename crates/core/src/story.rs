@@ -8,6 +8,7 @@ use crate::model::*;
 use crate::prelude::*;
 use crate::repository::*;
 use crate::sprint::*;
+use crate::status::StoryStatus;
 use crate::util::*;
 
 pub fn list_all_stories(repo_root: impl AsRef<Path>) -> Result<Vec<StoryOverview>> {
@@ -45,13 +46,7 @@ pub fn move_story_to_status_with_assignee(
     let story = repository
         .stories
         .iter()
-        .find(|story| {
-            story
-                .frontmatter
-                .get("id")
-                .map(|id| id.eq_ignore_ascii_case(&normalized_story_id))
-                .unwrap_or(false)
-        })
+        .find(|story| story.fields.id.eq_ignore_ascii_case(&normalized_story_id))
         .cloned()
         .ok_or_else(|| KanbanError::story_not_found(&normalized_story_id))?;
 
@@ -69,15 +64,13 @@ pub fn move_story_to_status_with_assignee(
     } else {
         String::new()
     };
-    let current_status = story.frontmatter.get("status").cloned().unwrap_or_default();
+    let current_status = story.fields.status_raw.clone();
 
     let assignee_update = if normalized_status == "in-progress" {
         Some(match assignee_override {
             Some(assignee) => assignee,
-            None => match story.frontmatter.get("assignee") {
-                Some(existing) if !parse_assignee_list(existing).is_empty() => existing.clone(),
-                _ => current_git_assignee(&repository.repo_root)?,
-            },
+            None if !story.fields.assignees.is_empty() => story.fields.assignee_raw.clone(),
+            None => current_git_assignee(&repository.repo_root)?,
         })
     } else {
         story.frontmatter.get("assignee").cloned()
@@ -93,7 +86,7 @@ pub fn move_story_to_status_with_assignee(
     } else {
         story.frontmatter.get("work_started").cloned()
     };
-    let work_done_update = if matches!(normalized_status.as_str(), "done" | "dropped") {
+    let work_done_update = if StoryStatus::parse_is_terminal(&normalized_status) {
         Some(now.clone())
     } else {
         story.frontmatter.get("work_done").cloned()
@@ -162,22 +155,16 @@ fn sync_parent_epic_for_story_move(
         .iter()
         .filter(|story| {
             story
-                .frontmatter
-                .get("epic")
-                .map(|value| value.eq_ignore_ascii_case(epic_id))
-                .unwrap_or(false)
+                .fields
+                .epic
+                .as_deref()
+                .is_some_and(|value| value.eq_ignore_ascii_case(epic_id))
         })
         .map(|story| {
             if story.file_path == moved_story.file_path {
                 target_status.to_string()
             } else {
-                normalize_status_alias(
-                    story
-                        .frontmatter
-                        .get("status")
-                        .map(String::as_str)
-                        .unwrap_or_default(),
-                )
+                normalize_status_alias(&story.fields.status_raw)
             }
         })
         .collect::<Vec<_>>();
@@ -189,8 +176,10 @@ fn sync_parent_epic_for_story_move(
     let any_in_progress = child_statuses.iter().any(|status| status == "in-progress");
     let all_terminal = child_statuses
         .iter()
-        .all(|status| matches!(status.as_str(), "done" | "dropped"));
-    let any_done = child_statuses.iter().any(|status| status == "done");
+        .all(|status| StoryStatus::parse_is_terminal(status));
+    let any_done = child_statuses
+        .iter()
+        .any(|status| StoryStatus::parse(status) == Some(StoryStatus::Done));
     let next_epic_status = if any_in_progress {
         Some("in-progress")
     } else if all_terminal && any_done {
@@ -232,8 +221,8 @@ fn sync_parent_epic_for_story_move(
         .cloned();
     let entering_in_progress = previous_status != "in-progress" && target_status == "in-progress";
     let closing_epic = all_terminal
-        && matches!(target_status, "done" | "dropped")
-        && !matches!(previous_status.as_str(), "done" | "dropped");
+        && StoryStatus::parse_is_terminal(target_status)
+        && !StoryStatus::parse_is_terminal(&previous_status);
 
     let mut updates = Vec::new();
     if current_status != next_epic_status {
@@ -264,9 +253,7 @@ pub fn plan_story_into_sprint(
 ) -> Result<PlanStoryResult> {
     let config = load_kanban_config(repo_root)?;
     if !config.features().sprints {
-        bail!(
-            "Sprints are disabled in .kanban/settings.json. Run `kanban features enable sprints` to re-enable them."
-        );
+        return Err(KanbanError::feature_disabled("sprints").into());
     }
     let repo_root = config.repo_root.clone();
     let _lock = RepoLock::acquire(&repo_root)?;
@@ -292,13 +279,7 @@ pub fn plan_story_into_sprint(
     let story = repository
         .stories
         .iter()
-        .find(|story| {
-            story
-                .frontmatter
-                .get("id")
-                .map(|id| id.eq_ignore_ascii_case(&normalized_story_id))
-                .unwrap_or(false)
-        })
+        .find(|story| story.fields.id.eq_ignore_ascii_case(&normalized_story_id))
         .cloned()
         .ok_or_else(|| KanbanError::story_not_found(&normalized_story_id))?;
 
@@ -310,11 +291,7 @@ pub fn plan_story_into_sprint(
         .filter(|value| !value.is_empty())
         .cloned()
         .or(Some(activated_now));
-    let current_status = story
-        .frontmatter
-        .get("status")
-        .map(String::as_str)
-        .unwrap_or_default();
+    let current_status = story.fields.status_raw.as_str();
     let current_status_normalized = normalize_status_alias(current_status);
     let new_status = if current_status.is_empty()
         || matches!(
@@ -358,7 +335,7 @@ pub fn delete_story(repo_root: impl AsRef<Path>, story_id: &str) -> Result<Delet
     let _lock = RepoLock::acquire(&config.repo_root)?;
     let repository = read_repository(&config.repo_root)?;
     let story = find_story_for_write(&repository, story_id)?.clone();
-    let story_id_value = story.frontmatter.get("id").cloned().unwrap_or_default();
+    let story_id_value = story.fields.id.clone();
     let sprint_name = story
         .frontmatter
         .get("sprint")
@@ -462,7 +439,7 @@ pub fn add_task_to_story(
     };
 
     Ok(TaskMutationResult {
-        story_id: story.frontmatter.get("id").cloned().unwrap_or_default(),
+        story_id: story.fields.id.clone(),
         task_id,
         task_file_path: relative_path(&repository.repo_root, &task_file_path),
         task,
@@ -511,7 +488,7 @@ pub fn update_task_in_story(
         .ok_or_else(|| anyhow!("Task {} not found after writing.", normalized_task_id))?;
 
     Ok(TaskMutationResult {
-        story_id: story.frontmatter.get("id").cloned().unwrap_or_default(),
+        story_id: story.fields.id.clone(),
         task_id: normalized_task_id,
         task_file_path: relative_path(&repository.repo_root, &task_file_path),
         task,
@@ -545,7 +522,7 @@ pub fn delete_task_from_story(
         .into_iter()
         .filter(|task| !task.id.eq_ignore_ascii_case(&normalized_task_id))
         .collect::<Vec<_>>();
-    let story_id_value = story.frontmatter.get("id").cloned().unwrap_or_default();
+    let story_id_value = story.fields.id.clone();
     let sprint_name = story
         .frontmatter
         .get("sprint")
@@ -583,7 +560,7 @@ pub fn story_markdown_file(repo_root: impl AsRef<Path>, story_id: &str) -> Resul
     let repository = read_repository(repo_root)?;
     let story = find_story_for_write(&repository, story_id)?;
     Ok(StoryFileResult {
-        story_id: story.frontmatter.get("id").cloned().unwrap_or_default(),
+        story_id: story.fields.id.clone(),
         story_path: story.relative_path.clone(),
         absolute_path: story.file_path.clone(),
     })
@@ -599,7 +576,9 @@ pub fn update_story_frontmatter(
     let repository = read_repository(&config.repo_root)?;
     let story = find_story_for_write(&repository, story_id)?;
     if updates.is_empty() {
-        bail!("No story frontmatter fields were provided.");
+        return Err(
+            KanbanError::invalid_argument("No story frontmatter fields were provided.").into(),
+        );
     }
 
     let normalized_updates = updates
@@ -622,7 +601,7 @@ pub fn update_story_frontmatter(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let current_status = story.frontmatter.get("status").cloned().unwrap_or_default();
+    let current_status = story.fields.status_raw.clone();
     let next_status = normalized_updates
         .iter()
         .find(|(field, _)| field == "status")
@@ -648,7 +627,7 @@ pub fn update_story_frontmatter(
                 .unwrap_or_else(|| now.clone());
             frontmatter_updates.push(("work_started", Some(work_started)));
         }
-        if matches!(next_status.as_str(), "done" | "dropped") {
+        if StoryStatus::parse_is_terminal(&next_status) {
             frontmatter_updates.push(("work_done", Some(now.clone())));
         }
         frontmatter_updates.push(("updated", Some(now.clone())));
@@ -673,10 +652,7 @@ pub fn update_story_frontmatter(
     }
 
     let mut affected_sprints = BTreeSet::new();
-    if let Some(sprint) = story.frontmatter.get("sprint")
-        && !sprint.trim().is_empty()
-        && sprint.as_str() != "~"
-    {
+    if let Some(sprint) = story.fields.sprint.as_ref() {
         affected_sprints.insert(sprint.clone());
     }
     if let Some((_, sprint)) = normalized_updates
@@ -692,7 +668,7 @@ pub fn update_story_frontmatter(
     }
 
     Ok(StoryUpdateResult {
-        story_id: story.frontmatter.get("id").cloned().unwrap_or_default(),
+        story_id: story.fields.id.clone(),
         story_path: story.relative_path.clone(),
         updated_fields: normalized_updates
             .iter()
@@ -720,12 +696,7 @@ pub fn find_story_with_source(
         let mut matches: Vec<&Story> = repository
             .stories
             .iter()
-            .filter(|s| {
-                s.frontmatter
-                    .get("id")
-                    .map(|id| id.eq_ignore_ascii_case(&normalized))
-                    .unwrap_or(false)
-            })
+            .filter(|story| story.fields.id.eq_ignore_ascii_case(&normalized))
             .collect();
         matches.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
         matches.into_iter().next().cloned()
@@ -746,10 +717,7 @@ pub(crate) fn unique_story_overviews(repository: &Repository) -> Vec<StoryOvervi
     let mut selected = BTreeMap::<String, &Story>::new();
 
     for story in &repository.stories {
-        let Some(id) = story.frontmatter.get("id") else {
-            continue;
-        };
-        let normalized_id = id.trim().to_ascii_uppercase();
+        let normalized_id = story.fields.id.trim().to_ascii_uppercase();
         if normalized_id.is_empty() {
             continue;
         }
@@ -778,13 +746,7 @@ pub(crate) fn find_story_in_repository(
     let mut matches = repository
         .stories
         .iter()
-        .filter(|story| {
-            story
-                .frontmatter
-                .get("id")
-                .map(|value| value.eq_ignore_ascii_case(&normalized_story_id))
-                .unwrap_or(false)
-        })
+        .filter(|story| story.fields.id.eq_ignore_ascii_case(&normalized_story_id))
         .collect::<Vec<_>>();
 
     matches.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
@@ -797,10 +759,10 @@ pub(crate) fn find_story_in_repository(
             .task_file
             .as_ref()
             .map(|task_file| task_file.relative_path.clone()),
-        epic_id: story.frontmatter.get("epic").cloned(),
+        epic_id: story.fields.epic.clone(),
         epic_title: epic_title(repo_root, story),
-        work_started: story.frontmatter.get("work_started").cloned(),
-        work_done: story.frontmatter.get("work_done").cloned(),
+        work_started: story.fields.work_started.clone(),
+        work_done: story.fields.work_done.clone(),
         story_statement: extract_markdown_section(&story.body, "Story Statement"),
         acceptance_criteria: extract_markdown_section(&story.body, "Acceptance Criteria"),
         definition_of_done: extract_markdown_section(&story.body, "Definition of Done"),
@@ -826,11 +788,12 @@ pub(crate) fn validate_non_negative_integer_frontmatter(
     field_name: &str,
     value: &str,
 ) -> Result<()> {
-    value
-        .trim()
-        .parse::<u32>()
-        .map(|_| ())
-        .map_err(|_| anyhow!("Frontmatter field \"{field_name}\" must be a non-negative integer."))
+    value.trim().parse::<u32>().map(|_| ()).map_err(|_| {
+        KanbanError::invalid_argument(format!(
+            "Frontmatter field \"{field_name}\" must be a non-negative integer."
+        ))
+        .into()
+    })
 }
 
 pub(crate) fn validate_story_sprint_frontmatter(value: &str) -> Result<()> {
@@ -842,9 +805,10 @@ pub(crate) fn validate_story_sprint_frontmatter(value: &str) -> Result<()> {
     if parse_sprint_file_name(&format!("{sprint}.md")).is_some() {
         Ok(())
     } else {
-        bail!(
+        Err(KanbanError::invalid_argument(format!(
             "Frontmatter field \"sprint\" must be empty, ~, or use <Snnn>.<headline-slug>; got {value:?}."
-        );
+        ))
+        .into())
     }
 }
 
@@ -865,39 +829,27 @@ pub(crate) fn find_story_for_write<'a>(
     repository
         .stories
         .iter()
-        .find(|story| {
-            story
-                .frontmatter
-                .get("id")
-                .map(|id| id.eq_ignore_ascii_case(&normalized_story_id))
-                .unwrap_or(false)
-        })
+        .find(|story| story.fields.id.eq_ignore_ascii_case(&normalized_story_id))
         .ok_or_else(|| KanbanError::story_not_found(&normalized_story_id).into())
 }
 
 pub(crate) fn story_overview(repo_root: &Path, story: &Story) -> StoryOverview {
     StoryOverview {
-        id: story.frontmatter.get("id").cloned().unwrap_or_else(|| {
+        id: if story.fields.id.is_empty() {
             story
                 .file_name
                 .trim_end_matches(STORY_FILE_SUFFIX)
                 .to_string()
-        }),
+        } else {
+            story.fields.id.clone()
+        },
         title: story_title(&story.body).unwrap_or_else(|| story.file_name.clone()),
-        status: story.frontmatter.get("status").cloned().unwrap_or_default(),
-        epic_id: story.frontmatter.get("epic").cloned(),
+        status: story.fields.status_raw.clone(),
+        epic_id: story.fields.epic.clone(),
         epic_title: epic_title(repo_root, story),
-        assignee: story
-            .frontmatter
-            .get("assignee")
-            .cloned()
-            .unwrap_or_default(),
-        story_points: story
-            .frontmatter
-            .get("story_points")
-            .cloned()
-            .unwrap_or_default(),
-        sprint: story.frontmatter.get("sprint").cloned(),
+        assignee: story.fields.assignee_raw.clone(),
+        story_points: story.fields.story_points_raw.clone(),
+        sprint: story.fields.sprint.clone(),
         relative_path: story.relative_path.clone(),
         task_summary: story
             .task_file
@@ -908,26 +860,10 @@ pub(crate) fn story_overview(repo_root: &Path, story: &Story) -> StoryOverview {
             .as_ref()
             .map(|task_file| task_file.tasks.len())
             .unwrap_or(0),
-        work_started: story
-            .frontmatter
-            .get("work_started")
-            .filter(|v| !v.trim().is_empty())
-            .cloned(),
-        work_done: story
-            .frontmatter
-            .get("work_done")
-            .filter(|v| !v.trim().is_empty())
-            .cloned(),
-        planned_start: story
-            .frontmatter
-            .get("planned_start")
-            .filter(|v| !v.trim().is_empty())
-            .cloned(),
-        planned_end: story
-            .frontmatter
-            .get("planned_end")
-            .filter(|v| !v.trim().is_empty())
-            .cloned(),
+        work_started: story.fields.work_started.clone(),
+        work_done: story.fields.work_done.clone(),
+        planned_start: story.fields.planned_start.clone(),
+        planned_end: story.fields.planned_end.clone(),
     }
 }
 

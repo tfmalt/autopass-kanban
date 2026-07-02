@@ -8,6 +8,7 @@ use crate::model::*;
 use crate::prelude::*;
 use crate::repository::*;
 use crate::sprint::*;
+use crate::status::StoryStatus;
 use crate::story::*;
 use crate::util::*;
 
@@ -123,13 +124,8 @@ pub fn validate_story_with_config(
     validate_timestamp_field(story, &mut issues, "work_started", true, false);
     validate_timestamp_field(story, &mut issues, "work_done", true, false);
 
-    if features.sprints
-        && story
-            .frontmatter
-            .get("sprint")
-            .is_some_and(|sprint| !sprint.trim().is_empty() && sprint.as_str() != "~")
-    {
-        if let Some(sprint) = story.frontmatter.get("sprint")
+    if features.sprints && story.fields.sprint.is_some() {
+        if let Some(sprint) = story.fields.sprint.as_deref()
             && validate_story_sprint_frontmatter(sprint).is_err()
         {
             add_issue(
@@ -143,7 +139,7 @@ pub fn validate_story_with_config(
         }
         validate_timestamp_field(story, &mut issues, "activated", true, false);
 
-        if story.frontmatter.get("status").map(String::as_str) == Some("planned") {
+        if story.fields.status == Some(StoryStatus::Planned) {
             add_issue(
                 story,
                 &mut issues,
@@ -154,11 +150,11 @@ pub fn validate_story_with_config(
         }
     }
 
-    if story.frontmatter.get("status").map(String::as_str) == Some("in-progress")
+    if story.fields.status == Some(StoryStatus::InProgress)
         && story
-            .frontmatter
-            .get("work_started")
-            .map(String::as_str)
+            .fields
+            .work_started
+            .as_deref()
             .unwrap_or_default()
             .is_empty()
     {
@@ -179,15 +175,11 @@ pub fn validate_story_with_config(
         );
     }
 
-    if story
-        .frontmatter
-        .get("status")
-        .map(String::as_str)
-        .is_some_and(|status| matches!(status, "done" | "dropped"))
+    if story.fields.status.is_some_and(StoryStatus::is_terminal)
         && story
-            .frontmatter
-            .get("work_done")
-            .map(String::as_str)
+            .fields
+            .work_done
+            .as_deref()
             .unwrap_or_default()
             .is_empty()
     {
@@ -247,8 +239,8 @@ pub fn validate_repository(repo_root: impl AsRef<Path>) -> Result<ValidationRepo
         if let Some(task_file) = &story.task_file
             && !task_file.exists
             && !matches!(
-                story.frontmatter.get("status").map(String::as_str),
-                Some("planned" | "todo")
+                story.fields.status,
+                Some(StoryStatus::Planned | StoryStatus::Todo)
             )
         {
             add_issue(
@@ -266,11 +258,7 @@ pub fn validate_repository(repo_root: impl AsRef<Path>) -> Result<ValidationRepo
     // US-026: detect duplicate story IDs across the backlog tree.
     let mut ids_by_value: BTreeMap<&str, Vec<&Story>> = BTreeMap::new();
     for story in &repository.stories {
-        let id = story
-            .frontmatter
-            .get("id")
-            .map(String::as_str)
-            .unwrap_or("");
+        let id = story.fields.id.as_str();
         if !id.is_empty() {
             ids_by_value.entry(id).or_default().push(story);
         }
@@ -550,12 +538,16 @@ pub(crate) fn validate_timestamp_field(
         .get(field_name)
         .map(String::as_str)
         .unwrap_or_default();
-    let status = story.frontmatter.get("status").map(String::as_str);
+    let status = story.fields.status;
     let status_allows_null_work_started = field_name == "work_started"
         && value == "null"
-        && matches!(status, Some("draft" | "planned" | "todo"));
-    let status_allows_null_work_done =
-        field_name == "work_done" && value == "null" && !matches!(status, Some("done" | "dropped"));
+        && matches!(
+            status,
+            Some(StoryStatus::Draft | StoryStatus::Planned | StoryStatus::Todo)
+        );
+    let status_allows_null_work_done = field_name == "work_done"
+        && value == "null"
+        && !status.is_some_and(StoryStatus::is_terminal);
     if status_allows_null_work_started || status_allows_null_work_done {
         return;
     }
@@ -609,16 +601,13 @@ pub(crate) fn validate_local_timestamp_frontmatter(field_name: &str, value: &str
 
 pub(crate) fn assignee_required(story: &Story) -> bool {
     !matches!(
-        story.frontmatter.get("status").map(String::as_str),
-        Some("draft" | "ready" | "planned" | "todo")
+        story.fields.status,
+        Some(StoryStatus::Draft | StoryStatus::Ready | StoryStatus::Planned | StoryStatus::Todo)
     )
 }
 
 pub(crate) fn assignee_is_set(story: &Story) -> bool {
-    story
-        .frontmatter
-        .get("assignee")
-        .is_some_and(|value| !value.trim().is_empty())
+    !story.fields.assignee_raw.trim().is_empty()
 }
 
 pub(crate) fn add_issue(

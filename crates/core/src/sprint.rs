@@ -7,6 +7,10 @@ use crate::model::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::repository::*;
+pub(crate) use crate::sprint_roster::{
+    SprintRosterEntry, render_sprint_roster, replace_roster_in_body, sprint_story_link_path,
+};
+use crate::status::StoryStatus;
 use crate::story::*;
 use crate::util::*;
 
@@ -19,6 +23,7 @@ pub(crate) struct SprintFolderSpec {
     pub(crate) end_date: NaiveDate,
     pub(crate) readme_path: PathBuf,
     pub(crate) readme_status: Option<String>,
+    pub(crate) wip_limit: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,17 +32,10 @@ pub(crate) struct SprintReadmeInfo {
     pub(crate) headline: Option<String>,
     pub(crate) sprint_goal: Option<String>,
     pub(crate) status: Option<String>,
+    pub(crate) wip_limit: Option<i64>,
     pub(crate) start_date: Option<NaiveDate>,
     pub(crate) end_date: Option<NaiveDate>,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SprintRosterEntry {
-    pub(crate) story: StoryOverview,
-    pub(crate) link_path: PathBuf,
-}
-
-const LEGACY_ROSTER_HEADING: &str = "## Stories (generated — do not edit)";
 
 pub fn summarize_sprints(repo_root: impl AsRef<Path>) -> Result<Vec<SprintOverview>> {
     let repository = read_repository(repo_root)?;
@@ -113,9 +111,7 @@ pub fn list_stories_in_sprint(
 pub fn ensure_sprints_enabled_for_repo(repo_root: impl AsRef<Path>) -> Result<()> {
     let config = load_kanban_config(repo_root)?;
     if !config.features().sprints {
-        bail!(
-            "Sprints are disabled in .kanban/settings.json. Run `kanban features enable sprints` to re-enable them."
-        );
+        return Err(KanbanError::feature_disabled("sprints").into());
     }
     Ok(())
 }
@@ -239,11 +235,10 @@ pub fn rollover_sprint(
     for story in repository
         .stories
         .iter()
-        .filter(|story| story.frontmatter.get("sprint").map(String::as_str) == Some(sprint_name))
+        .filter(|story| story.fields.sprint.as_deref() == Some(sprint_name))
     {
-        let story_id = story.frontmatter.get("id").cloned().unwrap_or_default();
-        let status = story.frontmatter.get("status").cloned().unwrap_or_default();
-        if status == "done" {
+        let story_id = story.fields.id.clone();
+        if story.fields.status == Some(StoryStatus::Done) {
             completed_story_ids.push(story_id);
             continue;
         }
@@ -337,9 +332,11 @@ pub(crate) fn sprint_overview_from_spec(
 
     let mut blocked_work = Vec::new();
 
-    for story in repository.stories.iter().filter(|story| {
-        story.frontmatter.get("sprint").map(String::as_str) == Some(spec.sprint_name.as_str())
-    }) {
+    for story in repository
+        .stories
+        .iter()
+        .filter(|story| story.fields.sprint.as_deref() == Some(spec.sprint_name.as_str()))
+    {
         let overview = story_overview(&repository.repo_root, story);
         let status_key = normalize_status_alias(&overview.status);
         stories_by_status
@@ -384,6 +381,7 @@ pub(crate) fn sprint_overview_from_spec(
         end_date: spec.end_date.format("%Y-%m-%d").to_string(),
         readme_path: relative_path(&repository.repo_root, &spec.readme_path),
         readme_status: spec.readme_status.clone(),
+        wip_limit: spec.wip_limit,
         stories_by_status,
         blocked_work,
         warnings: sprint_warnings(&repository.repo_root, repository, spec, today),
@@ -496,6 +494,7 @@ pub(crate) fn discover_sprint_folder_specs(config: &KanbanConfig) -> Result<Vec<
             end_date,
             readme_path,
             readme_status: readme.status,
+            wip_limit: readme.wip_limit,
         });
     }
 
@@ -512,6 +511,10 @@ pub(crate) fn parse_sprint_readme(readme_path: &Path) -> Result<SprintReadmeInfo
         headline: parsed.frontmatter.get("headline").cloned(),
         sprint_goal: extract_markdown_section(&parsed.body, "Sprint Goal"),
         status: parsed.frontmatter.get("status").cloned(),
+        wip_limit: parsed
+            .frontmatter
+            .get("wip_limit")
+            .and_then(|value| parse_non_negative_i64_frontmatter(value)),
         start_date: parsed
             .frontmatter
             .get("start_date")
@@ -570,244 +573,6 @@ pub(crate) fn render_sprint_file_template(
     )
 }
 
-pub(crate) fn render_sprint_roster(rows: &[SprintRosterEntry]) -> String {
-    let mut out = String::new();
-    push_line(&mut out, ROSTER_HEADING);
-    push_line(&mut out, "");
-
-    render_sprint_roster_summary(&mut out, rows);
-    push_line(&mut out, "");
-
-    let mut rows_by_status = BTreeMap::<String, Vec<&SprintRosterEntry>>::new();
-    for row in rows {
-        rows_by_status
-            .entry(row.story.status.clone())
-            .or_default()
-            .push(row);
-    }
-
-    for status in SPRINT_STATUS_DISPLAY_ORDER {
-        let mut items = rows_by_status.remove(status).unwrap_or_default();
-        items.sort_by(|left, right| left.story.id.cmp(&right.story.id));
-        render_sprint_roster_section(&mut out, status, &items);
-    }
-
-    for (status, mut items) in rows_by_status {
-        items.sort_by(|left, right| left.story.id.cmp(&right.story.id));
-        render_sprint_roster_section(&mut out, &status, &items);
-    }
-
-    out.trim_end().to_string()
-}
-
-fn push_line(output: &mut String, line: &str) {
-    output.push_str(line);
-    output.push('\n');
-}
-
-fn render_sprint_roster_section(output: &mut String, status: &str, rows: &[&SprintRosterEntry]) {
-    push_line(output, &format!("### {status}"));
-    push_line(output, "");
-
-    push_line(output, "| Story | Points | Assignee | Tasks |");
-    push_line(output, "|-------|-------:|----------|-------|");
-
-    if rows.is_empty() {
-        push_line(output, "| — | — | — | — |");
-        push_line(output, "");
-        return;
-    }
-
-    for row in rows {
-        let points = story_points_value(&row.story);
-        let assignee = render_assignee_cell(&row.story.assignee);
-        let tasks = format_task_summary(row.story.task_summary.as_ref());
-        push_line(
-            output,
-            &format!(
-                "| {} | {points} | {assignee} | {tasks} |",
-                sprint_story_link_label(row)
-            ),
-        );
-    }
-
-    push_line(output, "");
-}
-
-fn render_sprint_roster_summary(output: &mut String, rows: &[SprintRosterEntry]) {
-    let mut rows_by_status = BTreeMap::<String, Vec<&SprintRosterEntry>>::new();
-    for row in rows {
-        rows_by_status
-            .entry(row.story.status.clone())
-            .or_default()
-            .push(row);
-    }
-
-    let total_points = rows
-        .iter()
-        .map(|row| story_points_value(&row.story))
-        .sum::<usize>();
-    push_line(output, "| Metric | Stories | Points |");
-    push_line(output, "|--------|--------:|------:|");
-    push_line(
-        output,
-        &format!("| Total stories | {} | {total_points} |", rows.len()),
-    );
-
-    for status in SPRINT_STATUS_DISPLAY_ORDER {
-        let items = rows_by_status.remove(status).unwrap_or_default();
-        let points = items
-            .iter()
-            .map(|row| story_points_value(&row.story))
-            .sum::<usize>();
-        push_line(
-            output,
-            &format!(
-                "| {} | {} | {points} |",
-                status_summary_label(status),
-                items.len()
-            ),
-        );
-    }
-}
-
-fn sprint_story_link_label(row: &SprintRosterEntry) -> String {
-    let title = row.story.title.trim();
-    let label = if title.is_empty() {
-        format!("**{}**", row.story.id)
-    } else {
-        format!("**{}** {}", row.story.id, title)
-    };
-    let link_text = escape_markdown_link_text(&label);
-    format!("[{link_text}]({})", to_forward_slashes(&row.link_path))
-}
-
-fn render_assignee_cell(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || trimmed == "-" || trimmed.eq_ignore_ascii_case("tbd") {
-        return "-".to_string();
-    }
-
-    let pattern =
-        Regex::new(r"(?P<name>[^<]+?)\s*<(?P<email>[^>]+)>").expect("valid assignee parse regex");
-    let assignees = parse_assignee_list(trimmed);
-    let links = assignees
-        .iter()
-        .filter_map(|assignee| pattern.captures(assignee))
-        .filter_map(|captures| {
-            let name = captures.name("name")?.as_str().trim();
-            let email = captures.name("email")?.as_str().trim();
-            if name.is_empty() || email.is_empty() {
-                return None;
-            }
-            Some(format!(
-                "[{}](mailto:{})",
-                escape_markdown_link_text(name),
-                escape_markdown_link_target(email)
-            ))
-        })
-        .collect::<Vec<_>>();
-
-    if links.is_empty() {
-        escape_table_cell(trimmed)
-    } else {
-        links.join(" and ")
-    }
-}
-
-fn escape_markdown_link_text(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('[', "\\[")
-        .replace(']', "\\]")
-        .replace('|', "\\|")
-}
-
-fn escape_markdown_link_target(value: &str) -> String {
-    value.replace(' ', "%20")
-}
-
-fn escape_table_cell(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('|', "\\|")
-        .replace('\n', " ")
-        .trim()
-        .to_string()
-}
-
-fn story_points_value(story: &StoryOverview) -> usize {
-    story.story_points.trim().parse::<usize>().unwrap_or(0)
-}
-
-fn format_task_summary(summary: Option<&TaskSummary>) -> String {
-    match summary {
-        Some(summary) => format!(
-            "✓{} ▶{} ·{} ✗{}",
-            summary.done, summary.in_progress, summary.todo, summary.blocked
-        ),
-        None => "-".to_string(),
-    }
-}
-
-fn status_summary_label(status: &str) -> &'static str {
-    match status {
-        "backlog" | "ready" => "Ready",
-        "planned" => "Planned",
-        "todo" => "Todo",
-        "in-progress" => "In progress",
-        "ready-for-qa" => "Ready for QA",
-        "done" => "Done",
-        "blocked" => "Blocked",
-        _ => "Other",
-    }
-}
-
-pub(crate) fn sprint_story_link_path(
-    repo_root: &Path,
-    sprint_file_path: &Path,
-    story_relative_path: &Path,
-) -> PathBuf {
-    let sprint_dir = sprint_file_path.parent().unwrap_or(sprint_file_path);
-    let story_path = repo_root.join(story_relative_path);
-    relative_path_from(sprint_dir, &story_path)
-}
-
-fn relative_path_from(from: &Path, to: &Path) -> PathBuf {
-    let from_components = from.components().collect::<Vec<_>>();
-    let to_components = to.components().collect::<Vec<_>>();
-    let shared_prefix = from_components
-        .iter()
-        .zip(&to_components)
-        .take_while(|(left, right)| left == right)
-        .count();
-
-    let mut relative = PathBuf::new();
-    for _ in shared_prefix..from_components.len() {
-        relative.push("..");
-    }
-    for component in to_components.iter().skip(shared_prefix) {
-        relative.push(component.as_os_str());
-    }
-
-    if relative.as_os_str().is_empty() {
-        PathBuf::from(".")
-    } else {
-        relative
-    }
-}
-
-pub(crate) fn replace_roster_in_body(body: &str, roster: &str) -> String {
-    let trimmed = match body
-        .find(ROSTER_HEADING)
-        .or_else(|| body.find(LEGACY_ROSTER_HEADING))
-    {
-        Some(idx) => body[..idx].trim_end().to_string(),
-        None => body.trim_end().to_string(),
-    };
-    format!("{trimmed}\n\n{roster}")
-}
-
 pub(crate) fn regenerate_sprint_roster(config: &KanbanConfig, sprint_name: &str) -> Result<bool> {
     let sprint_file = config.sprints_path().join(format!("{sprint_name}.md"));
     if !sprint_file.is_file() {
@@ -817,7 +582,7 @@ pub(crate) fn regenerate_sprint_roster(config: &KanbanConfig, sprint_name: &str)
     let rows = repository
         .stories
         .iter()
-        .filter(|story| story.frontmatter.get("sprint").map(String::as_str) == Some(sprint_name))
+        .filter(|story| story.fields.sprint.as_deref() == Some(sprint_name))
         .map(|story| {
             let overview = story_overview(&repository.repo_root, story);
             let link_path = sprint_story_link_path(
@@ -1061,18 +826,6 @@ mod tests {
         assert!(markdown.contains("| Total stories | 0 | 0 |"));
         assert!(markdown.contains("| Story | Points | Assignee | Tasks |"));
         assert!(markdown.contains("| — | — | — | — |"));
-    }
-
-    #[test]
-    fn render_assignee_cell_links_comma_separated_assignees_without_leading_comma() {
-        let rendered = render_assignee_cell(
-            "Thomas Malt <thomas.malt@vegvesen.no>, Sondre Bjerkerud <sondre.bjerkerud@soprasteria.com>",
-        );
-
-        assert_eq!(
-            rendered,
-            "[Thomas Malt](mailto:thomas.malt@vegvesen.no) and [Sondre Bjerkerud](mailto:sondre.bjerkerud@soprasteria.com)"
-        );
     }
 
     #[test]

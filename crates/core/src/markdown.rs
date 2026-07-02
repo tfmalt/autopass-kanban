@@ -267,7 +267,7 @@ pub(crate) fn render_empty_task_file(story_id: &str, sprint_name: &str) -> Strin
 }
 
 pub(crate) fn next_task_id(story: &Story, task_file: &TaskFile) -> String {
-    let story_id = story.frontmatter.get("id").cloned().unwrap_or_default();
+    let story_id = story.fields.id.clone();
     let next_number = task_file
         .tasks
         .iter()
@@ -446,7 +446,46 @@ pub(crate) fn story_title(body: &str) -> Option<String> {
     })
 }
 
-pub(crate) fn extract_markdown_section(body: &str, heading: &str) -> Option<String> {
+pub fn title_from_body(body: &str, prefix: &str) -> String {
+    body.lines()
+        .find_map(|line| line.strip_prefix("# "))
+        .map(|title| {
+            title
+                .trim()
+                .strip_prefix(&format!("{prefix}: "))
+                .unwrap_or(title.trim())
+                .trim()
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
+pub fn phase_from_id(id: &str, prefix: &str) -> Option<String> {
+    let marker = format!("{prefix}-F");
+    let start = id.to_ascii_uppercase().find(&marker)? + prefix.len() + 1;
+    let rest = &id[start..];
+    let end = rest.find('-').unwrap_or(rest.len());
+    let phase = &rest[..end];
+    (!phase.is_empty()).then(|| phase.to_ascii_uppercase())
+}
+
+pub fn frontmatter_option(value: Option<&String>) -> Option<String> {
+    value
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "~" && *value != "null")
+        .map(str::to_string)
+}
+
+pub fn parse_i64_frontmatter(value: &str) -> Option<i64> {
+    value.trim().parse::<i64>().ok()
+}
+
+pub fn parse_non_negative_i64_frontmatter(value: &str) -> Option<i64> {
+    parse_i64_frontmatter(value).filter(|value| *value >= 0)
+}
+
+pub fn extract_markdown_section(body: &str, heading: &str) -> Option<String> {
     let normalized = body.replace("\r\n", "\n");
     let lines = normalized.lines().collect::<Vec<_>>();
     let target_heading = format!("## {heading}");

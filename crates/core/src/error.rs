@@ -61,6 +61,14 @@ impl KanbanError {
         KanbanError::EpicNotFound(id.into())
     }
 
+    pub fn phase_not_found(phase: impl Into<String>) -> Self {
+        KanbanError::PhaseNotFound(phase.into())
+    }
+
+    pub fn config_key_not_found(key: impl Into<String>) -> Self {
+        KanbanError::ConfigKeyNotFound(key.into())
+    }
+
     pub fn invalid_status(status: impl Into<String>) -> Self {
         KanbanError::InvalidStatus(status.into())
     }
@@ -145,8 +153,7 @@ impl From<anyhow::Error> for KanbanError {
 
 /// Map a typed [`KanbanError`] to the stable JSON [`KanbanErrorCode`].
 ///
-/// This replaces the legacy string-sniffing `KanbanErrorCode::classify` for
-/// errors that carry a typed payload: the code is derived from the variant,
+/// This derives codes from the typed variant: the code is derived from the variant,
 /// not from the error message, so rewording a `bail!`/`Display` message cannot
 /// silently change the code clients receive.
 impl From<&KanbanError> for KanbanErrorCode {

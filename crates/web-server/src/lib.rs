@@ -22,6 +22,8 @@ mod metrics;
 mod snapshot;
 mod sprint_io;
 mod team;
+#[cfg(test)]
+mod typegen;
 
 use dto::ApiError;
 use handlers::{

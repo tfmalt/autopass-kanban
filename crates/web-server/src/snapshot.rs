@@ -1,23 +1,13 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use kanban_core::*;
 
 use crate::dto::*;
-use crate::team::parse_assignees;
 
-fn counts_toward_scope(story: &WebStory) -> bool {
-    story.status != "dropped"
-}
-
-fn board_bucket_status(story: &WebStory) -> &str {
-    if story.status == "dropped" {
-        "done"
-    } else {
-        story.status.as_str()
-    }
+fn story_status(story: &WebStory) -> Option<StoryStatus> {
+    StoryStatus::parse(&story.status)
 }
 
 pub(crate) fn load_repository_snapshot(repo_root: &Path) -> Result<RepositorySnapshot> {
@@ -40,7 +30,7 @@ pub(crate) fn load_repository_snapshot(repo_root: &Path) -> Result<RepositorySna
 }
 
 pub(crate) fn web_story_from_core(repo_root: &Path, story: &kanban_core::Story) -> WebStory {
-    let id = story.frontmatter.get("id").cloned().unwrap_or_default();
+    let id = story.fields.id.clone();
     let tasks = story
         .task_file
         .as_ref()
@@ -52,29 +42,21 @@ pub(crate) fn web_story_from_core(repo_root: &Path, story: &kanban_core::Story) 
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let assignee = empty_to_none(story.frontmatter.get("assignee"));
-    let assignees = assignee.as_deref().map(parse_assignees).unwrap_or_default();
     WebStory {
         title: title_from_body(&story.body, "User Story"),
-        status: story.frontmatter.get("status").cloned().unwrap_or_default(),
+        status: story.fields.status_raw.clone(),
         phase: phase_from_id(&id, "US"),
-        epic: empty_to_none(story.frontmatter.get("epic")),
-        sprint: empty_to_none(story.frontmatter.get("sprint")),
-        priority: story
-            .frontmatter
-            .get("priority")
-            .and_then(|value| parse_non_negative_i64(value)),
-        story_points: story
-            .frontmatter
-            .get("story_points")
-            .and_then(|value| parse_i64(value)),
-        assignee,
-        assignees,
-        work_started: empty_to_none(story.frontmatter.get("work_started")),
-        work_done: empty_to_none(story.frontmatter.get("work_done")),
-        activated: empty_to_none(story.frontmatter.get("activated")),
-        created: empty_to_none(story.frontmatter.get("created")),
-        updated: empty_to_none(story.frontmatter.get("updated")),
+        epic: story.fields.epic.clone(),
+        sprint: story.fields.sprint.clone(),
+        priority: story.fields.priority,
+        story_points: story.fields.story_points,
+        assignee: story.fields.assignee.clone(),
+        assignees: story.fields.assignees.clone(),
+        work_started: story.fields.work_started.clone(),
+        work_done: story.fields.work_done.clone(),
+        activated: story.fields.activated.clone(),
+        created: story.fields.created.clone(),
+        updated: story.fields.updated.clone(),
         relative_path: rel_to_root(repo_root, &story.relative_path),
         task_summary: summarize_web_tasks(&tasks),
         tasks,
@@ -140,23 +122,22 @@ pub(crate) fn load_epics(repo_root: &Path, stories: &[WebStory]) -> Result<Vec<W
     let mut epics = BTreeMap::<String, WebEpic>::new();
     for path in collect_epic_files(repo_root)? {
         let source = read_epic_file(&path, repo_root)?;
-        let id = source.frontmatter.get("id").cloned().unwrap_or_default();
-        if id.is_empty() {
+        let source_overview = kanban_core::epic_overview(&source);
+        let Some(details) = find_epic(repo_root, &source_overview.id)? else {
             continue;
-        }
+        };
+        let overview = details.epic;
+        let id = overview.id.clone();
         epics.insert(
             id.clone(),
             WebEpic {
-                title: title_from_body(&source.body, "Epic"),
-                phase: phase_from_id(&id, "EP").unwrap_or_else(|| "F?".to_string()),
-                priority: source
-                    .frontmatter
-                    .get("priority")
-                    .and_then(|value| parse_non_negative_i64(value)),
-                planned_start: empty_to_none(source.frontmatter.get("planned_start")),
-                planned_end: empty_to_none(source.frontmatter.get("planned_end")),
-                work_started: empty_to_none(source.frontmatter.get("work_started")),
-                work_done: empty_to_none(source.frontmatter.get("work_done")),
+                title: overview.title,
+                phase: overview.phase.unwrap_or_else(|| "F?".to_string()),
+                priority: overview.priority,
+                planned_start: overview.planned_start,
+                planned_end: overview.planned_end,
+                work_started: overview.work_started,
+                work_done: overview.work_done,
                 stories: Vec::new(),
                 id,
             },
@@ -183,35 +164,21 @@ pub(crate) fn load_epics(repo_root: &Path, stories: &[WebStory]) -> Result<Vec<W
 }
 
 pub(crate) fn load_sprints(repo_root: &Path, stories: &[WebStory]) -> Result<Vec<WebSprint>> {
-    let config = load_kanban_config(repo_root)?;
     let mut sprints = Vec::new();
-    let Ok(entries) = fs::read_dir(config.sprints_path()) else {
-        return Ok(sprints);
-    };
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("md") {
-            continue;
-        }
-        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-        if !stem.starts_with('S') || !stem.contains('.') {
-            continue;
-        }
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("read sprint file {}", path.display()))?;
-        let parsed = parse_frontmatter(&content);
+    for overview in summarize_sprints(repo_root)? {
         let mut by_status = BOARD_STATUSES
             .iter()
             .map(|status| ((*status).to_string(), Vec::<WebStory>::new()))
             .collect::<BTreeMap<_, _>>();
         for story in stories
             .iter()
-            .filter(|story| story.sprint.as_deref() == Some(stem))
+            .filter(|story| story.sprint.as_deref() == Some(overview.sprint_name.as_str()))
         {
-            if let Some(bucket) = by_status.get_mut(board_bucket_status(story)) {
+            let bucket_status = story_status(story)
+                .map(StoryStatus::board_bucket)
+                .map(|status| status.as_str())
+                .unwrap_or_else(|| story.status.as_str());
+            if let Some(bucket) = by_status.get_mut(bucket_status) {
                 bucket.push(story.clone());
             }
         }
@@ -223,25 +190,19 @@ pub(crate) fn load_sprints(repo_root: &Path, stories: &[WebStory]) -> Result<Vec
             });
         }
         sprints.push(WebSprint {
-            name: stem.to_string(),
-            id: parsed
-                .frontmatter
-                .get("sprint")
-                .cloned()
-                .unwrap_or_else(|| stem.split('.').next().unwrap_or(stem).to_string()),
-            headline: parsed
-                .frontmatter
-                .get("headline")
-                .cloned()
-                .unwrap_or_default(),
-            goal: extract_section(&parsed.body, "Sprint Goal"),
-            start_date: empty_to_none(parsed.frontmatter.get("start_date")),
-            end_date: empty_to_none(parsed.frontmatter.get("end_date")),
-            status: empty_to_none(parsed.frontmatter.get("status")),
-            wip_limit: parsed
-                .frontmatter
-                .get("wip_limit")
-                .and_then(|value| parse_non_negative_i64(value)),
+            name: overview.sprint_name.clone(),
+            id: overview
+                .sprint_name
+                .split('.')
+                .next()
+                .unwrap_or(overview.sprint_name.as_str())
+                .to_string(),
+            headline: overview.headline,
+            goal: overview.sprint_goal,
+            start_date: Some(overview.start_date),
+            end_date: Some(overview.end_date),
+            status: overview.readme_status,
+            wip_limit: overview.wip_limit,
             stories_by_status: by_status,
         });
     }
@@ -265,7 +226,7 @@ pub(crate) fn compute_progress(stories: &[WebStory]) -> ProjectProgress {
             done_stories: 0,
             total_stories: 0,
         });
-        if counts_toward_scope(story) {
+        if story_status(story).is_none_or(StoryStatus::counts_toward_scope) {
             entry.total_points += points;
             entry.total_stories += 1;
             total_points += points;
@@ -287,45 +248,6 @@ pub(crate) fn compute_progress(stories: &[WebStory]) -> ProjectProgress {
     }
 }
 
-pub(crate) fn title_from_body(body: &str, prefix: &str) -> String {
-    body.lines()
-        .find_map(|line| line.strip_prefix("# "))
-        .map(|title| {
-            title
-                .trim()
-                .strip_prefix(&format!("{prefix}: "))
-                .unwrap_or(title.trim())
-                .trim()
-                .to_string()
-        })
-        .unwrap_or_default()
-}
-
-pub(crate) fn phase_from_id(id: &str, prefix: &str) -> Option<String> {
-    let marker = format!("{prefix}-F");
-    let start = id.to_ascii_uppercase().find(&marker)? + prefix.len() + 1;
-    let rest = &id[start..];
-    let end = rest.find('-').unwrap_or(rest.len());
-    let phase = &rest[..end];
-    (!phase.is_empty()).then(|| phase.to_ascii_uppercase())
-}
-
-pub(crate) fn empty_to_none(value: Option<&String>) -> Option<String> {
-    value
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != "~" && *value != "null")
-        .map(str::to_string)
-}
-
-pub(crate) fn parse_i64(value: &str) -> Option<i64> {
-    value.trim().parse::<i64>().ok()
-}
-
-pub(crate) fn parse_non_negative_i64(value: &str) -> Option<i64> {
-    parse_i64(value).filter(|value| *value >= 0)
-}
-
 pub(crate) fn priority_sort_key(story: &WebStory) -> i64 {
     story.priority.unwrap_or(i64::MAX)
 }
@@ -337,15 +259,6 @@ pub(crate) fn rel_to_root(repo_root: &Path, path: &Path) -> String {
         path
     };
     path.to_string_lossy().replace('\\', "/")
-}
-
-pub(crate) fn extract_section(body: &str, heading: &str) -> Option<String> {
-    let marker = format!("## {heading}");
-    let start = body.find(&marker)? + marker.len();
-    let rest = &body[start..];
-    let end = rest.find("\n## ").unwrap_or(rest.len());
-    let value = rest[..end].trim();
-    (!value.is_empty()).then(|| value.to_string())
 }
 
 #[cfg(test)]

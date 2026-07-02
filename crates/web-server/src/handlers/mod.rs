@@ -122,8 +122,14 @@ pub(crate) async fn api_metrics(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<DashboardMetrics>, ApiResponse> {
     let repo_root = state.repo_root.clone();
-    let repo = run_blocking(move || load_repository_snapshot(&repo_root)).await?;
-    Ok(Json(compute_metrics(&repo)))
+    let metrics = run_blocking(move || {
+        let web_snapshot = load_repository_snapshot(&repo_root)?;
+        let stories = list_all_stories(&repo_root)?;
+        let sprints = summarize_sprints(&repo_root)?;
+        Ok(compute_metrics(&web_snapshot, &stories, &sprints))
+    })
+    .await?;
+    Ok(Json(metrics))
 }
 
 pub(crate) async fn api_config(

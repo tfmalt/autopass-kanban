@@ -1,18 +1,17 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
-
 use chrono::{Days, Local, NaiveDate};
 use kanban_core::*;
 use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
+use ts_rs::TS;
 
 use crate::dto::{ProjectProgress, RepositorySnapshot, WebSprint, WebStory};
 use crate::snapshot::compute_progress;
 
 fn counts_toward_scope(story: &WebStory) -> bool {
-    story.status != "dropped"
+    StoryStatus::parse(&story.status).is_none_or(StoryStatus::counts_toward_scope)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DashboardMetrics {
     pub(crate) burndown: Vec<BurndownPoint>,
@@ -23,21 +22,21 @@ pub(crate) struct DashboardMetrics {
     pub(crate) progress: ProjectProgress,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
 pub(crate) struct BurndownPoint {
     pub(crate) date: String,
     pub(crate) remaining: i64,
     pub(crate) ideal: i64,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
 pub(crate) struct BurnupPoint {
     pub(crate) date: String,
     pub(crate) completed: i64,
     pub(crate) scope: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LeadTimePoint {
     pub(crate) story_id: String,
@@ -46,14 +45,14 @@ pub(crate) struct LeadTimePoint {
     pub(crate) rolling_avg: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub(crate) struct VelocityPoint {
     pub(crate) sprint: String,
     pub(crate) points: i64,
     pub(crate) forecast: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Forecast {
     pub(crate) generated_at: String,
@@ -65,7 +64,7 @@ pub(crate) struct Forecast {
     pub(crate) confidence: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ForecastThroughput {
     pub(crate) samples: Vec<i64>,
@@ -74,7 +73,7 @@ pub(crate) struct ForecastThroughput {
     pub(crate) observed_day_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ForecastCompletion {
     pub(crate) p50_days: Option<i64>,
@@ -85,14 +84,18 @@ pub(crate) struct ForecastCompletion {
     pub(crate) p90_date: Option<String>,
 }
 
-pub(crate) fn compute_metrics(repo: &RepositorySnapshot) -> DashboardMetrics {
+pub(crate) fn compute_metrics(
+    repo: &RepositorySnapshot,
+    core_stories: &[StoryOverview],
+    core_sprints: &[SprintOverview],
+) -> DashboardMetrics {
     let progress = compute_progress(&repo.stories);
     DashboardMetrics {
         burndown: build_burndown(&repo.sprints),
         burnup: build_burnup(&repo.stories, &repo.sprints),
         lead_time: build_lead_time(&repo.stories),
         velocity: build_velocity(&repo.sprints),
-        forecast: build_forecast(&repo.stories, &repo.sprints),
+        forecast: build_forecast(core_stories, core_sprints),
         progress,
     }
 }
@@ -342,77 +345,13 @@ pub(crate) fn build_velocity(sprints: &[WebSprint]) -> Vec<VelocityPoint> {
         .collect()
 }
 
-pub(crate) fn build_forecast(stories: &[WebStory], sprints: &[WebSprint]) -> Forecast {
-    let story_overviews = stories
-        .iter()
-        .map(story_overview_from_web)
-        .collect::<Vec<_>>();
-    let sprint_overviews = sprints
-        .iter()
-        .map(sprint_overview_from_web)
-        .collect::<Vec<_>>();
+pub(crate) fn build_forecast(stories: &[StoryOverview], sprints: &[SprintOverview]) -> Forecast {
     let current_sprint_name = sprints
         .iter()
-        .find(|sprint| sprint.status.as_deref() == Some("active"))
-        .map(|sprint| sprint.name.as_str());
-    let canonical =
-        ReportForecastDto::build(&story_overviews, &sprint_overviews, current_sprint_name);
+        .find(|sprint| sprint.readme_status.as_deref() == Some("active"))
+        .map(|sprint| sprint.sprint_name.as_str());
+    let canonical = ReportForecastDto::build(stories, sprints, current_sprint_name);
     Forecast::from(canonical)
-}
-
-fn story_overview_from_web(story: &WebStory) -> StoryOverview {
-    StoryOverview {
-        id: story.id.clone(),
-        title: story.title.clone(),
-        status: story.status.clone(),
-        epic_id: story.epic.clone(),
-        epic_title: None,
-        assignee: story.assignee.clone().unwrap_or_default(),
-        story_points: story
-            .story_points
-            .map(|points| points.to_string())
-            .unwrap_or_default(),
-        sprint: story.sprint.clone(),
-        relative_path: PathBuf::from(&story.relative_path),
-        task_summary: Some(TaskSummary {
-            todo: story.task_summary.todo,
-            in_progress: story.task_summary.in_progress,
-            blocked: story.task_summary.blocked,
-            done: story.task_summary.done,
-        }),
-        task_count: story.task_summary.total,
-        work_started: story.work_started.clone(),
-        work_done: story.work_done.clone(),
-        planned_start: None,
-        planned_end: None,
-    }
-}
-
-fn sprint_overview_from_web(sprint: &WebSprint) -> SprintOverview {
-    SprintOverview {
-        sprint_name: sprint.name.clone(),
-        headline: sprint.headline.clone(),
-        sprint_goal: sprint.goal.clone(),
-        start_date: sprint.start_date.clone().unwrap_or_default(),
-        end_date: sprint.end_date.clone().unwrap_or_default(),
-        readme_path: PathBuf::from(format!("delivery/sprints/{}.md", sprint.name)),
-        readme_status: sprint.status.clone(),
-        stories_by_status: sprint
-            .stories_by_status
-            .iter()
-            .map(|(status, stories)| {
-                (
-                    status.clone(),
-                    stories
-                        .iter()
-                        .map(story_overview_from_web)
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect(),
-        blocked_work: Vec::new(),
-        warnings: Vec::new(),
-    }
 }
 
 impl From<ReportForecastDto> for Forecast {

@@ -205,8 +205,8 @@ pub fn apply_doctor_fix(
             let task_file_path = parent.join(&task_file_name);
             let backlog_root = load_kanban_config(&repo_root)?.backlog_path();
             let task_file_path = ensure_path_inside(&backlog_root, &task_file_path)?;
-            let story_id = story.frontmatter.get("id").cloned().unwrap_or_default();
-            let sprint_name = story.frontmatter.get("sprint").cloned().unwrap_or_default();
+            let story_id = story.fields.id.clone();
+            let sprint_name = story.fields.sprint.clone().unwrap_or_default();
             atomic_write(
                 &task_file_path,
                 &render_empty_task_file(&story_id, &sprint_name),
@@ -234,12 +234,11 @@ pub fn apply_doctor_fix(
                 .task_file
                 .as_ref()
                 .ok_or_else(|| anyhow!("Story is missing task file metadata."))?;
-            let story_id = story.frontmatter.get("id").cloned().unwrap_or_default();
+            let story_id = story.fields.id.clone();
             let sprint_name = story
-                .frontmatter
-                .get("sprint")
-                .cloned()
-                .filter(|value| !value.trim().is_empty())
+                .fields
+                .sprint
+                .clone()
                 .unwrap_or_else(|| "~".to_string());
             atomic_write(
                 &task_file.file_path,
@@ -435,7 +434,7 @@ pub(crate) fn collect_doctor_issues_at_date(
             severity: "info".to_string(),
             scope: task_file.relative_path.display().to_string(),
             file_path: Some(task_file.relative_path.clone()),
-            story_id: story.frontmatter.get("id").cloned(),
+            story_id: Some(story.fields.id.clone()).filter(|id| !id.is_empty()),
             sprint_name: story.sprint_name.clone(),
             rule: "legacy-task-file-format".to_string(),
             message: "Task file uses legacy `---` separators that can be mistaken for Markdown/YAML frontmatter fences by generic tooling.".to_string(),
@@ -453,17 +452,9 @@ pub(crate) fn collect_doctor_issues_at_date(
             .collect::<BTreeSet<_>>();
 
         for story in &repository.stories {
-            let story_id = story.frontmatter.get("id").cloned();
-            let sprint_name = story
-                .frontmatter
-                .get("sprint")
-                .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
-                .cloned();
-            let status = story
-                .frontmatter
-                .get("status")
-                .map(String::as_str)
-                .unwrap_or_default();
+            let story_id = Some(story.fields.id.clone()).filter(|id| !id.is_empty());
+            let sprint_name = story.fields.sprint.clone();
+            let status = story.fields.status_raw.as_str();
 
             if let Some(sprint_name) = sprint_name.as_ref()
                 && !sprint_names.contains(sprint_name)
@@ -636,7 +627,7 @@ pub(crate) fn doctor_issue_from_validation(
         severity: severity.to_string(),
         scope: issue.file_path.display().to_string(),
         file_path: Some(issue.file_path.clone()),
-        story_id: story.and_then(|story| story.frontmatter.get("id").cloned()),
+        story_id: story.and_then(|story| Some(story.fields.id.clone()).filter(|id| !id.is_empty())),
         sprint_name: story.and_then(|story| story.sprint_name.clone()),
         rule: issue.rule.clone(),
         message: format!("[{}] {}", issue.rule, issue.message),
@@ -878,9 +869,7 @@ pub(crate) fn doctor_findings_for_sprint(
     let expected_rows = repository
         .stories
         .iter()
-        .filter(|story| {
-            story.frontmatter.get("sprint").map(String::as_str) == Some(spec.sprint_name.as_str())
-        })
+        .filter(|story| story.fields.sprint.as_deref() == Some(spec.sprint_name.as_str()))
         .map(|story| {
             let overview = story_overview(repo_root, story);
             let link_path =

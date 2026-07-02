@@ -55,7 +55,9 @@ pub fn update_epic_frontmatter(
     let _lock = RepoLock::acquire(&config.repo_root)?;
     let normalized_epic_id = epic_id.trim().to_ascii_uppercase();
     if updates.is_empty() {
-        bail!("No epic frontmatter fields were provided.");
+        return Err(
+            KanbanError::invalid_argument("No epic frontmatter fields were provided.").into(),
+        );
     }
 
     for (field, value) in updates {
@@ -115,10 +117,10 @@ fn epic_details_from_parts(repo_root: &Path, repository: &Repository, epic: &Epi
         .iter()
         .filter(|story| {
             story
-                .frontmatter
-                .get("epic")
-                .map(|value| value.eq_ignore_ascii_case(&epic_id))
-                .unwrap_or(false)
+                .fields
+                .epic
+                .as_deref()
+                .is_some_and(|value| value.eq_ignore_ascii_case(&epic_id))
         })
         .map(|story| story_overview(repo_root, story))
         .collect::<Vec<_>>();
@@ -206,6 +208,7 @@ mod tests {
                 title: "Platform".to_string(),
                 status: "draft".to_string(),
                 phase: Some("1".to_string()),
+                priority: None,
                 owner: None,
                 milestone: None,
                 work_started: None,

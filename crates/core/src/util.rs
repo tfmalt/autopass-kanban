@@ -28,13 +28,14 @@ pub(crate) fn current_git_assignee(repo_root: &Path) -> Result<String> {
     Ok(format!("{name} <{email}>"))
 }
 
-pub(crate) fn parse_assignee_list(assignee: &str) -> Vec<String> {
+pub fn parse_assignee_list(assignee: &str) -> Vec<String> {
     assignee
         .split(',')
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
         .filter(|entry| *entry != "~")
         .filter(|entry| !entry.eq_ignore_ascii_case("tbd"))
+        .filter(|entry| !entry.eq_ignore_ascii_case("Name <email@example.com>"))
         .map(ToOwned::to_owned)
         .collect()
 }
@@ -145,6 +146,33 @@ pub(crate) fn relative_path(repo_root: &Path, path: &Path) -> PathBuf {
     path.strip_prefix(repo_root).unwrap_or(path).to_path_buf()
 }
 
+/// Build a path from `from` to `to`, including `..` components when the target
+/// sits outside `from`. Unlike `relative_path`, this is not repo-root-based and
+/// preserves sibling-directory traversal for generated markdown links.
+pub(crate) fn relative_path_from(from: &Path, to: &Path) -> PathBuf {
+    let from_components = from.components().collect::<Vec<_>>();
+    let to_components = to.components().collect::<Vec<_>>();
+    let shared_prefix = from_components
+        .iter()
+        .zip(&to_components)
+        .take_while(|(left, right)| left == right)
+        .count();
+
+    let mut relative = PathBuf::new();
+    for _ in shared_prefix..from_components.len() {
+        relative.push("..");
+    }
+    for component in to_components.iter().skip(shared_prefix) {
+        relative.push(component.as_os_str());
+    }
+
+    if relative.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        relative
+    }
+}
+
 pub(crate) fn to_forward_slashes(path: &Path) -> String {
     path.to_string_lossy()
         .replace(std::path::MAIN_SEPARATOR, "/")
@@ -223,4 +251,62 @@ pub(crate) fn validate_task_file_frontmatter_value(value: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_assignee_list, relative_path_from, slugify_headline};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn parse_assignee_list_filters_placeholders() {
+        assert!(parse_assignee_list("~").is_empty());
+        assert!(parse_assignee_list("TBD").is_empty());
+        assert!(parse_assignee_list("Name <email@example.com>").is_empty());
+    }
+
+    #[test]
+    fn parse_assignee_list_keeps_valid_comma_separated_assignees() {
+        assert_eq!(
+            parse_assignee_list(
+                "Alice Example <alice@example.com>, ~, TBD, Name <email@example.com>, Bob Example <bob@example.com>"
+            ),
+            vec![
+                "Alice Example <alice@example.com>".to_string(),
+                "Bob Example <bob@example.com>".to_string(),
+            ]
+        );
+    }
+
+    // Keep these cases aligned with web/shared/domain.test.ts.
+    #[test]
+    fn slugify_headline_matches_shared_domain_cases() {
+        assert_eq!(slugify_headline("Foundation Sprint!"), "foundation-sprint");
+        assert_eq!(slugify_headline("  Alpha   Beta  "), "alpha-beta");
+        assert_eq!(slugify_headline("Roadmap_2026"), "roadmap-2026");
+        assert_eq!(slugify_headline("---"), "");
+    }
+
+    #[test]
+    fn relative_path_from_preserves_parent_traversal() {
+        assert_eq!(
+            relative_path_from(
+                Path::new("delivery/sprints"),
+                Path::new(
+                    "delivery/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/story.md"
+                )
+            ),
+            PathBuf::from(
+                "../backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/story.md"
+            )
+        );
+    }
+
+    #[test]
+    fn relative_path_from_returns_dot_for_same_path() {
+        assert_eq!(
+            relative_path_from(Path::new("delivery/sprints"), Path::new("delivery/sprints")),
+            PathBuf::from(".")
+        );
+    }
 }

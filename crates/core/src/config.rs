@@ -6,6 +6,7 @@ use std::process::Command;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::error::KanbanError;
 use crate::repository::atomic_write;
 use crate::util::git_config_value;
 
@@ -372,12 +373,12 @@ pub fn get_config_value(repo_root: impl AsRef<Path>, key: &str) -> Result<String
         }
         _ if key.starts_with("story_points.aliases.") => {
             let alias = key.trim_start_matches("story_points.aliases.");
-            config
+            Ok(config
                 .story_points
                 .aliases
                 .get(alias)
                 .cloned()
-                .ok_or_else(|| anyhow!("Unknown story point alias: {alias}"))
+                .ok_or_else(|| KanbanError::config_key_not_found(key))?)
         }
         "features.sprints" => Ok(config.features().sprints.to_string()),
         "features.epics" => Ok(config.features().epics.to_string()),
@@ -672,9 +673,7 @@ fn relative_path(repo_root: &Path, path: &Path) -> PathBuf {
 }
 
 fn unsupported_key<T>(key: &str) -> Result<T> {
-    bail!(
-        "Unsupported config key `{key}`. Supported keys: paths.backlog, paths.sprints, features.sprints, features.epics, features.phases, theme.color_mode, story_points.allowed_values, story_points.aliases.<NAME>, web.port, web.host, web.style."
-    )
+    Err(KanbanError::config_key_not_found(key).into())
 }
 
 #[cfg(test)]

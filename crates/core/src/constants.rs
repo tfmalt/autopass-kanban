@@ -1,3 +1,4 @@
+use crate::StoryStatus;
 #[allow(unused_imports)]
 use crate::prelude::*;
 
@@ -14,18 +15,7 @@ pub(crate) const REQUIRED_STORY_FIELDS: [&str; 10] = [
     "updated",
 ];
 
-pub const CANONICAL_STORY_STATUSES: [&str; 10] = [
-    "draft",
-    "backlog",
-    "ready",
-    "planned",
-    "todo",
-    "in-progress",
-    "ready-for-qa",
-    "done",
-    "blocked",
-    "dropped",
-];
+pub const CANONICAL_STORY_STATUSES: [&str; 10] = story_status_strings(StoryStatus::ALL);
 
 pub(crate) const TASK_HEADING_PATTERN: &str = r"(?m)^##\s+(TASK-[A-Z0-9-]+)\s+-\s+(.+)$";
 
@@ -57,25 +47,24 @@ pub const SPRINT_STATUS_DISPLAY_ORDER: [&str; 6] = [
     "blocked",
 ];
 
-pub(crate) const STATUS_PROGRESSION: [&str; 8] = [
-    "draft",
-    "backlog",
-    "ready",
-    "planned",
-    "todo",
-    "in-progress",
-    "ready-for-qa",
-    "done",
-];
-
 pub(crate) const SPRINT_STATUSES: [&str; 4] = ["planned", "active", "closed", "cancelled"];
 
 pub(crate) const ROSTER_HEADING: &str = "## User Stories selected for sprint";
 
 pub const CANONICAL_TASK_STATUSES: [&str; 4] = ["todo", "in-progress", "blocked", "done"];
 
+const fn story_status_strings<const N: usize>(statuses: [StoryStatus; N]) -> [&'static str; N] {
+    let mut out = [""; N];
+    let mut index = 0;
+    while index < N {
+        out[index] = statuses[index].as_str();
+        index += 1;
+    }
+    out
+}
+
 pub(crate) fn status_rank(status: &str) -> Option<usize> {
-    STATUS_PROGRESSION.iter().position(|s| *s == status)
+    StoryStatus::parse(status).and_then(StoryStatus::rank)
 }
 
 pub fn most_advanced_status(statuses: &[&str]) -> String {

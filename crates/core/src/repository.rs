@@ -136,11 +136,9 @@ pub fn list_story_ids(repo_root: impl AsRef<Path>) -> Result<Vec<String>> {
     let repository = read_repository(repo_root)?;
     let mut seen = BTreeSet::new();
     for story in &repository.stories {
-        if let Some(id) = story.frontmatter.get("id") {
-            let id_upper = id.trim().to_ascii_uppercase();
-            if !id_upper.is_empty() {
-                seen.insert(id_upper);
-            }
+        let id_upper = story.fields.id.trim().to_ascii_uppercase();
+        if !id_upper.is_empty() {
+            seen.insert(id_upper);
         }
     }
     Ok(seen.into_iter().collect())
@@ -152,12 +150,10 @@ pub fn list_story_completion_items(repo_root: impl AsRef<Path>) -> Result<Vec<Co
     let repository = read_repository(repo_root)?;
     let mut items = BTreeMap::new();
     for story in &repository.stories {
-        if let Some(id) = story.frontmatter.get("id") {
-            let id_upper = id.trim().to_ascii_uppercase();
-            if !id_upper.is_empty() {
-                let title = story_title(&story.body).unwrap_or_else(|| story.file_name.clone());
-                items.entry(id_upper).or_insert(title);
-            }
+        let id_upper = story.fields.id.trim().to_ascii_uppercase();
+        if !id_upper.is_empty() {
+            let title = story_title(&story.body).unwrap_or_else(|| story.file_name.clone());
+            items.entry(id_upper).or_insert(title);
         }
     }
 
@@ -274,6 +270,8 @@ pub fn read_story_file(file_path: impl AsRef<Path>, repo_root: impl AsRef<Path>)
         None
     };
 
+    let fields = StoryFields::from_frontmatter(&parsed.frontmatter);
+
     Ok(Story {
         relative_path: relative_path(repo_root, &file_path),
         file_name: file_path
@@ -285,6 +283,7 @@ pub fn read_story_file(file_path: impl AsRef<Path>, repo_root: impl AsRef<Path>)
         file_path,
         frontmatter: parsed.frontmatter,
         frontmatter_keys: parsed.frontmatter_keys,
+        fields,
         markdown,
         sprint_name,
         task_file,
@@ -325,7 +324,7 @@ pub fn read_repository(repo_root: impl AsRef<Path>) -> Result<Repository> {
     Ok(Repository { repo_root, stories })
 }
 
-pub(crate) fn epic_overview(epic: &Epic) -> EpicOverview {
+pub fn epic_overview(epic: &Epic) -> EpicOverview {
     EpicOverview {
         id: epic.frontmatter.get("id").cloned().unwrap_or_else(|| {
             epic.file_name
@@ -335,6 +334,10 @@ pub(crate) fn epic_overview(epic: &Epic) -> EpicOverview {
         title: story_title(&epic.body).unwrap_or_else(|| epic.file_name.clone()),
         status: epic.frontmatter.get("status").cloned().unwrap_or_default(),
         phase: epic.frontmatter.get("phase").cloned(),
+        priority: epic
+            .frontmatter
+            .get("priority")
+            .and_then(|value| parse_non_negative_i64_frontmatter(value)),
         owner: epic.frontmatter.get("owner").cloned(),
         milestone: epic.frontmatter.get("milestone").cloned(),
         work_started: epic
@@ -362,7 +365,7 @@ pub(crate) fn epic_overview(epic: &Epic) -> EpicOverview {
 }
 
 pub(crate) fn epic_title(repo_root: &Path, story: &Story) -> Option<String> {
-    let epic_id = story.frontmatter.get("epic")?.trim();
+    let epic_id = story.fields.epic.as_deref()?.trim();
     if epic_id.is_empty() {
         return None;
     }
