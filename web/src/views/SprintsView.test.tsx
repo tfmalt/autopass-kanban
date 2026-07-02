@@ -6,9 +6,30 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SprintsView } from "./SprintsView.js";
 
 function snapshot(): RepositorySnapshot {
+  const droppedStory = {
+    id: "US-F1-090",
+    title: "Dropped",
+    status: "dropped",
+    phase: "F1",
+    epic: "EP-F1-01",
+    sprint: "S000.start",
+    priority: null,
+    storyPoints: 5,
+    assignee: null,
+    assignees: [],
+    workStarted: null,
+    workDone: "2026-05-20T12:00:00+0200",
+    activated: null,
+    created: null,
+    updated: null,
+    relativePath: "x",
+    tasks: [],
+    taskSummary: { todo: 0, inProgress: 0, readyForQa: 0, done: 0, blocked: 0, total: 0 },
+    frontmatter: {},
+  };
   return {
-    stories: [], epics: [],
-    sprints: [{ name: "S000.start", id: "S000", headline: "start", goal: "**Important**\n\n- first item\n- second item", startDate: "2026-05-18", endDate: "2026-05-31", status: "active", wipLimit: null, storiesByStatus: { planned: [], todo: [], "in-progress": [], "ready-for-qa": [], done: [], blocked: [] } }],
+    stories: [droppedStory], epics: [],
+    sprints: [{ name: "S000.start", id: "S000", headline: "start", goal: "**Important**\n\n- first item\n- second item", startDate: "2026-05-18", endDate: "2026-05-31", status: "active", wipLimit: null, storiesByStatus: { planned: [], todo: [], "in-progress": [], "ready-for-qa": [], done: [droppedStory], blocked: [] } }],
     progress: { donePoints: 0, totalPoints: 0, doneStories: 0, totalStories: 0, phases: [] },
   };
 }
@@ -33,6 +54,7 @@ describe("SprintsView", () => {
   it("lists sprints and submits the create form", async () => {
     renderWithClient(<SprintsView />);
     expect(await screen.findByText("S000.start")).toBeInTheDocument();
+    expect(screen.getByText(/0\/0 pts done/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /create sprint/i }));
     fireEvent.change(screen.getByLabelText(/headline/i), { target: { value: "planning" } });
     fireEvent.click(screen.getByRole("button", { name: /^create$/i }));

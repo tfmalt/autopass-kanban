@@ -57,8 +57,10 @@ function summarizeEpics(epics: Epic[], phase: string): EpicSummary[] {
       const totals = epic.stories.reduce(
         (acc, story) => {
           const points = story.storyPoints ?? 0;
-          acc.totalPoints += points;
-          acc.totalStories += 1;
+          if (story.status !== "dropped") {
+            acc.totalPoints += points;
+            acc.totalStories += 1;
+          }
           if (story.status === "done") {
             acc.donePoints += points;
             acc.doneStories += 1;

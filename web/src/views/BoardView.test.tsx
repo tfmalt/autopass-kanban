@@ -21,11 +21,19 @@ function snapshot(): RepositorySnapshot {
     status: "planned",
     sprint: "S001.next",
   };
+  const droppedStory = {
+    ...activeStory,
+    id: "US-F1-063",
+    title: "Dropped",
+    status: "dropped",
+    storyPoints: 3,
+    workDone: "2026-05-20T12:00:00+0200",
+  };
   return {
-    stories: [activeStory, plannedStory], epics: [],
+    stories: [activeStory, plannedStory, droppedStory], epics: [],
     sprints: [
       { name: "S001.next", id: "S001", headline: "next", goal: null, startDate: "2026-06-01", endDate: "2026-06-14", status: "planned", wipLimit: null, storiesByStatus: { planned: [plannedStory], todo: [], "in-progress": [], "ready-for-qa": [], done: [], blocked: [] } },
-      { name: "S000.start", id: "S000", headline: "start", goal: null, startDate: "2026-05-18", endDate: "2026-05-31", status: "active", wipLimit: null, storiesByStatus: { planned: [], todo: [], "in-progress": [activeStory], "ready-for-qa": [], done: [], blocked: [] } },
+      { name: "S000.start", id: "S000", headline: "start", goal: null, startDate: "2026-05-18", endDate: "2026-05-31", status: "active", wipLimit: null, storiesByStatus: { planned: [], todo: [], "in-progress": [activeStory], "ready-for-qa": [], done: [droppedStory], blocked: [] } },
     ],
     progress: { donePoints: 0, totalPoints: 10, doneStories: 0, totalStories: 2, phases: [] },
   };
@@ -48,11 +56,13 @@ describe("BoardView", () => {
   it("renders the active sprint columns and a story card", async () => {
     renderWithClient(<BoardView />);
     expect(await screen.findByText("US-F1-061")).toBeInTheDocument();
+    expect(screen.getByText("US-F1-063")).toBeInTheDocument();
     expect(screen.getByText("In Progress")).toBeInTheDocument();
-    expect(screen.getByText("2/4 done")).toBeInTheDocument();
+    expect(screen.getByText("Done")).toBeInTheDocument();
+    expect(screen.getAllByText("2/4 done")).toHaveLength(2);
     // Avatar initials fallback: first 2 chars uppercased (no team roster in test)
-    expect(screen.getByTitle("Sondre Bjerkerud <sondre@example.com>")).toBeInTheDocument();
-    expect(screen.getByTitle("Erik Itland <erik@example.com>")).toBeInTheDocument();
+    expect(screen.getAllByTitle("Sondre Bjerkerud <sondre@example.com>")).toHaveLength(2);
+    expect(screen.getAllByTitle("Erik Itland <erik@example.com>")).toHaveLength(2);
     expect(screen.getByLabelText("sprint")).toHaveValue("S000.start");
     expect(screen.queryByText("US-F1-062")).not.toBeInTheDocument();
   });

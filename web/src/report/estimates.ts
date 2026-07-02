@@ -13,7 +13,7 @@ export function roundMetric(value: number): number {
 }
 
 export function sumPoints(stories: Story[]): number {
-  return stories.reduce((sum, story) => sum + (story.storyPoints ?? 0), 0);
+  return stories.reduce((sum, story) => sum + (normalizeStatus(story.status) === "dropped" ? 0 : (story.storyPoints ?? 0)), 0);
 }
 
 export function throughputSource(metrics: DashboardMetrics, repo: RepositorySnapshot): { dailyAvg: number; label: string } {
@@ -100,7 +100,7 @@ export function groupDates(stories: Story[], estimates: Map<string, Estimate>): 
     const started = parseDate(story.workStarted);
     const done = parseDate(story.workDone);
     const estimate = estimates.get(story.id);
-    if (status === "done") {
+    if (status === "done" || status === "dropped") {
       if (started) starts.push(started);
       if (done) ends.push(done);
     } else if (["in-progress", "ready-for-qa"].includes(status)) {

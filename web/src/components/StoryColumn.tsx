@@ -24,7 +24,7 @@ export function StoryColumn({
   activeDragId?: string | null;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status, data: { type: "column", status } });
-  const points = stories.reduce((sum, s) => sum + (s.storyPoints ?? 0), 0);
+  const points = stories.reduce((sum, s) => sum + (s.status === "dropped" ? 0 : (s.storyPoints ?? 0)), 0);
   // Show a drop placeholder when hovering and the dragged card is not already in this column.
   const showPlaceholder = isOver && activeDragId != null && !stories.some((s) => s.id === activeDragId);
   return (

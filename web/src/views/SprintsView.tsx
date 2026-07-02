@@ -5,6 +5,14 @@ import type { Sprint } from "@shared/types.js";
 import { SPRINT_STATUSES } from "@shared/types.js";
 import { useCreateSprint, useRepository, useUpdateSprint } from "../api/hooks.js";
 
+function visibleScopePoints(stories: Sprint["storiesByStatus"][keyof Sprint["storiesByStatus"]]): number {
+  return stories.reduce((sum, story) => sum + (story.status === "dropped" ? 0 : (story.storyPoints ?? 0)), 0);
+}
+
+function completedPoints(stories: Sprint["storiesByStatus"][keyof Sprint["storiesByStatus"]]): number {
+  return stories.reduce((sum, story) => sum + (story.status === "done" ? (story.storyPoints ?? 0) : 0), 0);
+}
+
 marked.use({ gfm: true, breaks: false });
 
 interface SprintFormState {
@@ -120,8 +128,8 @@ export function SprintsView() {
       </div>
 
       {repo.data!.sprints.map((s) => {
-        const done = s.storiesByStatus.done.reduce((sum, st) => sum + (st.storyPoints ?? 0), 0);
-        const total = Object.values(s.storiesByStatus).flat().reduce((sum, st) => sum + (st.storyPoints ?? 0), 0);
+        const done = completedPoints(s.storiesByStatus.done);
+        const total = Object.values(s.storiesByStatus).reduce((sum, bucket) => sum + visibleScopePoints(bucket), 0);
         return (
           <div
             key={s.name}

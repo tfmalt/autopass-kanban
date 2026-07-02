@@ -23,6 +23,14 @@ describe("sumPoints", () => {
     const stories = [story({ id: "US-F1-001", title: "a", status: "todo", storyPoints: null })];
     expect(sumPoints(stories)).toBe(0);
   });
+
+  it("excludes dropped storyPoints from totals", () => {
+    const stories = [
+      story({ id: "US-F1-001", title: "a", status: "done", storyPoints: 5 }),
+      story({ id: "US-F1-002", title: "b", status: "dropped", storyPoints: 3 }),
+    ];
+    expect(sumPoints(stories)).toBe(5);
+  });
 });
 
 describe("computeEstimates", () => {

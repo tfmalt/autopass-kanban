@@ -122,4 +122,25 @@ describe("phaseRows", () => {
     expect(rows[0]!.wip).toBe(3);
     expect(rows[0]!.remaining).toBe(12 - 5 - 3);
   });
+
+  it("excludes dropped points from phase totals and done totals", () => {
+    const done = story({ id: "US-F1-001", title: "Done", status: "done", storyPoints: 5 });
+    const dropped = story({ id: "US-F1-002", title: "Dropped", status: "dropped", storyPoints: 3 });
+    const todo = story({ id: "US-F1-003", title: "Todo", status: "todo", storyPoints: 4 });
+    const repo = {
+      ...repository(),
+      stories: [done, dropped, todo],
+      progress: {
+        donePoints: 5,
+        totalPoints: 9,
+        doneStories: 1,
+        totalStories: 2,
+        phases: [{ phase: "F1", donePoints: 5, totalPoints: 9, doneStories: 1, totalStories: 2 }],
+      },
+    };
+    const rows = phaseRows(repo);
+    expect(rows[0]!.done).toBe(5);
+    expect(rows[0]!.total).toBe(9);
+    expect(rows[0]!.remaining).toBe(4);
+  });
 });

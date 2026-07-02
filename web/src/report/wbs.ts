@@ -104,12 +104,12 @@ export function buildWbsRows(repo: RepositorySnapshot, estimates: Map<string, Es
           period: meta.period,
           priority: meta.priority,
           status: STATUS_LABELS[status] ?? status.toUpperCase(),
-          points: story.storyPoints,
+          points: status === "dropped" ? null : story.storyPoints,
           estHours: activeOrDone && story.storyPoints && hoursPerPoint > 0
             ? roundMetric(story.storyPoints * hoursPerPoint)
             : estimate?.estHours ?? null,
-          startDate: status === "done" || activeOrDone ? parseDate(story.workStarted) ?? estimate?.estStart ?? null : estimate?.estStart ?? null,
-          endDate: status === "done" ? parseDate(story.workDone) : estimate?.estEnd ?? null,
+          startDate: status === "done" || status === "dropped" || activeOrDone ? parseDate(story.workStarted) ?? estimate?.estStart ?? null : estimate?.estStart ?? null,
+          endDate: status === "done" || status === "dropped" ? parseDate(story.workDone) : estimate?.estEnd ?? null,
           notes: [story.sprint ? `Sprint ${story.sprint}` : null, story.assignee ? `Assignee ${story.assignee}` : null].filter(Boolean).join("; "),
         });
       });
