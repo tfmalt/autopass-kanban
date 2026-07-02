@@ -8,6 +8,10 @@ use serde::Serialize;
 use crate::dto::{ProjectProgress, RepositorySnapshot, WebSprint, WebStory};
 use crate::snapshot::compute_progress;
 
+fn counts_toward_scope(story: &WebStory) -> bool {
+    story.status != "dropped"
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DashboardMetrics {
@@ -268,6 +272,7 @@ fn sprint_total_points(sprint: &WebSprint) -> i64 {
         .stories_by_status
         .values()
         .flatten()
+        .filter(|story| counts_toward_scope(story))
         .map(|story| story.story_points.unwrap_or(0))
         .sum()
 }
@@ -327,6 +332,7 @@ pub(crate) fn build_velocity(sprints: &[WebSprint]) -> Vec<VelocityPoint> {
                 .map(|stories| {
                     stories
                         .iter()
+                        .filter(|story| counts_toward_scope(story))
                         .map(|story| story.story_points.unwrap_or(0))
                         .sum()
                 })

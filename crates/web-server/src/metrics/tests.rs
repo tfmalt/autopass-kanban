@@ -58,7 +58,11 @@ fn test_sprint_with_dates(
         .collect::<std::collections::BTreeMap<_, _>>();
     for story in stories {
         stories_by_status
-            .get_mut(&story.status)
+            .get_mut(if story.status == "dropped" {
+                "done"
+            } else {
+                &story.status
+            })
             .expect("known status bucket")
             .push(story);
     }
@@ -217,4 +221,39 @@ fn build_burndown_uses_active_sprint_story_progress() {
         rows.iter()
             .any(|row| row.date == "2026-06-03" && row.remaining == 8)
     );
+}
+
+#[test]
+fn build_burnup_does_not_count_dropped_points_as_completed() {
+    let dropped = test_story(
+        "US-F1-003",
+        "dropped",
+        3,
+        Some("2026-06-01T09:00:00+0200"),
+        Some("2026-06-04T12:00:00+0200"),
+    );
+
+    let rows = build_burnup(&[dropped], &[]);
+    assert!(rows.iter().all(|row| row.completed == 0));
+}
+
+#[test]
+fn build_burndown_excludes_dropped_points_from_scope() {
+    let dropped = test_story(
+        "US-F1-003",
+        "dropped",
+        3,
+        Some("2026-06-01T09:00:00+0200"),
+        Some("2026-06-03T12:00:00+0200"),
+    );
+    let todo = test_story(
+        "US-F1-004",
+        "todo",
+        8,
+        Some("2026-06-01T09:00:00+0200"),
+        None,
+    );
+
+    let rows = build_burndown(&[test_sprint("active", vec![dropped, todo])]);
+    assert_eq!(rows.first().map(|row| row.remaining), Some(8));
 }

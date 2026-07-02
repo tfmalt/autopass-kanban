@@ -8,6 +8,18 @@ use kanban_core::*;
 use crate::dto::*;
 use crate::team::parse_assignees;
 
+fn counts_toward_scope(story: &WebStory) -> bool {
+    story.status != "dropped"
+}
+
+fn board_bucket_status(story: &WebStory) -> &str {
+    if story.status == "dropped" {
+        "done"
+    } else {
+        story.status.as_str()
+    }
+}
+
 pub(crate) fn load_repository_snapshot(repo_root: &Path) -> Result<RepositorySnapshot> {
     let repository = read_repository(repo_root)?;
     let mut stories = repository
@@ -199,7 +211,7 @@ pub(crate) fn load_sprints(repo_root: &Path, stories: &[WebStory]) -> Result<Vec
             .iter()
             .filter(|story| story.sprint.as_deref() == Some(stem))
         {
-            if let Some(bucket) = by_status.get_mut(&story.status) {
+            if let Some(bucket) = by_status.get_mut(board_bucket_status(story)) {
                 bucket.push(story.clone());
             }
         }
@@ -242,6 +254,7 @@ pub(crate) fn compute_progress(stories: &[WebStory]) -> ProjectProgress {
     let mut done_points = 0;
     let mut total_points = 0;
     let mut done_stories = 0;
+    let mut total_stories = 0;
     for story in stories {
         let points = story.story_points.unwrap_or(0);
         let phase = story.phase.clone().unwrap_or_else(|| "F?".to_string());
@@ -252,9 +265,12 @@ pub(crate) fn compute_progress(stories: &[WebStory]) -> ProjectProgress {
             done_stories: 0,
             total_stories: 0,
         });
-        entry.total_points += points;
-        entry.total_stories += 1;
-        total_points += points;
+        if counts_toward_scope(story) {
+            entry.total_points += points;
+            entry.total_stories += 1;
+            total_points += points;
+            total_stories += 1;
+        }
         if story.status == "done" {
             entry.done_points += points;
             entry.done_stories += 1;
@@ -266,7 +282,7 @@ pub(crate) fn compute_progress(stories: &[WebStory]) -> ProjectProgress {
         done_points,
         total_points,
         done_stories,
-        total_stories: stories.len(),
+        total_stories,
         phases: phases.into_values().collect(),
     }
 }
@@ -330,4 +346,59 @@ pub(crate) fn extract_section(body: &str, heading: &str) -> Option<String> {
     let end = rest.find("\n## ").unwrap_or(rest.len());
     let value = rest[..end].trim();
     (!value.is_empty()).then(|| value.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn test_story(id: &str, status: &str, points: i64) -> WebStory {
+        WebStory {
+            id: id.to_string(),
+            title: id.to_string(),
+            status: status.to_string(),
+            phase: Some("F1".to_string()),
+            epic: Some("EP-F1-01".to_string()),
+            sprint: Some("S001.current".to_string()),
+            priority: None,
+            story_points: Some(points),
+            assignee: None,
+            assignees: Vec::new(),
+            work_started: None,
+            work_done: None,
+            activated: None,
+            created: None,
+            updated: None,
+            relative_path: "story.md".to_string(),
+            tasks: Vec::new(),
+            task_summary: WebTaskSummary {
+                todo: 0,
+                in_progress: 0,
+                ready_for_qa: 0,
+                done: 0,
+                blocked: 0,
+                total: 0,
+            },
+            frontmatter: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn compute_progress_excludes_dropped_from_scope_totals() {
+        let progress = compute_progress(&[
+            test_story("US-F1-001", "done", 5),
+            test_story("US-F1-002", "dropped", 3),
+            test_story("US-F1-003", "todo", 4),
+        ]);
+
+        assert_eq!(progress.done_points, 5);
+        assert_eq!(progress.total_points, 9);
+        assert_eq!(progress.done_stories, 1);
+        assert_eq!(progress.total_stories, 2);
+        assert_eq!(progress.phases[0].done_points, 5);
+        assert_eq!(progress.phases[0].total_points, 9);
+        assert_eq!(progress.phases[0].done_stories, 1);
+        assert_eq!(progress.phases[0].total_stories, 2);
+    }
 }
