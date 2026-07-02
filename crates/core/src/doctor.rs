@@ -136,6 +136,22 @@ pub fn apply_doctor_fix(
                 touched_paths: vec![file_path.clone()],
             })
         }
+        "planned-status-in-sprint" => {
+            let story = read_story_file(&absolute_path, &repo_root)?;
+            upsert_story_frontmatter_file(&absolute_path, &[("status", Some("todo".to_string()))])?;
+            if let Some(sprint_name) = story
+                .frontmatter
+                .get("sprint")
+                .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
+            {
+                let config = load_kanban_config(&repo_root)?;
+                regenerate_sprint_roster(&config, sprint_name)?;
+            }
+            Ok(DoctorFixResult {
+                message: "Changed story status from planned to todo.".to_string(),
+                touched_paths: vec![file_path.clone()],
+            })
+        }
         rule if rule.starts_with("invalid-timestamp:") => {
             let field_name = rule.trim_start_matches("invalid-timestamp:");
             let automatic_fix = automatic_timestamp_fix_from_issue_or_file(
@@ -647,6 +663,7 @@ pub(crate) fn doctor_fix_preview_for_validation(
         "missing-work-done" => {
             frontmatter_fix_preview(story, "work_done", current_timestamp_string())
         }
+        "planned-status-in-sprint" => frontmatter_fix_preview(story, "status", "todo".to_string()),
         rule if rule.starts_with("invalid-timestamp:") => {
             let field_name = rule.trim_start_matches("invalid-timestamp:");
             let old_value = story.frontmatter.get(field_name)?;
@@ -709,6 +726,11 @@ pub(crate) fn doctor_suggestion_for_validation(
         ),
         "missing-work-done" => (
             "Set `work_done` to the current local ISO 8601 timestamp.".to_string(),
+            DoctorFixKind::Automatic,
+            DoctorPrompt::None,
+        ),
+        "planned-status-in-sprint" => (
+            "Change the story status from `planned` to `todo` because sprint-assigned stories must start in `todo`.".to_string(),
             DoctorFixKind::Automatic,
             DoctorPrompt::None,
         ),
@@ -1295,6 +1317,40 @@ mod tests {
             issue.fix_preview.as_ref().map(|p| p.new_value.as_str()),
             Some("in-progress")
         );
+    }
+
+    #[test]
+    fn doctor_reports_and_fixes_planned_status_for_story_in_sprint() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = write_story(
+            temp_root.path(),
+            "delivery/backlog/phase-1-scaffolding/01.platform/US-F1-006-planned-in-sprint.md",
+            "id: US-F1-006\ntype: user-story\nstatus: planned\nepic: EP-F1-01\nsprint: S001.foundation\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-01-01T00:00:00+0200\nupdated: 2026-01-01T00:00:00+0200\n",
+        );
+
+        let issue = collect_doctor_issues_for_story(temp_root.path(), "US-F1-006")
+            .unwrap()
+            .into_iter()
+            .find(|issue| issue.rule == "planned-status-in-sprint")
+            .expect("expected planned status in sprint issue");
+
+        assert_eq!(issue.severity, "error");
+        assert!(matches!(issue.fix_kind, DoctorFixKind::Automatic));
+        assert_eq!(
+            issue
+                .fix_preview
+                .as_ref()
+                .map(|preview| preview.new_value.as_str()),
+            Some("todo")
+        );
+
+        let result =
+            apply_doctor_fix(temp_root.path(), &issue, &DoctorFixInput::default()).unwrap();
+        let updated = fs::read_to_string(&story_path).unwrap();
+
+        assert_eq!(result.message, "Changed story status from planned to todo.");
+        assert!(updated.contains("status: todo"));
     }
 
     #[test]

@@ -163,7 +163,7 @@ export function usePlanStory() {
         const story = current.stories.find((candidate) => candidate.id === vars.id);
         if (!story) return current;
 
-        const plannedStory = { ...story, status: "planned", sprint: vars.sprint };
+        const plannedStory = { ...story, status: "todo", sprint: vars.sprint };
         return {
           ...current,
           stories: current.stories.map((candidate) =>
@@ -181,7 +181,7 @@ export function usePlanStory() {
                   ...sprint,
                   storiesByStatus: {
                     ...sprint.storiesByStatus,
-                    planned: [...sprint.storiesByStatus.planned.filter((candidate) => candidate.id !== vars.id), plannedStory],
+                    todo: [...sprint.storiesByStatus.todo.filter((candidate) => candidate.id !== vars.id), plannedStory],
                   },
                 }
               : sprint,
@@ -463,7 +463,7 @@ export function useUpdateStory() {
 
 /**
  * Update story metadata fields (assignee and/or sprint).
- * Sprint changes re-plan the story as planned in the new sprint.
+ * Sprint changes re-plan the story into todo in the new sprint.
  */
 export function useUpdateStoryFields() {
   const qc = useQueryClient();
@@ -490,7 +490,7 @@ export function useUpdateStoryFields() {
           vars.fields.status !== undefined
             ? vars.fields.status
             : vars.fields.sprint !== undefined && vars.fields.status === undefined
-              ? "planned"
+              ? "todo"
               : current.status;
         return {
           ...current,

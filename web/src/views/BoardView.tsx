@@ -16,6 +16,8 @@ import { StoryCardOverlay } from "../components/StoryCard.js";
 import { StoryColumn } from "../components/StoryColumn.js";
 import { StoryModal } from "../components/StoryModal.js";
 
+const BOARD_STATUSES = STORY_STATUSES.filter((status) => status !== "planned");
+
 export function BoardView() {
   const repo = useRepository();
   const move = useMoveStory();
@@ -126,7 +128,7 @@ export function BoardView() {
       {reorderStories.error && <div style={{ color: "var(--red)", marginBottom: 8 }}>Story reorder failed: {String(reorderStories.error)}</div>}
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={onDragCancel}>
         <div className="columns">
-          {STORY_STATUSES.map((status) => (
+          {BOARD_STATUSES.map((status) => (
             <StoryColumn
               key={status}
               status={status}

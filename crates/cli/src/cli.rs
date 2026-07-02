@@ -281,7 +281,7 @@ pub(crate) enum StoryCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Plan a backlog story into a sprint. Effect: updates the canonical story frontmatter (status=planned, sprint, activated, updated) and regenerates the sprint story table. Side effects: none beyond those markdown updates."
+        about = "Plan a backlog story into a sprint. Effect: updates the canonical story frontmatter (status=todo, sprint, activated, updated) and regenerates the sprint story table. Side effects: none beyond those markdown updates."
     )]
     Plan {
         #[arg(help = "Backlog story id to plan, for example US-F2-001.")]

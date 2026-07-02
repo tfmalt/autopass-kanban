@@ -142,6 +142,16 @@ pub fn validate_story_with_config(
             );
         }
         validate_timestamp_field(story, &mut issues, "activated", true, false);
+
+        if story.frontmatter.get("status").map(String::as_str) == Some("planned") {
+            add_issue(
+                story,
+                &mut issues,
+                "planned-status-in-sprint",
+                "Stories assigned to a sprint must use status `todo` instead of `planned`."
+                    .to_string(),
+            );
+        }
     }
 
     if story.frontmatter.get("status").map(String::as_str) == Some("in-progress")
@@ -782,6 +792,28 @@ mod tests {
         let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
         assert!(!rules.contains(&"missing-field:assignee"));
+    }
+
+    #[test]
+    fn validate_story_rejects_planned_status_when_story_is_in_sprint() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = temp_root
+            .path()
+            .join("doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-052-planned-in-sprint.md");
+
+        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+        fs::write(
+            &story_path,
+            "---\nid: US-F1-052\ntype: user-story\nstatus: planned\nepic: EP-F1-06\nsprint: S001.foundation\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
+        )
+        .unwrap();
+
+        let story = read_story_file(story_path, temp_root.path()).unwrap();
+        let issues = validate_story(&story, &FeaturesConfig::default());
+        let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+
+        assert!(rules.contains(&"planned-status-in-sprint"));
     }
 
     #[test]

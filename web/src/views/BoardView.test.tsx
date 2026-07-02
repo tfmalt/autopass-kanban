@@ -18,7 +18,7 @@ function snapshot(): RepositorySnapshot {
     ...activeStory,
     id: "US-F1-062",
     title: "Next",
-    status: "planned",
+    status: "todo",
     sprint: "S001.next",
   };
   const droppedStory = {
@@ -32,7 +32,7 @@ function snapshot(): RepositorySnapshot {
   return {
     stories: [activeStory, plannedStory, droppedStory], epics: [],
     sprints: [
-      { name: "S001.next", id: "S001", headline: "next", goal: null, startDate: "2026-06-01", endDate: "2026-06-14", status: "planned", wipLimit: null, storiesByStatus: { planned: [plannedStory], todo: [], "in-progress": [], "ready-for-qa": [], done: [], blocked: [] } },
+      { name: "S001.next", id: "S001", headline: "next", goal: null, startDate: "2026-06-01", endDate: "2026-06-14", status: "planned", wipLimit: null, storiesByStatus: { planned: [], todo: [plannedStory], "in-progress": [], "ready-for-qa": [], done: [], blocked: [] } },
       { name: "S000.start", id: "S000", headline: "start", goal: null, startDate: "2026-05-18", endDate: "2026-05-31", status: "active", wipLimit: null, storiesByStatus: { planned: [], todo: [], "in-progress": [activeStory], "ready-for-qa": [], done: [droppedStory], blocked: [] } },
     ],
     progress: { donePoints: 0, totalPoints: 10, doneStories: 0, totalStories: 2, phases: [] },
@@ -72,5 +72,11 @@ describe("BoardView", () => {
     fireEvent.change(await screen.findByLabelText("sprint"), { target: { value: "S001.next" } });
     expect(screen.getByText("US-F1-062")).toBeInTheDocument();
     expect(screen.queryByText("US-F1-061")).not.toBeInTheDocument();
+  });
+
+  it("does not render a planned column in the board view", async () => {
+    renderWithClient(<BoardView />);
+    await screen.findByText("US-F1-061");
+    expect(screen.queryByText("Planned")).not.toBeInTheDocument();
   });
 });

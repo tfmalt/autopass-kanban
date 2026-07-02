@@ -319,9 +319,9 @@ pub fn plan_story_into_sprint(
     let new_status = if current_status.is_empty()
         || matches!(
             current_status_normalized.as_str(),
-            "draft" | "backlog" | "ready"
+            "draft" | "backlog" | "ready" | "planned" | "todo"
         ) {
-        "planned"
+        "todo"
     } else {
         current_status
     };
@@ -334,8 +334,12 @@ pub fn plan_story_into_sprint(
             ("updated", Some(now)),
         ],
     )?;
-    atomic_write(&story.file_path, &moved_markdown)
-        .with_context(|| format!("rewrite planned story {}", story.file_path.display()))?;
+    atomic_write(&story.file_path, &moved_markdown).with_context(|| {
+        format!(
+            "rewrite sprint-assigned story {}",
+            story.file_path.display()
+        )
+    })?;
     regenerate_sprint_roster(&config, &sprint_name)?;
 
     Ok(PlanStoryResult {
@@ -1579,6 +1583,35 @@ mod tests {
         assert!(sprint_markdown.contains("| Story | Points | Assignee | Tasks |"));
         assert!(sprint_markdown.contains("### todo"));
         assert!(sprint_markdown.contains("[**US-F2-001** Ingest passage events](../backlog/"));
+    }
+
+    #[test]
+    fn plan_story_into_sprint_promotes_planned_status_to_todo() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+
+        write_sprint_file(
+            temp_root.path(),
+            "S001.planning",
+            "planning",
+            "2999-01-04",
+            "2999-01-15",
+            "planned",
+        );
+
+        let backlog_story = write_story(
+            temp_root.path(),
+            "delivery/backlog/phase-2-core-logic/01.passage-ingestion/US-F2-002-preplanned-story.md",
+            "id: US-F2-002\ntype: user-story\nstatus: planned\nepic: EP-F2-01\nsprint: ~\nstory_points: 5\nactivated:\ncreated: 2026-05-20\nupdated: 2026-05-20\n",
+        );
+
+        plan_story_into_sprint(temp_root.path(), "US-F2-002", "S001.planning").unwrap();
+
+        let story = read_story_file(&backlog_story, temp_root.path()).unwrap();
+        assert_eq!(
+            story.frontmatter.get("status").map(String::as_str),
+            Some("todo")
+        );
     }
 
     #[test]
