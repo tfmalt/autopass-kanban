@@ -93,7 +93,7 @@ pub fn move_story_to_status_with_assignee(
     } else {
         story.frontmatter.get("work_started").cloned()
     };
-    let work_done_update = if normalized_status == "done" {
+    let work_done_update = if matches!(normalized_status.as_str(), "done" | "dropped") {
         Some(now.clone())
     } else {
         story.frontmatter.get("work_done").cloned()
@@ -602,6 +602,7 @@ pub fn update_story_frontmatter(
         .iter()
         .map(|(field, value)| {
             let value = match field.as_str() {
+                "status" => normalize_story_status_input(value)?,
                 "assignee" => normalize_story_assignee_value(value)?,
                 "sprint" => {
                     validate_story_sprint_frontmatter(value)?;
@@ -617,13 +618,55 @@ pub fn update_story_frontmatter(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let update_refs = normalized_updates
+    let current_status = story.frontmatter.get("status").cloned().unwrap_or_default();
+    let next_status = normalized_updates
+        .iter()
+        .find(|(field, _)| field == "status")
+        .map(|(_, value)| value.clone())
+        .unwrap_or_else(|| current_status.clone());
+    let now = current_timestamp_string();
+
+    let mut frontmatter_updates = normalized_updates
         .iter()
         .map(|(field, value)| (field.as_str(), Some(value.clone())))
         .collect::<Vec<_>>();
-    let updated = upsert_frontmatter_markdown(&story.markdown, &update_refs)?;
+
+    if normalized_updates
+        .iter()
+        .any(|(field, _)| field == "status")
+    {
+        if next_status == "in-progress" {
+            let work_started = story
+                .frontmatter
+                .get("work_started")
+                .filter(|value| !value.trim().is_empty())
+                .cloned()
+                .unwrap_or_else(|| now.clone());
+            frontmatter_updates.push(("work_started", Some(work_started)));
+        }
+        if matches!(next_status.as_str(), "done" | "dropped") {
+            frontmatter_updates.push(("work_done", Some(now.clone())));
+        }
+        frontmatter_updates.push(("updated", Some(now.clone())));
+    }
+
+    let updated = upsert_frontmatter_markdown(&story.markdown, &frontmatter_updates)?;
     atomic_write(&story.file_path, &updated)
         .with_context(|| format!("write story file {}", story.file_path.display()))?;
+
+    if normalized_updates
+        .iter()
+        .any(|(field, _)| field == "status")
+    {
+        sync_parent_epic_for_story_move(
+            &config,
+            &repository,
+            story,
+            &current_status,
+            &next_status,
+            &now,
+        )?;
+    }
 
     let mut affected_sprints = BTreeSet::new();
     if let Some(sprint) = story.frontmatter.get("sprint")
@@ -969,6 +1012,41 @@ mod tests {
                 "assignee: Alice Example <alice@example.com>, Bob Berg <bob@example.com>"
             )
         );
+    }
+
+    #[test]
+    fn update_story_frontmatter_sets_work_done_when_status_becomes_dropped() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "active",
+        );
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-095-test-story.md",
+            "id: US-F1-095\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: Test User <test@example.com>\nstory_points: 3\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let result = update_story_frontmatter(
+            temp_root.path(),
+            "US-F1-095",
+            &[("status".to_string(), "dropped".to_string())],
+        )
+        .unwrap();
+
+        let markdown = fs::read_to_string(story_path).unwrap();
+        assert_eq!(result.updated_fields, vec!["status"]);
+        assert!(markdown.contains("status: dropped"));
+        let work_done_line = markdown
+            .lines()
+            .find(|line| line.starts_with("work_done:"))
+            .unwrap();
+        assert_ne!(work_done_line.trim(), "work_done:");
     }
 
     #[test]

@@ -169,7 +169,11 @@ pub fn validate_story_with_config(
         );
     }
 
-    if story.frontmatter.get("status").map(String::as_str) == Some("done")
+    if story
+        .frontmatter
+        .get("status")
+        .map(String::as_str)
+        .is_some_and(|status| matches!(status, "done" | "dropped"))
         && story
             .frontmatter
             .get("work_done")
@@ -181,7 +185,7 @@ pub fn validate_story_with_config(
             story,
             &mut issues,
             "missing-work-done",
-            "Done stories must have work_done set.".to_string(),
+            "Done and dropped stories must have work_done set.".to_string(),
         );
     }
 
@@ -541,7 +545,7 @@ pub(crate) fn validate_timestamp_field(
         && value == "null"
         && matches!(status, Some("draft" | "planned" | "todo"));
     let status_allows_null_work_done =
-        field_name == "work_done" && value == "null" && !matches!(status, Some("done"));
+        field_name == "work_done" && value == "null" && !matches!(status, Some("done" | "dropped"));
     if status_allows_null_work_started || status_allows_null_work_done {
         return;
     }
@@ -711,15 +715,8 @@ mod tests {
     }
 
     #[test]
-    fn validate_story_allows_null_work_done_unless_done() {
-        for status in [
-            "draft",
-            "todo",
-            "in-progress",
-            "ready-for-qa",
-            "blocked",
-            "dropped",
-        ] {
+    fn validate_story_allows_null_work_done_unless_done_or_dropped() {
+        for status in ["draft", "todo", "in-progress", "ready-for-qa", "blocked"] {
             let temp_root = tempdir().unwrap();
             init_temp_repo(temp_root.path());
             let story_path = temp_root.path().join(format!(
@@ -742,25 +739,27 @@ mod tests {
     }
 
     #[test]
-    fn validate_story_rejects_null_work_done_when_done() {
-        let temp_root = tempdir().unwrap();
-        init_temp_repo(temp_root.path());
-        let story_path = temp_root.path().join(
-            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-061-null-work-done-when-done.md",
-        );
+    fn validate_story_rejects_null_work_done_when_terminal() {
+        for status in ["done", "dropped"] {
+            let temp_root = tempdir().unwrap();
+            init_temp_repo(temp_root.path());
+            let story_path = temp_root.path().join(format!(
+                "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-061-null-work-done-when-{status}.md"
+            ));
 
-        fs::create_dir_all(story_path.parent().unwrap()).unwrap();
-        fs::write(
-            &story_path,
-            "---\nid: US-F1-061\ntype: user-story\nstatus: done\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: Test User <test@example.com>\nstory_points: 3\nwork_started: 2026-05-28T14:05:54+0200\nwork_done: null\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n",
-        )
-        .unwrap();
+            fs::create_dir_all(story_path.parent().unwrap()).unwrap();
+            fs::write(
+                &story_path,
+                format!("---\nid: US-F1-061\ntype: user-story\nstatus: {status}\nepic: EP-F1-06\nsprint: S001.foundation\nassignee: Test User <test@example.com>\nstory_points: 3\nwork_started: 2026-05-28T14:05:54+0200\nwork_done: null\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# User Story\n"),
+            )
+            .unwrap();
 
-        let story = read_story_file(story_path, temp_root.path()).unwrap();
-        let issues = validate_story(&story, &FeaturesConfig::default());
-        let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
+            let story = read_story_file(story_path, temp_root.path()).unwrap();
+            let issues = validate_story(&story, &FeaturesConfig::default());
+            let rules: Vec<&str> = issues.iter().map(|issue| issue.rule.as_str()).collect();
 
-        assert!(rules.contains(&"invalid-timestamp:work_done"));
+            assert!(rules.contains(&"invalid-timestamp:work_done"));
+        }
     }
 
     #[test]
