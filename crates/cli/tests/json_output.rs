@@ -1464,6 +1464,36 @@ fn story_update_with_field_emits_updated_fields() {
 }
 
 #[test]
+fn epic_update_without_fields_json_explains_editor_mode_is_unavailable() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_backlog_and_sprints(root);
+    let epic_rel = "delivery/backlog/phase-1/06.tooling/EP-F1-02-priority-test.md";
+    let frontmatter = "id: EP-F1-02\ntype: epic\nstatus: draft\nphase: 1\ncreated: 2026-01-01T00:00:00+01:00\nupdated: 2026-01-01T00:00:00+01:00\n";
+    write_story(root, epic_rel, frontmatter, "# Epic: Priority test\n");
+
+    let out = kanban_in(
+        root,
+        &["--format", "json", "epic", "update", "EP-F1-02", &repo_root],
+    );
+
+    let json = parse_stdout(&out);
+    assert_eq!(out.status.code(), Some(1), "exit code should be 1");
+    assert_eq!(json["status"], "error", "envelope status should be error");
+    assert_eq!(json["kind"], "epic.update", "kind should be epic.update");
+    assert_eq!(json["error"]["code"], "invalid_argument");
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("editor mode is unavailable")),
+        "message should explain editor mode is unavailable; got: {}",
+        json["error"]["message"]
+    );
+}
+
+#[test]
 fn epic_update_priority_json_output() {
     let dir = tempdir().expect("temp dir should be created");
     let root = dir.path();
@@ -1498,6 +1528,52 @@ fn epic_update_priority_json_output() {
     assert_eq!(json["kind"], "epic.update");
     let markdown = fs::read_to_string(root.join(epic_rel)).expect("epic file should be readable");
     assert!(markdown.contains("priority: 10"));
+}
+
+#[test]
+fn epic_update_lifecycle_fields_json_output() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_backlog_and_sprints(root);
+    let epic_rel = "delivery/backlog/phase-1/06.tooling/EP-F1-03-lifecycle-test.md";
+    let frontmatter = "id: EP-F1-03\ntype: epic\nstatus: draft\nphase: 1\ncreated: 2026-01-01T00:00:00+01:00\nupdated: 2026-01-01T00:00:00+01:00\n";
+    write_story(root, epic_rel, frontmatter, "# Epic: Lifecycle test\n");
+
+    let out = kanban_in(
+        root,
+        &[
+            "--format",
+            "json",
+            "epic",
+            "update",
+            "EP-F1-03",
+            "--planned-start",
+            "2026-06-15",
+            "--planned-end",
+            "2026-06-19",
+            "--work-started",
+            "2026-06-16T09:00:00+0200",
+            "--work-done",
+            "2026-06-18T17:00:00+0200",
+            &repo_root,
+        ],
+    );
+
+    let json = parse_stdout(&out);
+    assert!(
+        out.status.success(),
+        "epic update should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["kind"], "epic.update");
+    let markdown = fs::read_to_string(root.join(epic_rel)).expect("epic file should be readable");
+    assert!(markdown.contains("planned_start: 2026-06-15"));
+    assert!(markdown.contains("planned_end: 2026-06-19"));
+    assert!(markdown.contains("work_started: 2026-06-16T09:00:00+0200"));
+    assert!(markdown.contains("work_done: 2026-06-18T17:00:00+0200"));
 }
 
 #[test]

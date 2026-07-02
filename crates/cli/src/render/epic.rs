@@ -298,6 +298,54 @@ fn push_epic_metadata_table(
     }
     rows.push(metadata_row(
         theme,
+        "Planned start",
+        details
+            .epic
+            .planned_start
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("-")
+            .to_string(),
+        false,
+    ));
+    rows.push(metadata_row(
+        theme,
+        "Planned end",
+        details
+            .epic
+            .planned_end
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("-")
+            .to_string(),
+        false,
+    ));
+    rows.push(metadata_row(
+        theme,
+        "Work started",
+        details
+            .epic
+            .work_started
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("-")
+            .to_string(),
+        false,
+    ));
+    rows.push(metadata_row(
+        theme,
+        "Work done",
+        details
+            .epic
+            .work_done
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("-")
+            .to_string(),
+        false,
+    ));
+    rows.push(metadata_row(
+        theme,
         "File",
         simplify_story_path(&details.epic.relative_path),
         false,
@@ -321,6 +369,10 @@ mod tests {
                 phase: Some("1".to_string()),
                 owner: Some("Solution Architect / Product Owner".to_string()),
                 milestone: Some("MP1".to_string()),
+                work_started: Some("2026-06-16T09:00:00+0200".to_string()),
+                work_done: None,
+                planned_start: Some("2026-06-15".to_string()),
+                planned_end: Some("2026-06-19".to_string()),
                 relative_path: PathBuf::from(
                     "delivery/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/EP-F1-06-git-driven-kanban-and-backlog-tooling.md",
                 ),
@@ -390,6 +442,8 @@ mod tests {
         assert!(output.contains("Business Context"));
         assert!(output.contains("Acceptance Criteria"));
         assert!(output.contains("Epic Body"));
+        assert!(output.contains("2026-06-15"));
+        assert!(output.contains("2026-06-16T09:00:00+0200"));
         assert!(
             output.contains("# Epic: Git-driven kanban and backlog tooling")
                 || output.contains("Epic: Git-driven kanban and backlog tooling")

@@ -197,13 +197,22 @@ pub(crate) enum EpicCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Update an epic. Effect: updates canonical epic frontmatter in place. Side effects: no sprint markdown is regenerated."
+        visible_aliases = ["edit"],
+        about = "Update an epic. With no field options, opens $EDITOR for the epic markdown. Field options update frontmatter; omit an option value to be prompted with the current value as default."
     )]
     Update {
         #[arg(help = "Epic id to update, for example EP-F1-02.")]
         id: String,
         #[arg(long, num_args = 0..=1, value_name = "RANK", help = "Update frontmatter priority (non-negative integer). Omit VALUE to prompt.")]
         priority: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "DATE", help = "Update frontmatter planned_start. Omit VALUE to prompt with the current value.")]
+        planned_start: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "DATE", help = "Update frontmatter planned_end. Omit VALUE to prompt with the current value.")]
+        planned_end: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "TIMESTAMP", help = "Update frontmatter work_started. Omit VALUE to prompt with the current value.")]
+        work_started: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "TIMESTAMP", help = "Update frontmatter work_done. Omit VALUE to prompt with the current value.")]
+        work_done: Option<Option<String>>,
         #[arg(default_value = ".", help = "Repository root to update.")]
         repo_root: PathBuf,
     },
@@ -1129,11 +1138,105 @@ mod tests {
                     EpicCommand::Update {
                         id,
                         priority,
+                        planned_start,
+                        planned_end,
+                        work_started,
+                        work_done,
                         repo_root,
                     },
             } => {
                 assert_eq!(id, "EP-F1-02");
                 assert_eq!(priority, Some(Some("10".to_string())));
+                assert_eq!(planned_start, None);
+                assert_eq!(planned_end, None);
+                assert_eq!(work_started, None);
+                assert_eq!(work_done, None);
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn epic_update_parses_bare_frontmatter_option_as_prompt() {
+        let args =
+            Args::try_parse_from(["kanban", "epic", "update", "EP-F1-02", "--priority"]).unwrap();
+
+        match args.command {
+            Command::Epic {
+                command:
+                    EpicCommand::Update {
+                        priority,
+                        planned_start,
+                        planned_end,
+                        work_started,
+                        work_done,
+                        ..
+                    },
+            } => {
+                assert_eq!(priority, Some(None));
+                assert_eq!(planned_start, None);
+                assert_eq!(planned_end, None);
+                assert_eq!(work_started, None);
+                assert_eq!(work_done, None);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn epic_update_parses_lifecycle_fields() {
+        let args = Args::try_parse_from([
+            "kanban",
+            "epic",
+            "update",
+            "EP-F1-02",
+            "--planned-start",
+            "2026-06-15",
+            "--planned-end",
+            "2026-06-19",
+            "--work-started",
+            "2026-06-16T09:00:00+0200",
+            "--work-done",
+            "2026-06-18T17:00:00+0200",
+        ])
+        .unwrap();
+
+        match args.command {
+            Command::Epic {
+                command:
+                    EpicCommand::Update {
+                        planned_start,
+                        planned_end,
+                        work_started,
+                        work_done,
+                        ..
+                    },
+            } => {
+                assert_eq!(planned_start, Some(Some("2026-06-15".to_string())));
+                assert_eq!(planned_end, Some(Some("2026-06-19".to_string())));
+                assert_eq!(
+                    work_started,
+                    Some(Some("2026-06-16T09:00:00+0200".to_string()))
+                );
+                assert_eq!(
+                    work_done,
+                    Some(Some("2026-06-18T17:00:00+0200".to_string()))
+                );
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn epic_edit_alias_parses_as_update() {
+        let args = Args::try_parse_from(["kanban", "epic", "edit", "EP-F1-02"]).unwrap();
+
+        match args.command {
+            Command::Epic {
+                command: EpicCommand::Update { id, repo_root, .. },
+            } => {
+                assert_eq!(id, "EP-F1-02");
                 assert_eq!(repo_root, PathBuf::from("."));
             }
             _ => panic!("unexpected command"),

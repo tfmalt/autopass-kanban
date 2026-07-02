@@ -172,7 +172,8 @@ _kanban_story_statuses() {
 "#;
 
 /// Enhance the zsh completion script by replacing `_default` completions for
-/// sprint name, story ID, story update options, task status, and doctor fix target arguments with dynamic lookup helpers.
+/// sprint name, story/epic ID, story update options, task status, and doctor
+/// fix target arguments with dynamic lookup helpers.
 pub(crate) fn enhance_zsh_completion(script: &str) -> String {
     let enhanced = script
         .replace(
@@ -212,8 +213,16 @@ pub(crate) fn enhance_zsh_completion(script: &str) -> String {
             "':id -- Story id to inspect, for example US-F1-053.:_kanban_story_ids'",
         )
         .replace(
+            "':id -- Epic id to inspect, for example EP-F1-06.:_default'",
+            "':id -- Epic id to inspect, for example EP-F1-06.:_kanban_epic_ids'",
+        )
+        .replace(
             "':id -- Story id to update, for example US-F1-053.:_default'",
             "':id -- Story id to update, for example US-F1-053.:_kanban_story_or_epic_ids'",
+        )
+        .replace(
+            "':id -- Epic id to update, for example EP-F1-02.:_default'",
+            "':id -- Epic id to update, for example EP-F1-02.:_kanban_epic_ids'",
         )
         .replace(
             "':id -- Story id to move, for example US-F1-053.:_default'",
@@ -250,6 +259,22 @@ pub(crate) fn enhance_zsh_completion(script: &str) -> String {
         .replace(
             "'--story-points=[Update frontmatter story_points. Omit VALUE to prompt with the current value.]::POINTS:_default'",
             "'--story-points=[Update frontmatter story_points. Omit VALUE to prompt with the current value.]::POINTS:_kanban_story_point_values'",
+        )
+        .replace(
+            "'--planned-start=[Update frontmatter planned_start. Omit VALUE to prompt with the current value.]::DATE:_default'",
+            "'--planned-start=[Update frontmatter planned_start. Omit VALUE to prompt with the current value.]::DATE:'",
+        )
+        .replace(
+            "'--planned-end=[Update frontmatter planned_end. Omit VALUE to prompt with the current value.]::DATE:_default'",
+            "'--planned-end=[Update frontmatter planned_end. Omit VALUE to prompt with the current value.]::DATE:'",
+        )
+        .replace(
+            "'--work-started=[Update frontmatter work_started. Omit VALUE to prompt with the current value.]::TIMESTAMP:_default'",
+            "'--work-started=[Update frontmatter work_started. Omit VALUE to prompt with the current value.]::TIMESTAMP:'",
+        )
+        .replace(
+            "'--work-done=[Update frontmatter work_done. Omit VALUE to prompt with the current value.]::TIMESTAMP:_default'",
+            "'--work-done=[Update frontmatter work_done. Omit VALUE to prompt with the current value.]::TIMESTAMP:'",
         )
         .replace(
             "':id -- Sprint story id to move, for example US-F1-053.:_default'",
@@ -1121,7 +1146,7 @@ pub(crate) fn inject_bash_task_delete(script: &str) -> String {
     replace_bash_case_block(script, "kanban__subcmd__task__subcmd__delete", replacement)
 }
 
-/// Enhance the bash completion script with dynamic sprint name, story ID,
+/// Enhance the bash completion script with dynamic sprint name, story/epic ID,
 /// and doctor fix target completions.
 pub(crate) fn enhance_bash_completion(script: &str) -> String {
     let script = inject_bash_doctor_command_or_repo_root(script);
@@ -1129,6 +1154,20 @@ pub(crate) fn enhance_bash_completion(script: &str) -> String {
     let script = inject_bash_phase_show(&script);
     let script = inject_bash_story_list(&script);
     let script = inject_bash_list_task_ids(&script);
+    let script = inject_bash_dynamic(
+        &script,
+        "kanban__subcmd__epic__subcmd__show",
+        "-h --format --help <ID> [REPO_ROOT]",
+        "epics",
+        3,
+    );
+    let script = inject_bash_dynamic(
+        &script,
+        "kanban__subcmd__epic__subcmd__update",
+        "-h --priority --planned-start --planned-end --work-started --work-done --format --help <ID> [REPO_ROOT]",
+        "epics",
+        3,
+    );
     let script = inject_bash_dynamic(
         &script,
         "kanban__subcmd__sprint__subcmd__show",

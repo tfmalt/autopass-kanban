@@ -111,7 +111,14 @@ pub fn move_story_to_status_with_assignee(
     )?;
     atomic_write(&story.file_path, &story_markdown)
         .with_context(|| format!("rewrite story {}", story.file_path.display()))?;
-    sync_parent_epic_status_for_story_move(&config, &repository, &story, &normalized_status, &now)?;
+    sync_parent_epic_for_story_move(
+        &config,
+        &repository,
+        &story,
+        &current_status,
+        &normalized_status,
+        &now,
+    )?;
     if sprints_enabled {
         regenerate_sprint_roster(&load_kanban_config(&repository.repo_root)?, &sprint_name)?;
     }
@@ -128,14 +135,15 @@ pub fn move_story_to_status_with_assignee(
     })
 }
 
-fn sync_parent_epic_status_for_story_move(
+fn sync_parent_epic_for_story_move(
     config: &KanbanConfig,
     repository: &Repository,
     moved_story: &Story,
+    previous_status: &str,
     target_status: &str,
     timestamp: &str,
 ) -> Result<()> {
-    if !config.features().epics || !matches!(target_status, "in-progress" | "done") {
+    if !config.features().epics {
         return Ok(());
     }
 
@@ -148,6 +156,7 @@ fn sync_parent_epic_status_for_story_move(
         return Ok(());
     };
 
+    let previous_status = normalize_status_alias(previous_status);
     let child_statuses = repository
         .stories
         .iter()
@@ -177,9 +186,14 @@ fn sync_parent_epic_status_for_story_move(
         return Ok(());
     }
 
-    let next_epic_status = if child_statuses.iter().any(|status| status == "in-progress") {
+    let any_in_progress = child_statuses.iter().any(|status| status == "in-progress");
+    let all_terminal = child_statuses
+        .iter()
+        .all(|status| matches!(status.as_str(), "done" | "dropped"));
+    let any_done = child_statuses.iter().any(|status| status == "done");
+    let next_epic_status = if any_in_progress {
         Some("in-progress")
-    } else if child_statuses.iter().all(|status| status == "done") {
+    } else if all_terminal && any_done {
         Some("done")
     } else {
         None
@@ -206,17 +220,37 @@ fn sync_parent_epic_status_for_story_move(
     };
 
     let current_status = epic.frontmatter.get("status").cloned().unwrap_or_default();
-    if current_status == next_epic_status {
+    let current_work_started = epic
+        .frontmatter
+        .get("work_started")
+        .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
+        .cloned();
+    let current_work_done = epic
+        .frontmatter
+        .get("work_done")
+        .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
+        .cloned();
+    let entering_in_progress = previous_status != "in-progress" && target_status == "in-progress";
+    let closing_epic = all_terminal
+        && matches!(target_status, "done" | "dropped")
+        && !matches!(previous_status.as_str(), "done" | "dropped");
+
+    let mut updates = Vec::new();
+    if current_status != next_epic_status {
+        updates.push(("status", Some(next_epic_status.to_string())));
+    }
+    if entering_in_progress && current_work_started.is_none() {
+        updates.push(("work_started", Some(timestamp.to_string())));
+    }
+    if closing_epic && current_work_done.is_none() {
+        updates.push(("work_done", Some(timestamp.to_string())));
+    }
+    if updates.is_empty() {
         return Ok(());
     }
 
-    let epic_markdown = upsert_frontmatter_markdown(
-        &epic.markdown,
-        &[
-            ("status", Some(next_epic_status.to_string())),
-            ("updated", Some(timestamp.to_string())),
-        ],
-    )?;
+    updates.push(("updated", Some(timestamp.to_string())));
+    let epic_markdown = upsert_frontmatter_markdown(&epic.markdown, &updates)?;
     atomic_write(&epic.file_path, &epic_markdown)
         .with_context(|| format!("rewrite epic {}", epic.file_path.display()))?;
 
@@ -1301,6 +1335,11 @@ mod tests {
 
         let epic_markdown = fs::read_to_string(epic_path).unwrap();
         assert!(epic_markdown.contains("status: in-progress"));
+        let work_started_line = epic_markdown
+            .lines()
+            .find(|line| line.starts_with("work_started:"))
+            .unwrap();
+        assert_ne!(work_started_line.trim(), "work_started:");
         assert!(!epic_markdown.contains("updated: 2026-05-28T14:05:54+0200"));
     }
 
@@ -1332,7 +1371,80 @@ mod tests {
 
         let epic_markdown = fs::read_to_string(epic_path).unwrap();
         assert!(epic_markdown.contains("status: done"));
+        let work_done_line = epic_markdown
+            .lines()
+            .find(|line| line.starts_with("work_done:"))
+            .unwrap();
+        assert_ne!(work_done_line.trim(), "work_done:");
         assert!(!epic_markdown.contains("updated: 2026-05-28T14:05:54+0200"));
+    }
+
+    #[test]
+    fn move_story_to_in_progress_does_not_overwrite_existing_parent_epic_work_started() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_git_config(temp_root.path(), "Test User", "test@example.com");
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "active",
+        );
+        let epic_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/EP-F1-080-parent-epic.md",
+            "id: EP-F1-080\ntype: epic\nstatus: todo\nphase: 1\nwork_started: 2026-06-10T09:00:00+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-080-story.md",
+            "id: US-F1-080\ntype: user-story\nstatus: todo\nepic: EP-F1-080\nsprint: S001.foundation\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        move_story_to_status(temp_root.path(), "US-F1-080", "in-progress").unwrap();
+
+        let epic_markdown = fs::read_to_string(epic_path).unwrap();
+        assert!(epic_markdown.contains("work_started: 2026-06-10T09:00:00+0200"));
+    }
+
+    #[test]
+    fn move_story_to_dropped_sets_parent_epic_work_done_when_last_child_closes() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_sprint_file(
+            temp_root.path(),
+            "S001.foundation",
+            "foundation",
+            "2099-06-01",
+            "2099-06-12",
+            "active",
+        );
+        let epic_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/EP-F1-081-parent-epic.md",
+            "id: EP-F1-081\ntype: epic\nstatus: in-progress\nphase: 1\nwork_started: 2026-06-10T09:00:00+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-081-done-story.md",
+            "id: US-F1-081\ntype: user-story\nstatus: done\nepic: EP-F1-081\nsprint: S001.foundation\nassignee: Test User <test@example.com>\nstory_points: 3\nwork_started: 2026-06-10T09:00:00+0200\nwork_done: 2026-06-11T17:00:00+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-082-last-story.md",
+            "id: US-F1-082\ntype: user-story\nstatus: in-progress\nepic: EP-F1-081\nsprint: S001.foundation\nassignee: Test User <test@example.com>\nstory_points: 3\nwork_started: 2026-06-10T09:00:00+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        move_story_to_status(temp_root.path(), "US-F1-082", "dropped").unwrap();
+
+        let epic_markdown = fs::read_to_string(epic_path).unwrap();
+        let work_done_line = epic_markdown
+            .lines()
+            .find(|line| line.starts_with("work_done:"))
+            .unwrap();
+        assert_ne!(work_done_line.trim(), "work_done:");
     }
 
     #[test]

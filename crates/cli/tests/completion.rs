@@ -776,6 +776,42 @@ fn zsh_completion_replaces_story_update_sprint_with_helper() {
 }
 
 #[test]
+fn zsh_completion_replaces_epic_ids_with_helper() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("':id -- Epic id to inspect, for example EP-F1-06.:_kanban_epic_ids'"),
+        "epic show positional id should use _kanban_epic_ids"
+    );
+    assert!(
+        stdout.contains("':id -- Epic id to update, for example EP-F1-02.:_kanban_epic_ids'"),
+        "epic update positional id should use _kanban_epic_ids"
+    );
+}
+
+#[test]
+fn zsh_completion_exposes_epic_lifecycle_options_as_plain_values() {
+    let output = kanban(&["completion", "zsh"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains(
+        "'--planned-start=[Update frontmatter planned_start. Omit VALUE to prompt with the current value.]::DATE:'"
+    ));
+    assert!(stdout.contains(
+        "'--planned-end=[Update frontmatter planned_end. Omit VALUE to prompt with the current value.]::DATE:'"
+    ));
+    assert!(stdout.contains(
+        "'--work-started=[Update frontmatter work_started. Omit VALUE to prompt with the current value.]::TIMESTAMP:'"
+    ));
+    assert!(stdout.contains(
+        "'--work-done=[Update frontmatter work_done. Omit VALUE to prompt with the current value.]::TIMESTAMP:'"
+    ));
+}
+
+#[test]
 fn zsh_completion_replaces_story_update_id_with_helper() {
     let output = kanban(&["completion", "zsh"]);
 
@@ -915,6 +951,33 @@ fn bash_completion_replaces_story_update_id_with_helper() {
             && stdout.contains("COMPREPLY=( \"${matches[@]}\" )"),
         "story update positional id should complete with substring matching against stories and epics"
     );
+}
+
+#[test]
+fn bash_completion_replaces_epic_ids_with_helper() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(
+        stdout.contains("kanban__subcmd__epic__subcmd__show)")
+            && stdout.contains("kanban__subcmd__epic__subcmd__update)")
+            && stdout.contains("done < <(kanban list-ids epics 2>/dev/null)")
+            && stdout.contains(r#"_kanban_ci_match "$id" "${cur}""#),
+        "epic show/update positional ids should complete with substring matching against epics"
+    );
+}
+
+#[test]
+fn bash_completion_exposes_epic_lifecycle_options() {
+    let output = kanban(&["completion", "bash"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("kanban__subcmd__epic__subcmd__update)"));
+    assert!(stdout.contains(
+        "opts=\"-h --priority --planned-start --planned-end --work-started --work-done --format --help <ID> [REPO_ROOT]\""
+    ));
 }
 
 #[test]
@@ -1178,6 +1241,28 @@ fn bash_completion_story_update_injection_applied() {
     let stdout = String::from_utf8(output.stdout).expect("bash stdout utf8");
     // The story update replacement adds dynamic epic/sprint/status lookup.
     assert_bash_marker_present(&stdout, "kanban list-ids epics", "inject_bash_story_update");
+}
+
+#[test]
+fn bash_completion_epic_injections_applied() {
+    let output = kanban(&["completion", "bash"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("bash stdout utf8");
+    assert_bash_marker_present(
+        &stdout,
+        "kanban__subcmd__epic__subcmd__show)",
+        "inject_bash_dynamic epic show",
+    );
+    assert_bash_marker_present(
+        &stdout,
+        "kanban__subcmd__epic__subcmd__update)",
+        "inject_bash_dynamic epic update",
+    );
+    assert_bash_marker_present(
+        &stdout,
+        "kanban list-ids epics",
+        "inject_bash_dynamic epic show/update",
+    );
 }
 
 #[test]

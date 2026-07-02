@@ -108,6 +108,10 @@ pub struct EpicOverview {
     pub phase: Option<String>,
     pub owner: Option<String>,
     pub milestone: Option<String>,
+    pub work_started: Option<String>,
+    pub work_done: Option<String>,
+    pub planned_start: Option<String>,
+    pub planned_end: Option<String>,
     pub relative_path: PathBuf,
 }
 

@@ -96,6 +96,10 @@ pub(crate) struct WebEpic {
     pub(crate) title: String,
     pub(crate) phase: String,
     pub(crate) priority: Option<i64>,
+    pub(crate) planned_start: Option<String>,
+    pub(crate) planned_end: Option<String>,
+    pub(crate) work_started: Option<String>,
+    pub(crate) work_done: Option<String>,
     pub(crate) stories: Vec<WebStory>,
 }
 
@@ -199,5 +203,9 @@ pub(crate) struct UpdateStoryFieldsInput {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct UpdateEpicFieldsInput {
-    pub(crate) priority: i64,
+    pub(crate) priority: Option<i64>,
+    pub(crate) planned_start: Option<String>,
+    pub(crate) planned_end: Option<String>,
+    pub(crate) work_started: Option<String>,
+    pub(crate) work_done: Option<String>,
 }

@@ -355,7 +355,27 @@ pub(crate) async fn api_update_epic_fields(
     Json(input): Json<UpdateEpicFieldsInput>,
 ) -> Result<Json<Value>, ApiResponse> {
     let _write_guard = state.write_lock.lock().await;
-    let updates = [("priority".to_string(), input.priority.to_string())];
+    let mut updates = Vec::new();
+    if let Some(value) = input.priority {
+        updates.push(("priority".to_string(), value.to_string()));
+    }
+    if let Some(value) = input.planned_start {
+        updates.push(("planned_start".to_string(), value));
+    }
+    if let Some(value) = input.planned_end {
+        updates.push(("planned_end".to_string(), value));
+    }
+    if let Some(value) = input.work_started {
+        updates.push(("work_started".to_string(), value));
+    }
+    if let Some(value) = input.work_done {
+        updates.push(("work_done".to_string(), value));
+    }
+    if updates.is_empty() {
+        return Err(ApiResponse::bad_request(
+            "at least one field must be provided",
+        ));
+    }
     let repo_root = state.repo_root.clone();
     let id_for_update = id.clone();
     let result =

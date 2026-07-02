@@ -8,6 +8,7 @@ use crate::prelude::*;
 use crate::repository::*;
 use crate::story::*;
 use crate::util::*;
+use crate::validate::{validate_local_timestamp_frontmatter, validate_markdown_date_frontmatter};
 
 pub(crate) fn epic_status_warning(details: &EpicDetails) -> Option<String> {
     let epic_status = normalize_status_alias(&details.epic.status);
@@ -58,8 +59,11 @@ pub fn update_epic_frontmatter(
     }
 
     for (field, value) in updates {
-        if field == "priority" {
-            validate_non_negative_integer_frontmatter(field, value)?;
+        match field.as_str() {
+            "priority" => validate_non_negative_integer_frontmatter(field, value)?,
+            "planned_start" | "planned_end" => validate_markdown_date_frontmatter(field, value)?,
+            "work_started" | "work_done" => validate_local_timestamp_frontmatter(field, value)?,
+            _ => {}
         }
     }
 
@@ -204,6 +208,10 @@ mod tests {
                 phase: Some("1".to_string()),
                 owner: None,
                 milestone: None,
+                work_started: None,
+                work_done: None,
+                planned_start: None,
+                planned_end: None,
                 relative_path: PathBuf::from("delivery/backlog/phase-1/EP-F1-01.md"),
             },
             story_ids: vec!["US-F1-005".to_string()],
@@ -268,6 +276,46 @@ mod tests {
     }
 
     #[test]
+    fn update_epic_frontmatter_writes_lifecycle_fields() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let epic_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/EP-F1-097-test-epic.md",
+            "id: EP-F1-097\ntype: epic\nstatus: draft\nphase: 1\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let result = update_epic_frontmatter(
+            temp_root.path(),
+            "EP-F1-097",
+            &[
+                ("planned_start".to_string(), "2026-06-15".to_string()),
+                ("planned_end".to_string(), "2026-06-19".to_string()),
+                (
+                    "work_started".to_string(),
+                    "2026-06-16T09:00:00+0200".to_string(),
+                ),
+                (
+                    "work_done".to_string(),
+                    "2026-06-18T17:00:00+0200".to_string(),
+                ),
+            ],
+        )
+        .unwrap();
+
+        let markdown = fs::read_to_string(epic_path).unwrap();
+        assert_eq!(result.epic_id, "EP-F1-097");
+        assert_eq!(
+            result.updated_fields,
+            vec!["planned_start", "planned_end", "work_started", "work_done"]
+        );
+        assert!(markdown.contains("planned_start: 2026-06-15"));
+        assert!(markdown.contains("planned_end: 2026-06-19"));
+        assert!(markdown.contains("work_started: 2026-06-16T09:00:00+0200"));
+        assert!(markdown.contains("work_done: 2026-06-18T17:00:00+0200"));
+    }
+
+    #[test]
     fn update_epic_frontmatter_rejects_negative_priority() {
         let temp_root = tempdir().unwrap();
         init_temp_repo(temp_root.path());
@@ -287,6 +335,37 @@ mod tests {
         assert!(err.to_string().contains("non-negative integer"));
         let markdown = fs::read_to_string(epic_path).unwrap();
         assert!(!markdown.contains("priority:"));
+    }
+
+    #[test]
+    fn update_epic_frontmatter_rejects_invalid_lifecycle_values() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let epic_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/EP-F1-096-test-epic.md",
+            "id: EP-F1-096\ntype: epic\nstatus: draft\nphase: 1\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let err = update_epic_frontmatter(
+            temp_root.path(),
+            "EP-F1-096",
+            &[("planned_start".to_string(), "2026/06/15".to_string())],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("YYYY-MM-DD"));
+
+        let err = update_epic_frontmatter(
+            temp_root.path(),
+            "EP-F1-096",
+            &[("work_started".to_string(), "2026-06-16".to_string())],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("ISO 8601"));
+
+        let markdown = fs::read_to_string(epic_path).unwrap();
+        assert!(!markdown.contains("planned_start:"));
+        assert!(!markdown.contains("work_started:"));
     }
 
     #[test]

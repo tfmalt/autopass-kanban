@@ -141,6 +141,10 @@ pub(crate) fn load_epics(repo_root: &Path, stories: &[WebStory]) -> Result<Vec<W
                     .frontmatter
                     .get("priority")
                     .and_then(|value| parse_non_negative_i64(value)),
+                planned_start: empty_to_none(source.frontmatter.get("planned_start")),
+                planned_end: empty_to_none(source.frontmatter.get("planned_end")),
+                work_started: empty_to_none(source.frontmatter.get("work_started")),
+                work_done: empty_to_none(source.frontmatter.get("work_done")),
                 stories: Vec::new(),
                 id,
             },
@@ -154,6 +158,10 @@ pub(crate) fn load_epics(repo_root: &Path, stories: &[WebStory]) -> Result<Vec<W
                 phase: phase_from_id(epic_id, "EP")
                     .unwrap_or_else(|| story.phase.clone().unwrap_or_else(|| "F?".to_string())),
                 priority: None,
+                planned_start: None,
+                planned_end: None,
+                work_started: None,
+                work_done: None,
                 stories: Vec::new(),
             });
             entry.stories.push(story.clone());

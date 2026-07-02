@@ -416,7 +416,89 @@ fn validate_epic(epic: &Epic) -> Vec<ValidationIssue> {
         &epic.frontmatter_keys,
         &mut issues,
     );
+    validate_optional_markdown_date_field(epic, &mut issues, "planned_start");
+    validate_optional_markdown_date_field(epic, &mut issues, "planned_end");
+    validate_optional_epic_timestamp_field(epic, &mut issues, "work_started");
+    validate_optional_epic_timestamp_field(epic, &mut issues, "work_done");
+    validate_epic_field_order(epic, &mut issues, "planned_start", "planned_end");
+    validate_epic_field_order(epic, &mut issues, "work_started", "work_done");
     issues
+}
+
+fn validate_optional_markdown_date_field(
+    epic: &Epic,
+    issues: &mut Vec<ValidationIssue>,
+    field_name: &str,
+) {
+    if !epic.frontmatter_keys.contains(field_name) {
+        return;
+    }
+    let value = epic
+        .frontmatter
+        .get(field_name)
+        .map(String::as_str)
+        .unwrap_or_default();
+    if validate_markdown_date_frontmatter(field_name, value).is_err() {
+        issues.push(ValidationIssue {
+            file_path: epic.relative_path.clone(),
+            rule: format!("invalid-epic-date:{field_name}"),
+            message: format!("Epic frontmatter field \"{field_name}\" must use YYYY-MM-DD."),
+        });
+    }
+}
+
+fn validate_optional_epic_timestamp_field(
+    epic: &Epic,
+    issues: &mut Vec<ValidationIssue>,
+    field_name: &str,
+) {
+    if !epic.frontmatter_keys.contains(field_name) {
+        return;
+    }
+    let value = epic
+        .frontmatter
+        .get(field_name)
+        .map(String::as_str)
+        .unwrap_or_default();
+    if validate_local_timestamp_frontmatter(field_name, value).is_err() {
+        issues.push(ValidationIssue {
+            file_path: epic.relative_path.clone(),
+            rule: format!("invalid-epic-timestamp:{field_name}"),
+            message: format!(
+                "Epic frontmatter field \"{field_name}\" must use local ISO 8601 with numeric timezone offset."
+            ),
+        });
+    }
+}
+
+fn validate_epic_field_order(
+    epic: &Epic,
+    issues: &mut Vec<ValidationIssue>,
+    start_field: &str,
+    end_field: &str,
+) {
+    let Some(start) = epic.frontmatter.get(start_field).map(String::as_str) else {
+        return;
+    };
+    let Some(end) = epic.frontmatter.get(end_field).map(String::as_str) else {
+        return;
+    };
+    if start.trim().is_empty()
+        || end.trim().is_empty()
+        || matches!(start, "~" | "null")
+        || matches!(end, "~" | "null")
+    {
+        return;
+    }
+    if start > end {
+        issues.push(ValidationIssue {
+            file_path: epic.relative_path.clone(),
+            rule: format!("epic-date-order:{start_field}:{end_field}"),
+            message: format!(
+                "Epic frontmatter field \"{start_field}\" must be earlier than or equal to \"{end_field}\"."
+            ),
+        });
+    }
 }
 
 fn validate_optional_priority_field(
@@ -483,6 +565,32 @@ pub(crate) fn validate_timestamp_field(
             format!("Frontmatter field \"{field_name}\" must use {expected_format}."),
         );
     }
+}
+
+pub(crate) fn validate_markdown_date_frontmatter(field_name: &str, value: &str) -> Result<()> {
+    let value = value.trim();
+    if value.is_empty() || value == "~" {
+        return Ok(());
+    }
+    if parse_markdown_date(value).is_none() {
+        bail!("Frontmatter field \"{field_name}\" must use YYYY-MM-DD.");
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_local_timestamp_frontmatter(field_name: &str, value: &str) -> Result<()> {
+    let value = value.trim();
+    if value.is_empty() || matches!(value, "~" | "null") {
+        return Ok(());
+    }
+    let timestamp_pattern = Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}$")
+        .expect("valid timestamp regex");
+    if !timestamp_pattern.is_match(value) {
+        bail!(
+            "Frontmatter field \"{field_name}\" must use local ISO 8601 with numeric timezone offset."
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn assignee_required(story: &Story) -> bool {
@@ -791,6 +899,31 @@ mod tests {
                             "delivery/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/EP-F1-062-invalid-priority.md",
                         )
             }));
+    }
+
+    #[test]
+    fn validate_repository_rejects_invalid_epic_lifecycle_values() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let epic_path = temp_root.path().join(
+            "delivery/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/EP-F1-063-invalid-lifecycle.md",
+        );
+
+        fs::create_dir_all(epic_path.parent().unwrap()).unwrap();
+        fs::write(
+            &epic_path,
+            "---\nid: EP-F1-063\ntype: epic\nstatus: done\nphase: 1\nplanned_start: 2026/06/15\nplanned_end: 2026-06-10\nwork_started: 2026-06-12T09:00:00+0200\nwork_done: 2026-06-11T09:00:00+0200\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n---\n# Epic: Invalid lifecycle\n",
+        )
+        .unwrap();
+
+        let validation = validate_repository(temp_root.path()).unwrap();
+        let rules: Vec<&str> = validation
+            .issues
+            .iter()
+            .map(|issue| issue.rule.as_str())
+            .collect();
+        assert!(rules.contains(&"invalid-epic-date:planned_start"));
+        assert!(rules.contains(&"epic-date-order:work_started:work_done"));
     }
 
     #[test]

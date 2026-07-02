@@ -381,6 +381,10 @@ pub struct EpicOverviewDto {
     pub phase: Option<String>,
     pub owner: Option<String>,
     pub milestone: Option<String>,
+    pub work_started: Option<String>,
+    pub work_done: Option<String>,
+    pub planned_start: Option<String>,
+    pub planned_end: Option<String>,
     pub path: String,
 }
 
@@ -394,6 +398,10 @@ impl EpicOverviewDto {
             phase: o.phase.clone(),
             owner: o.owner.clone(),
             milestone: o.milestone.clone(),
+            work_started: o.work_started.clone(),
+            work_done: o.work_done.clone(),
+            planned_start: o.planned_start.clone(),
+            planned_end: o.planned_end.clone(),
             path: path_string(&o.relative_path),
         }
     }

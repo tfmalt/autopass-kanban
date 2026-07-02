@@ -338,6 +338,10 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
                 EpicCommand::Update {
                     id,
                     priority,
+                    planned_start,
+                    planned_end,
+                    work_started,
+                    work_done,
                     repo_root,
                 },
         } => {
@@ -347,7 +351,13 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
                     KanbanErrorBody::from_anyhow(&error),
                 ));
             }
-            let updates = match json_story_frontmatter_updates(&[("priority", priority)]) {
+            let updates = match json_story_frontmatter_updates(&[
+                ("priority", priority),
+                ("planned_start", planned_start),
+                ("planned_end", planned_end),
+                ("work_started", work_started),
+                ("work_done", work_done),
+            ]) {
                 Ok(updates) => updates,
                 Err(error) => {
                     return print_envelope(&JsonEnvelope::<EpicUpdateDto>::error(
@@ -359,7 +369,7 @@ pub(crate) fn emit_json(command: &Command) -> i32 {
             if updates.is_empty() {
                 return invalid_argument_envelope::<EpicUpdateDto>(
                     "epic.update",
-                    "epic update in --format json requires at least one frontmatter field.",
+                    "epic update in --format json requires at least one frontmatter field; editor mode is unavailable.",
                 );
             }
             let root = match load_kanban_config(repo_root) {

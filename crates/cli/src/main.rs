@@ -401,48 +401,62 @@ fn run() -> Result<()> {
             EpicCommand::Update {
                 id,
                 priority,
+                planned_start,
+                planned_end,
+                work_started,
+                work_done,
                 repo_root,
             } => {
                 ensure_epics_enabled(&repo_root)?;
+                let epic = find_epic_with_source(&repo_root, &id)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Epic not found: {}", id.trim().to_ascii_uppercase())
+                    })?
+                    .1;
                 let mut updates = Vec::new();
-                match priority {
-                    Some(Some(value)) => updates.push(("priority".to_string(), value)),
-                    Some(None) => {
-                        let epic = find_epic_with_source(&repo_root, &id)?
-                            .ok_or_else(|| {
-                                anyhow::anyhow!(
-                                    "Epic not found: {}",
-                                    id.trim().to_ascii_uppercase()
-                                )
-                            })?
-                            .1;
-                        let default = epic
-                            .frontmatter
-                            .get("priority")
-                            .cloned()
-                            .unwrap_or_default();
-                        let value = prompt_with_default("priority", &default)?;
-                        updates.push(("priority".to_string(), value));
+                for (field_name, option) in [
+                    ("priority", priority),
+                    ("planned_start", planned_start),
+                    ("planned_end", planned_end),
+                    ("work_started", work_started),
+                    ("work_done", work_done),
+                ] {
+                    match option {
+                        Some(Some(value)) => updates.push((field_name.to_string(), value)),
+                        Some(None) => {
+                            let default = epic
+                                .frontmatter
+                                .get(field_name)
+                                .cloned()
+                                .unwrap_or_default();
+                            let value = prompt_with_default(field_name, &default)?;
+                            updates.push((field_name.to_string(), value));
+                        }
+                        None => {}
                     }
-                    None => {}
                 }
 
                 if updates.is_empty() {
-                    bail!("No epic frontmatter fields were provided.");
+                    open_markdown_in_editor(&epic.file_path, "epic markdown")?;
+                    println!(
+                        "{} edited {}",
+                        theme.ok_label(),
+                        theme.path(epic.relative_path.display())
+                    );
+                } else {
+                    let result = update_epic_frontmatter(&repo_root, &id, &updates)?;
+                    println!(
+                        "{} updated {} ({})",
+                        theme.ok_label(),
+                        theme.id(&result.epic_id),
+                        result.updated_fields.join(", ")
+                    );
+                    println!(
+                        "{} epic: {}",
+                        theme.info_label(),
+                        theme.path(result.epic_path.display())
+                    );
                 }
-
-                let result = update_epic_frontmatter(&repo_root, &id, &updates)?;
-                println!(
-                    "{} updated {} ({})",
-                    theme.ok_label(),
-                    theme.id(&result.epic_id),
-                    result.updated_fields.join(", ")
-                );
-                println!(
-                    "{} epic: {}",
-                    theme.info_label(),
-                    theme.path(result.epic_path.display())
-                );
             }
         },
         Command::Story { command } => match command {

@@ -65,8 +65,9 @@ pub(crate) fn story_frontmatter_update_value(
     }
 }
 
-pub(crate) fn open_story_markdown_in_editor(path: &Path) -> Result<()> {
-    let editor = std::env::var("EDITOR").context("$EDITOR must be set to edit story markdown.")?;
+pub(crate) fn open_markdown_in_editor(path: &Path, label: &str) -> Result<()> {
+    let editor =
+        std::env::var("EDITOR").with_context(|| format!("$EDITOR must be set to edit {label}."))?;
     if editor.trim().is_empty() {
         bail!("$EDITOR must not be empty.");
     }
@@ -91,6 +92,10 @@ pub(crate) fn open_story_markdown_in_editor(path: &Path) -> Result<()> {
         bail!("$EDITOR exited with status {status}.");
     }
     Ok(())
+}
+
+pub(crate) fn open_story_markdown_in_editor(path: &Path) -> Result<()> {
+    open_markdown_in_editor(path, "story markdown")
 }
 
 pub(crate) fn prompt_date(label: &str, default: NaiveDate) -> Result<NaiveDate> {

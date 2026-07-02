@@ -337,6 +337,26 @@ pub(crate) fn epic_overview(epic: &Epic) -> EpicOverview {
         phase: epic.frontmatter.get("phase").cloned(),
         owner: epic.frontmatter.get("owner").cloned(),
         milestone: epic.frontmatter.get("milestone").cloned(),
+        work_started: epic
+            .frontmatter
+            .get("work_started")
+            .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
+            .cloned(),
+        work_done: epic
+            .frontmatter
+            .get("work_done")
+            .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
+            .cloned(),
+        planned_start: epic
+            .frontmatter
+            .get("planned_start")
+            .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
+            .cloned(),
+        planned_end: epic
+            .frontmatter
+            .get("planned_end")
+            .filter(|value| !value.trim().is_empty() && value.as_str() != "~")
+            .cloned(),
         relative_path: epic.relative_path.clone(),
     }
 }
