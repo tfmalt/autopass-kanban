@@ -131,7 +131,7 @@ class WbsReportTests(unittest.TestCase):
                             {
                                 "id": "US-F1-003",
                                 "title": "Finished story",
-                                "status": "done",
+                                "status": "dropped",
                                 "story_points": 1,
                                 "phase": "F1",
                                 "epic_id": "EP-F1-02",
@@ -152,6 +152,39 @@ class WbsReportTests(unittest.TestCase):
         self.assertEqual(ws.cell(3, wbs_report.COL_STATUS).value, "IN PROGRESS")
         self.assertEqual(ws.cell(4, wbs_report.COL_STATUS).value, "IN PROGRESS")
         self.assertEqual(ws.cell(7, wbs_report.COL_STATUS).value, "DONE")
+
+    def test_dropped_story_uses_done_row_highlight(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        hierarchy = [
+            {
+                "id": "F1",
+                "epics": [
+                    {
+                        "id": "EP-F1-03",
+                        "title": "Dropped work",
+                        "stories": [
+                            {
+                                "id": "US-F1-010",
+                                "title": "Dropped story",
+                                "status": "dropped",
+                                "story_points": 2,
+                                "phase": "F1",
+                                "epic_id": "EP-F1-03",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+        estimates = {"US-F1-010": {"est_hours": None, "est_start": None, "est_end": None}}
+
+        wbs_report.build_wbs_sheet(ws, hierarchy, estimates, 7.0, "2026-07-02T10:00:00+02:00")
+
+        story_fill = ws.cell(5, wbs_report.COL_STATUS).fill.fgColor.rgb
+        epic_fill = ws.cell(4, wbs_report.COL_STATUS).fill.fgColor.rgb
+        self.assertEqual(story_fill, wbs_report.COLOUR_STORY_DONE_BG)
+        self.assertEqual(epic_fill, wbs_report.COLOUR_EPIC_DONE_BG)
 
 
 if __name__ == "__main__":

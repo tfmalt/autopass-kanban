@@ -444,7 +444,7 @@ def _write_story_row(ws, row_num: int, wbs: str, story: dict,
     ws.cell(row_num, COL_POINTS, value=story.get("story_points"))
 
     pts = story.get("story_points") or 0
-    if status in ("done", "in-progress", "ready-for-qa"):
+    if status in ("done", "dropped", "in-progress", "ready-for-qa"):
         if pts and hours_per_point > 0:
             ws.cell(row_num, COL_HOURS, value=round(pts * hours_per_point, 1))
     elif est.get("est_hours") is not None:
@@ -476,7 +476,7 @@ def _write_story_row(ws, row_num: int, wbs: str, story: dict,
         status_fill = _fill(COLOUR_STORY_INPROGRESS_BG)
         for col in range(1, TOTAL_COLS + 1):
             ws.cell(row=row_num, column=col).fill = status_fill
-    elif status == "done":
+    elif status in ("done", "dropped"):
         status_fill = _fill(COLOUR_STORY_DONE_BG)
         for col in range(1, TOTAL_COLS + 1):
             ws.cell(row=row_num, column=col).fill = status_fill
