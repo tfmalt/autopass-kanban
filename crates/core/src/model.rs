@@ -28,6 +28,86 @@ pub struct TaskSummary {
     pub done: usize,
 }
 
+/// Shared tally of task statuses, keyed by the exact normalized status
+/// string. This is the single place where "which status string maps to
+/// which bucket" is decided; callers that need a different fold (e.g.
+/// treating unrecognized statuses as "todo", or dropping a bucket
+/// entirely) apply that fold when reading the counts back out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TaskStatusCounts {
+    pub todo: usize,
+    pub in_progress: usize,
+    pub ready_for_qa: usize,
+    pub done: usize,
+    pub blocked: usize,
+    /// Statuses that did not match any known bucket above.
+    pub other: usize,
+    pub total: usize,
+}
+
+impl TaskStatusCounts {
+    pub fn count<'a, I>(statuses: I) -> Self
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let mut counts = Self::default();
+        for status in statuses {
+            counts.total += 1;
+            match status {
+                "todo" => counts.todo += 1,
+                "in-progress" => counts.in_progress += 1,
+                "ready-for-qa" => counts.ready_for_qa += 1,
+                "done" => counts.done += 1,
+                "blocked" => counts.blocked += 1,
+                _ => counts.other += 1,
+            }
+        }
+        counts
+    }
+}
+
+#[cfg(test)]
+mod task_status_counts_tests {
+    use super::TaskStatusCounts;
+
+    #[test]
+    fn empty_iterator_yields_all_zero_counts() {
+        let counts = TaskStatusCounts::count(std::iter::empty());
+        assert_eq!(counts, TaskStatusCounts::default());
+        assert_eq!(counts.total, 0);
+    }
+
+    #[test]
+    fn ready_for_qa_is_tallied_in_its_own_bucket() {
+        let counts = TaskStatusCounts::count(["ready-for-qa", "ready-for-qa", "todo"]);
+        assert_eq!(counts.ready_for_qa, 2);
+        assert_eq!(counts.todo, 1);
+        assert_eq!(counts.other, 0);
+        assert_eq!(counts.total, 3);
+    }
+
+    #[test]
+    fn unrecognized_status_is_tallied_as_other() {
+        let counts = TaskStatusCounts::count(["placeholder", "draft", "todo"]);
+        assert_eq!(counts.other, 2);
+        assert_eq!(counts.todo, 1);
+        assert_eq!(counts.total, 3);
+    }
+
+    #[test]
+    fn all_known_buckets_are_counted_independently() {
+        let counts =
+            TaskStatusCounts::count(["todo", "in-progress", "ready-for-qa", "done", "blocked"]);
+        assert_eq!(counts.todo, 1);
+        assert_eq!(counts.in_progress, 1);
+        assert_eq!(counts.ready_for_qa, 1);
+        assert_eq!(counts.done, 1);
+        assert_eq!(counts.blocked, 1);
+        assert_eq!(counts.other, 0);
+        assert_eq!(counts.total, 5);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskFile {
     pub exists: bool,

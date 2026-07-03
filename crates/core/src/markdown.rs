@@ -128,17 +128,17 @@ pub(crate) fn render_task_file(story_id: &str, sprint_name: &str, tasks: &[Task]
 }
 
 pub fn create_task_summary(tasks: &[Task]) -> TaskSummary {
-    let mut summary = TaskSummary::default();
-    for task in tasks {
-        match task.normalized_status.as_str() {
-            "todo" => summary.todo += 1,
-            "in-progress" => summary.in_progress += 1,
-            "blocked" => summary.blocked += 1,
-            "done" => summary.done += 1,
-            _ => {}
-        }
+    // `ready-for-qa` and any other unrecognized status are intentionally
+    // dropped here (not folded into `todo`), matching the pre-existing
+    // behavior of `TaskSummary`, which only tracks the four canonical
+    // task-board buckets.
+    let counts = TaskStatusCounts::count(tasks.iter().map(|task| task.normalized_status.as_str()));
+    TaskSummary {
+        todo: counts.todo,
+        in_progress: counts.in_progress,
+        blocked: counts.blocked,
+        done: counts.done,
     }
-    summary
 }
 
 pub(crate) fn frontmatter_region(markdown: &str) -> Result<&str> {
@@ -592,5 +592,122 @@ mod tests {
         assert_eq!(display_task_status("To Do"), "todo");
         assert_eq!(display_task_status("In Progress"), "in-progress");
         assert_eq!(display_task_status("Done"), "done");
+    }
+
+    // Tests for title_from_body
+
+    #[test]
+    fn title_from_body_extracts_title_with_user_story_prefix() {
+        let body = "# User Story: Implement login feature\n\nSome description here";
+        assert_eq!(
+            title_from_body(body, "User Story"),
+            "Implement login feature"
+        );
+    }
+
+    #[test]
+    fn title_from_body_extracts_title_with_epic_prefix() {
+        let body = "# Epic: Authentication System\n\nDetails.";
+        assert_eq!(title_from_body(body, "Epic"), "Authentication System");
+    }
+
+    #[test]
+    fn title_from_body_returns_full_title_when_prefix_not_present() {
+        let body = "# Just a title\n\nBody text.";
+        assert_eq!(title_from_body(body, "User Story"), "Just a title");
+    }
+
+    #[test]
+    fn title_from_body_returns_empty_string_when_no_heading() {
+        let body = "No heading here.\nJust prose.";
+        assert_eq!(title_from_body(body, "User Story"), "");
+    }
+
+    #[test]
+    fn title_from_body_trims_extra_whitespace() {
+        let body = "#   User Story:   Extra spaces   \n";
+        assert_eq!(title_from_body(body, "User Story"), "Extra spaces");
+    }
+
+    #[test]
+    fn title_from_body_returns_empty_string_for_empty_body() {
+        assert_eq!(title_from_body("", "User Story"), "");
+    }
+
+    #[test]
+    fn title_from_body_uses_first_heading_only() {
+        let body = "# User Story: First title\n\n# User Story: Second title\n";
+        assert_eq!(title_from_body(body, "User Story"), "First title");
+    }
+
+    #[test]
+    fn title_from_body_strips_custom_prefix() {
+        let body = "# MyPrefix: The actual title\n";
+        assert_eq!(title_from_body(body, "MyPrefix"), "The actual title");
+    }
+
+    #[test]
+    fn title_from_body_preserves_colons_inside_title() {
+        let body = "# User Story: Time: 3:00 PM\n";
+        assert_eq!(title_from_body(body, "User Story"), "Time: 3:00 PM");
+    }
+
+    // Tests for phase_from_id
+
+    #[test]
+    fn phase_from_id_extracts_phase_from_story_id() {
+        assert_eq!(phase_from_id("US-F1-061", "US"), Some("F1".to_string()));
+    }
+
+    #[test]
+    fn phase_from_id_extracts_phase_from_epic_id() {
+        assert_eq!(phase_from_id("EP-F2-034", "EP"), Some("F2".to_string()));
+    }
+
+    #[test]
+    fn phase_from_id_extracts_multi_digit_phase() {
+        assert_eq!(phase_from_id("US-F12-061", "US"), Some("F12".to_string()));
+    }
+
+    #[test]
+    fn phase_from_id_returns_none_when_marker_not_found() {
+        assert_eq!(phase_from_id("INVALID-061", "US"), None);
+    }
+
+    #[test]
+    fn phase_from_id_returns_bare_f_when_no_phase_number() {
+        assert_eq!(phase_from_id("US-F-061", "US"), Some("F".to_string()));
+    }
+
+    #[test]
+    fn phase_from_id_returns_none_for_empty_id() {
+        assert_eq!(phase_from_id("", "US"), None);
+    }
+
+    #[test]
+    fn phase_from_id_marker_match_requires_prefix_case() {
+        // The id is uppercased before searching, but the prefix marker is
+        // used as given — a lowercase prefix can never match.
+        assert_eq!(phase_from_id("us-f3-042", "us"), None);
+    }
+
+    #[test]
+    fn phase_from_id_supports_longer_prefixes() {
+        assert_eq!(phase_from_id("ABC-F5-100", "ABC"), Some("F5".to_string()));
+    }
+
+    #[test]
+    fn phase_from_id_uppercases_phase_output() {
+        assert_eq!(phase_from_id("US-f1-061", "US"), Some("F1".to_string()));
+    }
+
+    #[test]
+    fn phase_from_id_returns_none_for_wrong_prefix() {
+        assert_eq!(phase_from_id("US-F1-061", "EP"), None);
+    }
+
+    #[test]
+    fn phase_from_id_requires_f_marker_after_prefix() {
+        assert_eq!(phase_from_id("US-1-061", "US"), None);
     }
 }

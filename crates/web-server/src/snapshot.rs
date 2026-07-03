@@ -80,24 +80,16 @@ pub(crate) fn web_task_from_core(task: &kanban_core::Task) -> WebTask {
 }
 
 pub(crate) fn summarize_web_tasks(tasks: &[WebTask]) -> WebTaskSummary {
-    let mut summary = WebTaskSummary {
-        todo: 0,
-        in_progress: 0,
-        ready_for_qa: 0,
-        done: 0,
-        blocked: 0,
-        total: tasks.len(),
-    };
-    for task in tasks {
-        match task.status.as_str() {
-            "in-progress" => summary.in_progress += 1,
-            "ready-for-qa" => summary.ready_for_qa += 1,
-            "done" => summary.done += 1,
-            "blocked" => summary.blocked += 1,
-            _ => summary.todo += 1,
-        }
+    let counts = TaskStatusCounts::count(tasks.iter().map(|task| task.status.as_str()));
+    WebTaskSummary {
+        // Unrecognized statuses fold into `todo`, same as before.
+        todo: counts.todo + counts.other,
+        in_progress: counts.in_progress,
+        ready_for_qa: counts.ready_for_qa,
+        done: counts.done,
+        blocked: counts.blocked,
+        total: counts.total,
     }
-    summary
 }
 
 pub(crate) fn load_story_detail(repo_root: &Path, id: &str) -> Result<Option<(WebStory, String)>> {

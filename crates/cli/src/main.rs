@@ -174,7 +174,10 @@ fn run() -> Result<()> {
     }
 
     let theme = theme_for_command(&args.command);
-    print_human_outcome(&theme, execute_command(&args.command, DispatchMode::Human)?);
+    print_human_outcome(
+        &theme,
+        execute_command(&args.command, DispatchMode::Human, &theme)?,
+    );
     Ok(())
 }
 

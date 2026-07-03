@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::CommandFactory;
+use std::path::Path;
 
 use crate::cli::{
     Args, COMPLETION_HELP, Command, CompletionTarget, ConfigCommand, DoctorCommand, EpicCommand,
@@ -8,10 +9,7 @@ use crate::cli::{
 };
 use crate::completion::{enhance_bash_completion, enhance_zsh_completion};
 use crate::doctor_cli::{run_doctor_fix_non_interactive, run_doctor_fix_wizard};
-use crate::json_out::{
-    ensure_epics_enabled_json, ensure_phases_enabled_json, ensure_sprints_enabled_json,
-    json_story_frontmatter_updates,
-};
+use crate::json_out::json_story_frontmatter_updates;
 use crate::ops::{build_create_sprint_input_from_flags, resolve_story_list_scope};
 use crate::outcome::{CommandOutcome, FeatureToggleAction};
 use crate::prompt::{
@@ -26,7 +24,7 @@ use crate::web::{
 };
 use chrono::NaiveDate;
 use kanban_core::{
-    ColorMode, CompletionDto, FeaturesConfig, KanbanErrorBody, KanbanErrorCode, ListIdItemDto,
+    CompletionDto, FeaturesConfig, KanbanError, KanbanErrorBody, KanbanErrorCode, ListIdItemDto,
     ReportForecastDto, ReportWbsDto, add_task_to_story, config_show_value, create_sprint,
     delete_story, delete_task_from_story, doctor_repository, find_epic_with_source, find_story,
     find_story_with_source, get_config_json, get_config_value, init_config_with_features,
@@ -44,7 +42,50 @@ pub(crate) enum DispatchMode {
     Json,
 }
 
-pub(crate) fn execute_command(command: &Command, mode: DispatchMode) -> Result<CommandOutcome> {
+/// Build the error returned when a feature gate blocks a command.
+///
+/// The human path restores the pre-refactor message (with the `(repo: ...)`
+/// suffix); the JSON path keeps the typed `KanbanError::feature_disabled`
+/// message the JSON envelope contract tests assert on.
+fn feature_disabled_error(mode: DispatchMode, feature: &str, repo_root: &Path) -> anyhow::Error {
+    match mode {
+        DispatchMode::Human => anyhow::anyhow!(
+            "Feature '{feature}' is disabled in .kanban/settings.json. Run `kanban features enable {feature}` to re-enable it. (repo: {})",
+            repo_root.display()
+        ),
+        DispatchMode::Json => KanbanError::feature_disabled(feature).into(),
+    }
+}
+
+fn ensure_sprints_enabled(mode: DispatchMode, repo_root: &Path) -> Result<()> {
+    let config = load_kanban_config(repo_root)?;
+    if !config.features().sprints {
+        return Err(feature_disabled_error(mode, "sprints", repo_root));
+    }
+    Ok(())
+}
+
+fn ensure_epics_enabled(mode: DispatchMode, repo_root: &Path) -> Result<()> {
+    let config = load_kanban_config(repo_root)?;
+    if !config.features().epics {
+        return Err(feature_disabled_error(mode, "epics", repo_root));
+    }
+    Ok(())
+}
+
+fn ensure_phases_enabled(mode: DispatchMode, repo_root: &Path) -> Result<()> {
+    let config = load_kanban_config(repo_root)?;
+    if !config.features().phases {
+        return Err(feature_disabled_error(mode, "phases", repo_root));
+    }
+    Ok(())
+}
+
+pub(crate) fn execute_command(
+    command: &Command,
+    mode: DispatchMode,
+    theme: &Theme,
+) -> Result<CommandOutcome> {
     Ok(match command {
         Command::Init {
             repo_root,
@@ -128,7 +169,7 @@ pub(crate) fn execute_command(command: &Command, mode: DispatchMode) -> Result<C
         }
         Command::Sprint { command } => match command {
             SprintCommand::Current { repo_root } => {
-                ensure_sprints_enabled_json(repo_root)?;
+                ensure_sprints_enabled(mode, repo_root)?;
                 CommandOutcome::SprintOverview {
                     kind: "sprint.current",
                     sprint: summarize_current_sprint(repo_root)?,
@@ -136,7 +177,7 @@ pub(crate) fn execute_command(command: &Command, mode: DispatchMode) -> Result<C
                 }
             }
             SprintCommand::List { repo_root } => {
-                ensure_sprints_enabled_json(repo_root)?;
+                ensure_sprints_enabled(mode, repo_root)?;
                 CommandOutcome::SprintList {
                     sprints: summarize_sprints(repo_root)?,
                     current_name: summarize_current_sprint(repo_root)
@@ -149,7 +190,7 @@ pub(crate) fn execute_command(command: &Command, mode: DispatchMode) -> Result<C
                 short,
                 repo_root,
             } => {
-                ensure_sprints_enabled_json(repo_root)?;
+                ensure_sprints_enabled(mode, repo_root)?;
                 let sprint = match name {
                     Some(name) => summarize_sprint(repo_root, name)?,
                     None => summarize_current_sprint(repo_root)?,
@@ -168,7 +209,9 @@ pub(crate) fn execute_command(command: &Command, mode: DispatchMode) -> Result<C
                 non_interactive,
                 repo_root,
             } => {
-                ensure_sprints_enabled_json(repo_root)?;
+                if mode == DispatchMode::Human {
+                    ensure_sprints_enabled(mode, repo_root)?;
+                }
                 let any_flag =
                     number.is_some() || headline.is_some() || start.is_some() || end.is_some();
                 if mode == DispatchMode::Json && !*non_interactive && !any_flag {
@@ -207,7 +250,9 @@ pub(crate) fn execute_command(command: &Command, mode: DispatchMode) -> Result<C
                 }
             }
             SprintCommand::Rollover { name, repo_root } => {
-                ensure_sprints_enabled_json(repo_root)?;
+                if mode == DispatchMode::Human {
+                    ensure_sprints_enabled(mode, repo_root)?;
+                }
                 let next_input = if mode == DispatchMode::Json {
                     None
                 } else {
@@ -240,18 +285,21 @@ pub(crate) fn execute_command(command: &Command, mode: DispatchMode) -> Result<C
                 )?)
             }
             SprintCommand::Sync { repo_root } => {
+                if mode == DispatchMode::Human {
+                    ensure_sprints_enabled(mode, repo_root)?;
+                }
                 CommandOutcome::SprintSync(sync_sprint_rosters(repo_root)?)
             }
         },
         Command::Phase {
             command: PhaseCommand::Show { phase, repo_root },
         } => {
-            ensure_phases_enabled_json(repo_root)?;
+            ensure_phases_enabled(mode, repo_root)?;
             CommandOutcome::PhaseShow(summarize_phase(repo_root, phase)?)
         }
         Command::Epic { command } => match command {
             EpicCommand::Show { id, repo_root } => {
-                ensure_epics_enabled_json(repo_root)?;
+                ensure_epics_enabled(mode, repo_root)?;
                 CommandOutcome::EpicShow {
                     id: id.clone(),
                     result: Box::new(find_epic_with_source(repo_root, id)?),
@@ -266,7 +314,7 @@ pub(crate) fn execute_command(command: &Command, mode: DispatchMode) -> Result<C
                 work_done,
                 repo_root,
             } => {
-                ensure_epics_enabled_json(repo_root)?;
+                ensure_epics_enabled(mode, repo_root)?;
                 let updates = if mode == DispatchMode::Json {
                     let updates = match json_story_frontmatter_updates(&[
                         ("priority", priority),
@@ -577,11 +625,10 @@ pub(crate) fn execute_command(command: &Command, mode: DispatchMode) -> Result<C
                     ),
                 });
             }
-            let theme = Theme::for_stdout(ColorMode::Auto);
             if *non_interactive {
-                run_doctor_fix_non_interactive(&theme, repo_root, target.as_deref())?;
+                run_doctor_fix_non_interactive(theme, repo_root, target.as_deref())?;
             } else {
-                run_doctor_fix_wizard(&theme, repo_root, target.as_deref())?;
+                run_doctor_fix_wizard(theme, repo_root, target.as_deref())?;
             }
             CommandOutcome::NoData { kind: "doctor.fix" }
         }
@@ -637,7 +684,7 @@ pub(crate) fn execute_command(command: &Command, mode: DispatchMode) -> Result<C
                 if mode == DispatchMode::Json {
                     CommandOutcome::WebStatus(web_status_json(repo_root)?)
                 } else {
-                    print_web_status(&Theme::for_stdout(ColorMode::Auto), repo_root)?;
+                    print_web_status(theme, repo_root)?;
                     CommandOutcome::NoData { kind: "web.status" }
                 }
             }
@@ -669,14 +716,7 @@ pub(crate) fn execute_command(command: &Command, mode: DispatchMode) -> Result<C
                     }
                     CommandOutcome::WebStart(web_start_json(repo_root, *open, *dev)?)
                 } else {
-                    start_web(
-                        &Theme::for_stdout(ColorMode::Auto),
-                        repo_root,
-                        *foreground,
-                        *open,
-                        *dev,
-                        *build,
-                    )?;
+                    start_web(theme, repo_root, *foreground, *open, *dev, *build)?;
                     CommandOutcome::NoData { kind: "web.start" }
                 }
             }
@@ -684,7 +724,7 @@ pub(crate) fn execute_command(command: &Command, mode: DispatchMode) -> Result<C
                 if mode == DispatchMode::Json {
                     CommandOutcome::WebStop(web_stop_json(repo_root)?)
                 } else {
-                    stop_web(&Theme::for_stdout(ColorMode::Auto), repo_root, false)?;
+                    stop_web(theme, repo_root, false)?;
                     CommandOutcome::NoData { kind: "web.stop" }
                 }
             }
@@ -704,16 +744,14 @@ pub(crate) fn execute_command(command: &Command, mode: DispatchMode) -> Result<C
                             ),
                         });
                     }
-                    let stopped_existing =
-                        stop_web(&Theme::for_stdout(ColorMode::Never), repo_root, true)?;
+                    let stopped_existing = stop_web(theme, repo_root, true)?;
                     CommandOutcome::WebRestart(WebRestartDto {
                         stopped_existing,
                         started: web_start_json(repo_root, *open, *dev)?,
                     })
                 } else {
-                    let theme = Theme::for_stdout(ColorMode::Auto);
-                    stop_web(&theme, repo_root, true)?;
-                    start_web(&theme, repo_root, false, *open, *dev, *build)?;
+                    stop_web(theme, repo_root, true)?;
+                    start_web(theme, repo_root, false, *open, *dev, *build)?;
                     CommandOutcome::NoData {
                         kind: "web.restart",
                     }
@@ -736,12 +774,7 @@ pub(crate) fn execute_command(command: &Command, mode: DispatchMode) -> Result<C
                     }
                     CommandOutcome::WebLog(web_log_json(repo_root, *lines)?)
                 } else {
-                    print_web_log(
-                        &Theme::for_stdout(ColorMode::Auto),
-                        repo_root,
-                        *lines,
-                        *follow,
-                    )?;
+                    print_web_log(theme, repo_root, *lines, *follow)?;
                     CommandOutcome::NoData { kind: "web.log" }
                 }
             }

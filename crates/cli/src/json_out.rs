@@ -8,12 +8,13 @@ use crate::cli::{
 };
 use crate::dispatch::{DispatchMode, config_show_json_value, execute_command};
 use crate::outcome::CommandOutcome;
+use crate::theme::Theme;
 use kanban_core::{
-    ConfigGetDto, ConfigInitDto, ConfigSetDto, DeleteStoryDto, DoctorDto, EpicShowDto,
+    ColorMode, ConfigGetDto, ConfigInitDto, ConfigSetDto, DeleteStoryDto, DoctorDto, EpicShowDto,
     EpicUpdateDto, JsonEnvelope, KanbanErrorBody, KanbanErrorCode, ListIdsDto, MoveStoryDto,
     NoData, PhaseShowDto, PlanStoryDto, SprintCreateDto, SprintListDto, SprintOverviewDto,
     SprintRolloverDto, SprintSyncDto, StoryListDto, StoryShowDto, StoryUpdateDto, TaskMutationDto,
-    TaskShowDto, ValidateDto, load_kanban_config,
+    TaskShowDto, ValidateDto,
 };
 
 /// Serialize a `JsonEnvelope` to stdout and return its exit code.
@@ -29,35 +30,6 @@ pub(crate) fn print_envelope<T: Serialize>(env: &JsonEnvelope<T>) -> i32 {
             1
         }
     }
-}
-
-fn feature_disabled_error(feature: &str, repo_root: &Path) -> anyhow::Error {
-    let _ = repo_root;
-    kanban_core::KanbanError::feature_disabled(feature).into()
-}
-
-pub(crate) fn ensure_sprints_enabled_json(repo_root: &Path) -> anyhow::Result<()> {
-    let config = load_kanban_config(repo_root)?;
-    if !config.features().sprints {
-        return Err(feature_disabled_error("sprints", repo_root));
-    }
-    Ok(())
-}
-
-pub(crate) fn ensure_epics_enabled_json(repo_root: &Path) -> anyhow::Result<()> {
-    let config = load_kanban_config(repo_root)?;
-    if !config.features().epics {
-        return Err(feature_disabled_error("epics", repo_root));
-    }
-    Ok(())
-}
-
-pub(crate) fn ensure_phases_enabled_json(repo_root: &Path) -> anyhow::Result<()> {
-    let config = load_kanban_config(repo_root)?;
-    if !config.features().phases {
-        return Err(feature_disabled_error("phases", repo_root));
-    }
-    Ok(())
 }
 
 pub(crate) fn json_story_frontmatter_updates(
@@ -312,11 +284,226 @@ fn emit_shared_outcome(outcome: CommandOutcome) -> i32 {
 
 /// Render a command through the shared execution path as a JSON envelope.
 pub(crate) fn render_json(command: &Command) -> i32 {
-    match execute_command(command, DispatchMode::Json) {
+    let theme = Theme::for_stdout(ColorMode::Never);
+    match execute_command(command, DispatchMode::Json, &theme) {
         Ok(outcome) => emit_shared_outcome(outcome),
         Err(error) => print_envelope(&JsonEnvelope::<serde_json::Value>::error(
             json_kind(command),
             KanbanErrorBody::from_anyhow(&error),
         )),
+    }
+}
+
+#[cfg(test)]
+mod kind_consistency_tests {
+    //! `json_kind` (this module, used for pre-execution error envelopes) and
+    //! `CommandOutcome::kind()` (outcome.rs, used for successful/handled
+    //! outcomes) both derive a `&'static str` "kind" label for the same
+    //! commands. The two are hand-maintained in separate files, so they can
+    //! silently drift. This test pins down agreement for a representative,
+    //! cheap-to-construct subset of commands.
+    //!
+    //! Known exception (not covered here): `Command::Doctor(Show)` maps to
+    //! `"doctor.show"` via `json_kind` but `CommandOutcome::DoctorShow(_)`
+    //! reports `"doctor"` via `kind()`. That mismatch predates this test and
+    //! is outside the scope of the fixes this test accompanies.
+    use super::*;
+    use crate::cli::{CompletionTarget, ConfigCommand, FeatureName, FeaturesCommand, ListIdsKind};
+    use crate::outcome::CommandOutcome;
+    use kanban_core::{CompletionDto, ConfigInitResult, ConfigSetResult};
+    use std::path::PathBuf;
+
+    fn assert_kinds_agree(label: &str, command: &Command, outcome: CommandOutcome) {
+        assert_eq!(
+            json_kind(command),
+            outcome.kind(),
+            "json_kind and CommandOutcome::kind() disagree for {label}"
+        );
+    }
+
+    #[test]
+    fn init_kinds_agree() {
+        assert_kinds_agree(
+            "init",
+            &Command::Init {
+                repo_root: PathBuf::from("."),
+                no_sprints: false,
+                no_epics: false,
+                no_phases: false,
+            },
+            CommandOutcome::Init(ConfigInitResult {
+                repo_root: PathBuf::from("."),
+                config_dir: PathBuf::from(".kanban"),
+                created_files: Vec::new(),
+            }),
+        );
+    }
+
+    #[test]
+    fn config_kinds_agree() {
+        assert_kinds_agree(
+            "config.show",
+            &Command::Config {
+                command: ConfigCommand::Show {
+                    repo_root: PathBuf::from("."),
+                },
+            },
+            CommandOutcome::ConfigShow("{}".to_string()),
+        );
+        assert_kinds_agree(
+            "config.get",
+            &Command::Config {
+                command: ConfigCommand::Get {
+                    key: "theme.color_mode".to_string(),
+                    repo_root: PathBuf::from("."),
+                },
+            },
+            CommandOutcome::ConfigGet {
+                key: "theme.color_mode".to_string(),
+                value: "auto".to_string(),
+            },
+        );
+        assert_kinds_agree(
+            "config.set",
+            &Command::Config {
+                command: ConfigCommand::Set {
+                    key: "theme.color_mode".to_string(),
+                    value: "auto".to_string(),
+                    repo_root: PathBuf::from("."),
+                },
+            },
+            CommandOutcome::ConfigSet(ConfigSetResult {
+                repo_root: PathBuf::from("."),
+                file_path: PathBuf::from(".kanban/settings.json"),
+                key: "theme.color_mode".to_string(),
+                value: "auto".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn features_kinds_agree() {
+        assert_kinds_agree(
+            "features.list",
+            &Command::Features {
+                command: FeaturesCommand::List {
+                    repo_root: PathBuf::from("."),
+                },
+            },
+            CommandOutcome::FeaturesList {
+                phases: true,
+                sprints: true,
+                epics: true,
+            },
+        );
+    }
+
+    #[test]
+    fn completion_kind_agrees() {
+        assert_kinds_agree(
+            "completion",
+            &Command::Completion {
+                target: CompletionTarget::Bash,
+            },
+            CommandOutcome::Completion(CompletionDto {
+                target: "bash".to_string(),
+                content_type: "shell-script".to_string(),
+                content: String::new(),
+            }),
+        );
+    }
+
+    #[test]
+    fn list_ids_kinds_agree() {
+        assert_kinds_agree(
+            "list-ids",
+            &Command::ListIds {
+                kind: ListIdsKind::Stories,
+                repo_root: PathBuf::from("."),
+            },
+            CommandOutcome::ListIds {
+                kind: "stories",
+                items: Vec::new(),
+            },
+        );
+        assert_kinds_agree(
+            "list-task-ids",
+            &Command::ListTaskIds {
+                story_id: "US-F1-001".to_string(),
+                repo_root: PathBuf::from("."),
+            },
+            CommandOutcome::ListIds {
+                kind: "tasks",
+                items: Vec::new(),
+            },
+        );
+    }
+
+    #[test]
+    fn uninstall_and_upgrade_kinds_agree() {
+        assert_kinds_agree(
+            "uninstall",
+            &Command::Uninstall {
+                prefix: None,
+                skills_dir: None,
+                yes: false,
+                dry_run: true,
+                quiet: false,
+            },
+            CommandOutcome::NoData { kind: "uninstall" },
+        );
+        assert_kinds_agree(
+            "upgrade",
+            &Command::Upgrade {
+                prefix: None,
+                skills_dir: None,
+                no_skills: false,
+                yes: false,
+                force: false,
+                dry_run: true,
+                quiet: false,
+            },
+            CommandOutcome::NoData { kind: "upgrade" },
+        );
+    }
+
+    #[test]
+    fn features_enable_disable_kinds_agree() {
+        assert_kinds_agree(
+            "features.enable",
+            &Command::Features {
+                command: FeaturesCommand::Enable {
+                    feature: FeatureName::Sprints,
+                    repo_root: PathBuf::from("."),
+                },
+            },
+            CommandOutcome::FeatureToggle {
+                action: crate::outcome::FeatureToggleAction::Enable,
+                result: ConfigSetResult {
+                    repo_root: PathBuf::from("."),
+                    file_path: PathBuf::from(".kanban/settings.json"),
+                    key: "features.sprints".to_string(),
+                    value: "true".to_string(),
+                },
+            },
+        );
+        assert_kinds_agree(
+            "features.disable",
+            &Command::Features {
+                command: FeaturesCommand::Disable {
+                    feature: FeatureName::Sprints,
+                    repo_root: PathBuf::from("."),
+                },
+            },
+            CommandOutcome::FeatureToggle {
+                action: crate::outcome::FeatureToggleAction::Disable,
+                result: ConfigSetResult {
+                    repo_root: PathBuf::from("."),
+                    file_path: PathBuf::from(".kanban/settings.json"),
+                    key: "features.sprints".to_string(),
+                    value: "false".to_string(),
+                },
+            },
+        );
     }
 }
