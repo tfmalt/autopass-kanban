@@ -77,6 +77,18 @@ export type Forecast = { generatedAt: string, remainingPoints: number, sprintDur
 
 export type DashboardMetrics = { burndown: Array<BurndownPoint>, burnup: Array<BurnupPoint>, leadTime: Array<LeadTimePoint>, velocity: Array<VelocityPoint>, forecast: Forecast, progress: ProjectProgress, };
 
+export type ReportEstimate = { storyId: string, estHours: number | null, estStart: string | null, estEnd: string | null, };
+
+export type ReportWbsRow = { kind: string, wbs: string, id: string, title: string, milestone: string, period: string, priority: string, status: string, points: number | null, estHours: number | null, startDate: string | null, endDate: string | null, notes: string, };
+
+export type ReportPhaseRow = { phase: string, title: string, period: string, milestone: string, epics: number, stories: number, total: number, done: number, wip: number, remaining: number, };
+
+export type ReportSprintProjection = { name: string, startDate: string, endDate: string, plannedPoints: number | null, deliveredPoints: number | null, rate: number | null, remaining: number | null, status: string, };
+
+export type ReportProgress = { donePoints: number, totalPoints: number, doneStories: number, totalStories: number, };
+
+export type ReportDashboard = { generatedAt: string, dailyAvg: number, throughputSource: string, hoursPerPoint: number, remainingPoints: number, progress: ReportProgress, forecast: Forecast, estimates: Array<ReportEstimate>, wbsRows: Array<ReportWbsRow>, phaseRows: Array<ReportPhaseRow>, sprintRows: Array<ReportSprintProjection>, };
+
 export type StoryPointsResponse = { allowedValues: Array<string>, aliases: { [key in string]: string }, };
 
 export type ConfigResponse = { port: number, host: string, style: string, version: string, branch: string, storyPoints: StoryPointsResponse, };

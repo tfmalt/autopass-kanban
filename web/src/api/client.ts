@@ -1,4 +1,4 @@
-import type { ConfigResponse, DashboardMetrics, EpicDetail, GitPullResponse, RepositorySnapshot, StoryDetail, TeamMember } from "@shared/generated/api.js";
+import type { ConfigResponse, DashboardMetrics, EpicDetail, GitPullResponse, ReportDashboard, RepositorySnapshot, StoryDetail, TeamMember } from "@shared/generated/api.js";
 
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -22,6 +22,7 @@ async function sendJson<T = void>(method: "POST" | "PUT" | "PATCH", url: string,
 
 export const fetchRepository = () => getJson<RepositorySnapshot>("/api/repository");
 export const fetchMetrics = () => getJson<DashboardMetrics>("/api/metrics");
+export const fetchReport = () => getJson<ReportDashboard>("/api/report");
 export const fetchConfig = () => getJson<ConfigResponse>("/api/config");
 export const fetchTeam = () => getJson<TeamMember[]>("/api/team");
 export const fetchEpic = (id: string) => getJson<EpicDetail>(`/api/epics/${encodeURIComponent(id)}`);

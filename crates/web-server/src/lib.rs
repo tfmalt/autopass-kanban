@@ -28,9 +28,9 @@ mod typegen;
 use dto::ApiError;
 use handlers::{
     api_config, api_create_sprint, api_epic, api_events, api_git_pull, api_metrics, api_move_story,
-    api_plan_story, api_repository, api_story, api_team, api_team_avatar, api_update_epic_fields,
-    api_update_sprint, api_update_story_body, api_update_story_fields, api_update_task,
-    static_asset,
+    api_plan_story, api_report, api_repository, api_story, api_team, api_team_avatar,
+    api_update_epic_fields, api_update_sprint, api_update_story_body, api_update_story_fields,
+    api_update_task, static_asset,
 };
 
 #[derive(Debug, Clone)]
@@ -155,6 +155,7 @@ pub async fn serve(options: WebServeOptions) -> Result<()> {
     let app = Router::new()
         .route("/api/repository", get(api_repository))
         .route("/api/metrics", get(api_metrics))
+        .route("/api/report", get(api_report))
         .route("/api/config", get(api_config))
         .route("/api/team", get(api_team))
         .route("/api/team/avatars/{*path}", get(api_team_avatar))

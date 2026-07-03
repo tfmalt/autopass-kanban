@@ -79,7 +79,7 @@ pub(crate) enum CommandOutcome {
     },
     Validate(ValidationReport),
     DoctorShow(Vec<DoctorFinding>),
-    ReportWbs(ReportWbsDto),
+    ReportWbs(Box<ReportWbsDto>),
     ReportForecast(ReportForecastDto),
     StoryMove {
         result: MoveStoryResult,
@@ -335,7 +335,7 @@ pub(crate) fn print_human_outcome(theme: &Theme, outcome: CommandOutcome) {
             }
         }
         CommandOutcome::DoctorShow(findings) => print_doctor_findings(theme, &findings),
-        CommandOutcome::ReportWbs(dto) => print_report_wbs(theme, dto),
+        CommandOutcome::ReportWbs(dto) => print_report_wbs(theme, *dto),
         CommandOutcome::ReportForecast(dto) => print_report_forecast(theme, dto),
         CommandOutcome::StoryMove { result, .. } => {
             println!(

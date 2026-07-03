@@ -11,60 +11,103 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import wbs_report
 
 
-class WbsReportTests(unittest.TestCase):
-    def test_aggregate_status_collapses_story_workflow_states(self):
-        self.assertEqual(wbs_report._aggregate_status([]), "PLANNED")
-        self.assertEqual(wbs_report._aggregate_status([{"status": "ready"}]), "PLANNED")
-        self.assertEqual(wbs_report._aggregate_status([{"status": "todo"}]), "TODO")
-        self.assertEqual(wbs_report._aggregate_status([{"status": "blocked"}]), "IN PROGRESS")
-        self.assertEqual(wbs_report._aggregate_status([{"status": "done"}]), "DONE")
-        self.assertEqual(
-            wbs_report._aggregate_status([{"status": "done"}, {"status": "ready"}]),
-            "IN PROGRESS",
-        )
+def workbook_row(
+    kind,
+    wbs,
+    id,
+    title,
+    status="",
+    points=None,
+    est_hours=None,
+    planned_period=None,
+    planned_start_date=None,
+    planned_end_date=None,
+    actual_period=None,
+    actual_start_date=None,
+    actual_end_date=None,
+    notes="",
+):
+    return {
+        "kind": kind,
+        "wbs": wbs,
+        "id": id,
+        "title": title,
+        "milestone": "MP1 - Foundation",
+        "priority": "Critical",
+        "status": status,
+        "points": points,
+        "est_hours": est_hours,
+        "planned_period": planned_period,
+        "planned_start_date": planned_start_date,
+        "planned_end_date": planned_end_date,
+        "actual_period": actual_period,
+        "actual_start_date": actual_start_date,
+        "actual_end_date": actual_end_date,
+        "notes": notes,
+    }
 
-    def test_wbs_sheet_renders_planned_and_actual_date_columns(self):
+
+class WbsReportTests(unittest.TestCase):
+    def test_wbs_sheet_renders_precomputed_rows_without_rederiving_dates(self):
         wb = openpyxl.Workbook()
         ws = wb.active
-        hierarchy = [
-            {
-                "id": "F1",
-                "epics": [
-                    {
-                        "id": "EP-F1-06",
-                        "title": "Git-driven kanban and backlog tooling",
-                        "stories": [
-                            {
-                                "id": "US-F1-058",
-                                "title": "Add planned and actual dates",
-                                "status": "done",
-                                "story_points": 1,
-                                "phase": "F1",
-                                "epic_id": "EP-F1-06",
-                                "planned_start": "2026-06-15",
-                                "planned_end": "2026-06-19",
-                                "work_started": "2026-06-17T09:00:00+0200",
-                                "work_done": "2026-07-01T16:00:00+0200",
-                            },
-                            {
-                                "id": "US-F1-059",
-                                "title": "Missing planned dates stay visible",
-                                "status": "todo",
-                                "story_points": 2,
-                                "phase": "F1",
-                                "epic_id": "EP-F1-06",
-                            },
-                        ],
-                    }
-                ],
-            }
+        rows = [
+            workbook_row(
+                "phase",
+                "1",
+                "F1",
+                "Phase 1 - Etablering (Establishment)",
+                status="IN PROGRESS",
+                points=3,
+                planned_period="Q2 2026",
+                planned_start_date="2026-06-15",
+                planned_end_date="2026-06-19",
+                actual_period="Q2-Q3 2026",
+                actual_start_date="2026-06-17",
+                actual_end_date="2026-07-01",
+            ),
+            workbook_row(
+                "epic",
+                "1.1",
+                "EP-F1-06",
+                "Git-driven kanban and backlog tooling",
+                status="IN PROGRESS",
+                points=3,
+                planned_period="Q2 2026",
+                planned_start_date="2026-06-15",
+                planned_end_date="2026-06-19",
+                actual_period="Q2-Q3 2026",
+                actual_start_date="2026-06-17",
+                actual_end_date="2026-07-01",
+            ),
+            workbook_row(
+                "story",
+                "1.1.1",
+                "US-F1-058",
+                "Add planned and actual dates",
+                status="DONE",
+                points=1,
+                est_hours=7,
+                planned_period="Q2 2026",
+                planned_start_date="2026-06-15",
+                planned_end_date="2026-06-19",
+                actual_period="Q2-Q3 2026",
+                actual_start_date="2026-06-17",
+                actual_end_date="2026-07-01",
+            ),
+            workbook_row(
+                "story",
+                "1.1.2",
+                "US-F1-059",
+                "Missing planned dates stay visible",
+                status="TODO",
+                points=2,
+                est_hours=14,
+                notes="Missing planned baseline: start, end",
+            ),
         ]
-        estimates = {
-            "US-F1-058": {"est_hours": None, "est_start": None, "est_end": None},
-            "US-F1-059": {"est_hours": 14, "est_start": date(2026, 6, 22), "est_end": date(2026, 6, 23)},
-        }
 
-        wbs_report.build_wbs_sheet(ws, hierarchy, estimates, 7.0, "2026-06-11T10:00:00+02:00")
+        wbs_report.build_wbs_sheet(ws, rows, "2026-06-11T10:00:00+02:00")
 
         headers = [ws.cell(2, col).value for col in range(1, wbs_report.TOTAL_COLS + 1)]
         self.assertIn("Planned Start Date", headers)
@@ -89,102 +132,89 @@ class WbsReportTests(unittest.TestCase):
             "Missing planned baseline: start, end",
         )
 
+        self.assertEqual(ws.cell(3, wbs_report.COL_POINTS).value, "=SUM(G4)")
+        self.assertEqual(ws.cell(4, wbs_report.COL_POINTS).value, "=SUM(G5:G6)")
         self.assertFalse(ws.sheet_properties.outlinePr.summaryBelow)
         self.assertEqual(ws.row_dimensions[3].outlineLevel, 0)
         self.assertEqual(ws.row_dimensions[4].outlineLevel, 1)
         self.assertEqual(ws.row_dimensions[5].outlineLevel, 2)
         self.assertEqual(ws.row_dimensions[6].outlineLevel, 2)
 
-    def test_wbs_sheet_rolls_story_status_up_to_epic_and_phase(self):
+    def test_done_epic_and_dropped_story_use_done_row_highlight(self):
         wb = openpyxl.Workbook()
         ws = wb.active
-        hierarchy = [
-            {
-                "id": "F1",
-                "epics": [
-                    {
-                        "id": "EP-F1-01",
-                        "title": "Active epic",
-                        "stories": [
-                            {
-                                "id": "US-F1-001",
-                                "title": "Started story",
-                                "status": "in-progress",
-                                "story_points": 1,
-                                "phase": "F1",
-                                "epic_id": "EP-F1-01",
-                            },
-                            {
-                                "id": "US-F1-002",
-                                "title": "Queued story",
-                                "status": "todo",
-                                "story_points": 1,
-                                "phase": "F1",
-                                "epic_id": "EP-F1-01",
-                            },
-                        ],
-                    },
-                    {
-                        "id": "EP-F1-02",
-                        "title": "Completed epic",
-                        "stories": [
-                            {
-                                "id": "US-F1-003",
-                                "title": "Finished story",
-                                "status": "dropped",
-                                "story_points": 1,
-                                "phase": "F1",
-                                "epic_id": "EP-F1-02",
-                            },
-                        ],
-                    },
-                ],
-            }
+        rows = [
+            workbook_row("phase", "1", "F1", "Phase 1", status="DONE", points=2),
+            workbook_row("epic", "1.1", "EP-F1-03", "Dropped work", status="DONE", points=2),
+            workbook_row("story", "1.1.1", "US-F1-010", "Dropped story", status="DROPPED", points=2),
         ]
-        estimates = {
-            story["id"]: {"est_hours": None, "est_start": None, "est_end": None}
-            for epic in hierarchy[0]["epics"]
-            for story in epic["stories"]
-        }
 
-        wbs_report.build_wbs_sheet(ws, hierarchy, estimates, 0.0, "2026-06-12T10:00:00+02:00")
-
-        self.assertEqual(ws.cell(3, wbs_report.COL_STATUS).value, "IN PROGRESS")
-        self.assertEqual(ws.cell(4, wbs_report.COL_STATUS).value, "IN PROGRESS")
-        self.assertEqual(ws.cell(7, wbs_report.COL_STATUS).value, "DONE")
-
-    def test_dropped_story_uses_done_row_highlight(self):
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        hierarchy = [
-            {
-                "id": "F1",
-                "epics": [
-                    {
-                        "id": "EP-F1-03",
-                        "title": "Dropped work",
-                        "stories": [
-                            {
-                                "id": "US-F1-010",
-                                "title": "Dropped story",
-                                "status": "dropped",
-                                "story_points": 2,
-                                "phase": "F1",
-                                "epic_id": "EP-F1-03",
-                            }
-                        ],
-                    }
-                ],
-            }
-        ]
-        estimates = {"US-F1-010": {"est_hours": None, "est_start": None, "est_end": None}}
-
-        wbs_report.build_wbs_sheet(ws, hierarchy, estimates, 7.0, "2026-07-02T10:00:00+02:00")
+        wbs_report.build_wbs_sheet(ws, rows, "2026-07-02T10:00:00+02:00")
 
         story_fill = ws.cell(5, wbs_report.COL_STATUS).fill.fgColor.rgb
         epic_fill = ws.cell(4, wbs_report.COL_STATUS).fill.fgColor.rgb
         self.assertEqual(story_fill, wbs_report.COLOUR_STORY_DONE_BG)
         self.assertEqual(epic_fill, wbs_report.COLOUR_EPIC_DONE_BG)
+
+    def test_phase_summary_consumes_precomputed_phase_rows(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        wbs_report.build_phase_summary_sheet(ws, [
+            {
+                "phase": "F1",
+                "title": "Phase 1 - Etablering (Establishment)",
+                "period": "Q2 2026",
+                "milestone": "MP1 - Foundation",
+                "epics": 2,
+                "stories": 3,
+                "total": 8,
+                "done": 5,
+                "wip": 1,
+                "remaining": 2,
+            }
+        ])
+
+        self.assertEqual(ws.cell(3, 1).value, "F1")
+        self.assertEqual(ws.cell(3, 5).value, 2)
+        self.assertEqual(ws.cell(3, 10).value, 2)
+        self.assertEqual(ws.cell(4, 1).value, "TOTAL")
+        self.assertEqual(ws.cell(4, 7).value, 8)
+
+    def test_sprint_sheet_consumes_precomputed_projection_rows(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        rows = [
+            {
+                "name": "S000.start",
+                "start_date": "2026-06-01",
+                "end_date": "2026-06-14",
+                "planned_points": 5,
+                "delivered_points": 5,
+                "rate": 2.7,
+                "remaining": 8,
+                "status": "closed",
+            },
+            {
+                "name": "S001.projected",
+                "start_date": "2026-06-15",
+                "end_date": "2026-06-28",
+                "planned_points": 27,
+                "delivered_points": 8,
+                "rate": 2.7,
+                "remaining": 0,
+                "status": "projected (daily throughput over 3 observed workdays)",
+            },
+        ]
+        velocity = {"avg_points_per_sprint": 5, "remaining_points": 8, "completed_sprint_count": 1}
+        forecast = {"throughput": {"observed_day_count": 3}, "completion": {"p80_date": "2026-06-16"}}
+
+        wbs_report.build_sprint_burndown_sheet(ws, rows, velocity, forecast, "2026-06-10T10:00:00+02:00", 2.7)
+
+        self.assertEqual(ws.cell(4, 1).value, "S000.start")
+        self.assertEqual(ws.cell(4, 8).value, "completed")
+        self.assertEqual(ws.cell(5, 1).value, "S001.projected")
+        self.assertEqual(ws.cell(5, 8).value, "projected")
+        self.assertEqual(ws.cell(5, 7).value, 0)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import {
   fetchConfig,
   fetchEpic,
   fetchMetrics,
+  fetchReport,
   fetchRepository,
   fetchStory,
   fetchTeam,
@@ -35,6 +36,7 @@ export { byPriorityThenId, computePriorityUpdates };
 
 export const useRepository = () => useQuery({ queryKey: ["repository"], queryFn: fetchRepository });
 export const useMetrics = () => useQuery({ queryKey: ["metrics"], queryFn: fetchMetrics });
+export const useReport = () => useQuery({ queryKey: ["report"], queryFn: fetchReport });
 export const useConfig = () => useQuery({ queryKey: ["config"], queryFn: fetchConfig, staleTime: Infinity });
 
 export function useGitPull() {
@@ -112,7 +114,10 @@ export function useCreateSprint() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: createSprint,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["repository"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["repository"] });
+      qc.invalidateQueries({ queryKey: ["report"] });
+    },
   });
 }
 
@@ -145,6 +150,7 @@ export function useLiveReload() {
     source.addEventListener("change", () => {
       qc.invalidateQueries({ queryKey: ["repository"] });
       qc.invalidateQueries({ queryKey: ["metrics"] });
+      qc.invalidateQueries({ queryKey: ["report"] });
     });
     return () => source.close();
   }, [qc]);
@@ -175,6 +181,7 @@ export function useUpdateStory() {
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ["story", vars.id] });
       qc.invalidateQueries({ queryKey: ["repository"] });
+      qc.invalidateQueries({ queryKey: ["report"] });
     },
   });
 }
@@ -227,6 +234,7 @@ export function useUpdateStoryFields() {
       });
       qc.invalidateQueries({ queryKey: ["story", vars.id] });
       qc.invalidateQueries({ queryKey: ["repository"] });
+      qc.invalidateQueries({ queryKey: ["report"] });
     },
   });
 }
@@ -239,6 +247,7 @@ export function useUpdateTaskStatus() {
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ["story", vars.storyId] });
       qc.invalidateQueries({ queryKey: ["repository"] });
+      qc.invalidateQueries({ queryKey: ["report"] });
     },
   });
 }

@@ -156,6 +156,184 @@ pub(crate) struct RepositorySnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
+#[ts(rename = "ReportEstimate")]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebReportEstimate {
+    pub(crate) story_id: String,
+    pub(crate) est_hours: Option<f64>,
+    pub(crate) est_start: Option<String>,
+    pub(crate) est_end: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(rename = "ReportWbsRow")]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebReportWbsRow {
+    pub(crate) kind: String,
+    pub(crate) wbs: String,
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) milestone: String,
+    pub(crate) period: String,
+    pub(crate) priority: String,
+    pub(crate) status: String,
+    pub(crate) points: Option<i64>,
+    pub(crate) est_hours: Option<f64>,
+    pub(crate) start_date: Option<String>,
+    pub(crate) end_date: Option<String>,
+    pub(crate) notes: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(rename = "ReportPhaseRow")]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebReportPhaseRow {
+    pub(crate) phase: String,
+    pub(crate) title: String,
+    pub(crate) period: String,
+    pub(crate) milestone: String,
+    pub(crate) epics: usize,
+    pub(crate) stories: usize,
+    pub(crate) total: i64,
+    pub(crate) done: i64,
+    pub(crate) wip: i64,
+    pub(crate) remaining: i64,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(rename = "ReportSprintProjection")]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebReportSprintProjection {
+    pub(crate) name: String,
+    pub(crate) start_date: String,
+    pub(crate) end_date: String,
+    pub(crate) planned_points: Option<i64>,
+    pub(crate) delivered_points: Option<i64>,
+    pub(crate) rate: Option<f64>,
+    pub(crate) remaining: Option<i64>,
+    pub(crate) status: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(rename = "ReportProgress")]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebReportProgress {
+    pub(crate) done_points: i64,
+    pub(crate) total_points: i64,
+    pub(crate) done_stories: usize,
+    pub(crate) total_stories: usize,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(rename = "ReportDashboard")]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebReportDashboard {
+    pub(crate) generated_at: String,
+    pub(crate) daily_avg: f64,
+    pub(crate) throughput_source: String,
+    pub(crate) hours_per_point: f64,
+    pub(crate) remaining_points: i64,
+    pub(crate) progress: WebReportProgress,
+    pub(crate) forecast: crate::metrics::Forecast,
+    pub(crate) estimates: Vec<WebReportEstimate>,
+    pub(crate) wbs_rows: Vec<WebReportWbsRow>,
+    pub(crate) phase_rows: Vec<WebReportPhaseRow>,
+    pub(crate) sprint_rows: Vec<WebReportSprintProjection>,
+}
+
+impl From<kanban_core::ReportEstimateDto> for WebReportEstimate {
+    fn from(dto: kanban_core::ReportEstimateDto) -> Self {
+        Self {
+            story_id: dto.story_id,
+            est_hours: dto.est_hours,
+            est_start: dto.est_start,
+            est_end: dto.est_end,
+        }
+    }
+}
+
+impl From<kanban_core::ReportWbsRowDto> for WebReportWbsRow {
+    fn from(dto: kanban_core::ReportWbsRowDto) -> Self {
+        Self {
+            kind: dto.kind,
+            wbs: dto.wbs,
+            id: dto.id,
+            title: dto.title,
+            milestone: dto.milestone,
+            period: dto.period,
+            priority: dto.priority,
+            status: dto.status,
+            points: dto.points,
+            est_hours: dto.est_hours,
+            start_date: dto.start_date,
+            end_date: dto.end_date,
+            notes: dto.notes,
+        }
+    }
+}
+
+impl From<kanban_core::ReportPhaseRowDto> for WebReportPhaseRow {
+    fn from(dto: kanban_core::ReportPhaseRowDto) -> Self {
+        Self {
+            phase: dto.phase,
+            title: dto.title,
+            period: dto.period,
+            milestone: dto.milestone,
+            epics: dto.epics,
+            stories: dto.stories,
+            total: dto.total,
+            done: dto.done,
+            wip: dto.wip,
+            remaining: dto.remaining,
+        }
+    }
+}
+
+impl From<kanban_core::ReportSprintProjectionDto> for WebReportSprintProjection {
+    fn from(dto: kanban_core::ReportSprintProjectionDto) -> Self {
+        Self {
+            name: dto.name,
+            start_date: dto.start_date,
+            end_date: dto.end_date,
+            planned_points: dto.planned_points,
+            delivered_points: dto.delivered_points,
+            rate: dto.rate,
+            remaining: dto.remaining,
+            status: dto.status,
+        }
+    }
+}
+
+impl From<kanban_core::ReportProgressDto> for WebReportProgress {
+    fn from(dto: kanban_core::ReportProgressDto) -> Self {
+        Self {
+            done_points: dto.done_points,
+            total_points: dto.total_points,
+            done_stories: dto.done_stories,
+            total_stories: dto.total_stories,
+        }
+    }
+}
+
+impl From<kanban_core::ReportDashboardDto> for WebReportDashboard {
+    fn from(dto: kanban_core::ReportDashboardDto) -> Self {
+        Self {
+            generated_at: dto.generated_at,
+            daily_avg: dto.daily_avg,
+            throughput_source: dto.throughput_source,
+            hours_per_point: dto.hours_per_point,
+            remaining_points: dto.remaining_points,
+            progress: dto.progress.into(),
+            forecast: dto.forecast.into(),
+            estimates: dto.estimates.into_iter().map(Into::into).collect(),
+            wbs_rows: dto.wbs_rows.into_iter().map(Into::into).collect(),
+            phase_rows: dto.phase_rows.into_iter().map(Into::into).collect(),
+            sprint_rows: dto.sprint_rows.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
 #[ts(rename = "TeamMember")]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WebTeamMember {

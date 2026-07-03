@@ -6,8 +6,9 @@ use ts_rs::{Config, TS};
 
 use crate::dto::{
     ConfigResponse, GitPullResponse, PhaseSummary, ProjectProgress, RepositorySnapshot,
-    StoryPointsResponse, WebEpic, WebEpicDetail, WebSprint, WebStory, WebStoryDetail, WebTask,
-    WebTaskSummary, WebTeamMember,
+    StoryPointsResponse, WebEpic, WebEpicDetail, WebReportDashboard, WebReportEstimate,
+    WebReportPhaseRow, WebReportProgress, WebReportSprintProjection, WebReportWbsRow, WebSprint,
+    WebStory, WebStoryDetail, WebTask, WebTaskSummary, WebTeamMember,
 };
 use crate::metrics::{
     BurndownPoint, BurnupPoint, DashboardMetrics, Forecast, ForecastCompletion, ForecastThroughput,
@@ -67,6 +68,12 @@ fn generated_declarations(cfg: &Config) -> Vec<String> {
         export_declaration(ForecastCompletion::decl(cfg)),
         export_declaration(Forecast::decl(cfg)),
         export_declaration(DashboardMetrics::decl(cfg)),
+        export_declaration(WebReportEstimate::decl(cfg)),
+        export_declaration(WebReportWbsRow::decl(cfg)),
+        export_declaration(WebReportPhaseRow::decl(cfg)),
+        export_declaration(WebReportSprintProjection::decl(cfg)),
+        export_declaration(WebReportProgress::decl(cfg)),
+        export_declaration(WebReportDashboard::decl(cfg)),
         export_declaration(StoryPointsResponse::decl(cfg)),
         export_declaration(ConfigResponse::decl(cfg)),
         export_declaration(GitPullResponse::decl(cfg)),

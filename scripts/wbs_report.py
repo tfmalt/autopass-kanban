@@ -14,11 +14,11 @@ where <nnn> is a zero-padded sequence number that auto-increments each run.
 
 The script reads JSON from stdin (produced by `kanban --format json report wbs`)
 and writes an xlsx report with:
-  - Hierarchical WBS numbering (phase.epic.story) rebuilt from live data
+  - Hierarchical WBS numbering (phase.epic.story) from core-derived rows
   - SUM formulas for story-point totals on epic and phase rows
   - Planned Start Date and Planned End Date columns from markdown metadata
   - Actual Start Date, Actual End Date, and Actual Period from lifecycle fields
-  - Estimated hours derived from observed daily throughput for unstarted stories
+  - Estimated hours from core-derived report rows
   - Sprint burndown prognosis sheet
   - Phase summary sheet
   - Legend sheet
@@ -27,7 +27,7 @@ and writes an xlsx report with:
 import argparse
 import json
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
 try:
@@ -51,25 +51,6 @@ COLOUR_STORY_INPROGRESS_BG = "FFE6D0FF"  # soft purple
 COLOUR_STORY_DONE_BG       = "FFD0F0D0"  # soft green
 COLOUR_WHITE_FG            = "FFFFFFFF"
 COLOUR_DARK_FG             = "FF1F1F1F"
-
-STATUS_MAP = {
-    "draft":        "DRAFT",
-    "ready":        "READY",
-    "todo":         "TODO",
-    "in-progress":  "IN PROGRESS",
-    "ready-for-qa": "READY FOR QA",
-    "blocked":      "BLOCKED",
-    "done":         "DONE",
-    "dropped":      "DROPPED",
-}
-
-PHASE_META = {
-    "F1": {"title": "Phase 1 – Etablering (Establishment)",              "milestone": "MP1 – Foundation",            "period": "Q2 2026", "priority": "Critical"},
-    "F2": {"title": "Phase 2 – Utvikling: Kjernelogikk (Core Logic)",    "milestone": "MP2 – Core Logic",            "period": "Q3 2026", "priority": "Critical"},
-    "F3": {"title": "Phase 3 – Utvikling: Administrasjon (Admin)",       "milestone": "MP3 – Administration",        "period": "Q4 2026", "priority": "High"},
-    "F4": {"title": "Phase 4 – Utvikling: Ferdigstillelse (Completion)", "milestone": "MP4 – Complete Functionality", "period": "Q1 2027", "priority": "High"},
-    "F5": {"title": "Phase 5 – Driftssettelse og Stabilisering",         "milestone": "MP5 – Production Readiness",  "period": "Q2 2027", "priority": "High"},
-}
 
 # ── Output column layout (A–O, 15 columns) ───────────────────────────────────
 COL_WBS                = 1   # A: hierarchical WBS number (1.1.2)
@@ -174,191 +155,10 @@ def _parse_iso_date(ts_str: str | None) -> date | None:
             return None
 
 
-def _add_work_days(start: date, work_days: float) -> date:
-    """Advance `start` by `work_days` Mon–Fri days (fractional rounds up)."""
-    remaining = float(work_days)
-    result    = start
-    while remaining > 0:
-        result += timedelta(days=1)
-        if result.weekday() < 5:
-            remaining -= 1.0
-    return result
-
-
-def _work_days_between_inclusive(start: date, end: date) -> int:
-    days   = 0
-    cursor = start
-    while cursor <= end:
-        if cursor.weekday() < 5:
-            days += 1
-        cursor += timedelta(days=1)
-    return days
-
-
-def _quarter(d: date) -> tuple[int, int]:
-    return ((d.month - 1) // 3 + 1, d.year)
-
-
-def _period_label(start: date | None, end: date | None) -> str | None:
-    first = start or end
-    last = end or start
-    if first is None or last is None:
-        return None
-
-    q1, y1 = _quarter(first)
-    q2, y2 = _quarter(last)
-    if (q1, y1) == (q2, y2):
-        return f"Q{q1} {y1}"
-    if y1 == y2:
-        return f"Q{q1}-Q{q2} {y1}"
-    return f"Q{q1} {y1}-Q{q2} {y2}"
-
-
-# ── Estimation ────────────────────────────────────────────────────────────────
-
-def _forecast_throughput(forecast: dict | None, velocity: dict, sprint_duration_weeks: int) -> tuple[float, str]:
-    throughput = (forecast or {}).get("throughput", {})
-    avg_daily  = throughput.get("average", 0) or 0
-    observed   = throughput.get("observed_day_count", 0) or 0
-    if avg_daily > 0:
-        return avg_daily, f"daily throughput over {observed} observed workdays"
-
-    avg_sprint = velocity.get("avg_points_per_sprint", 0) or 0
-    work_days  = max(1, sprint_duration_weeks * 5)
-    if avg_sprint > 0:
-        return avg_sprint / work_days, "sprint velocity fallback"
-
-    return 0.0, "no throughput data"
-
-
-def _compute_estimates(stories: list, velocity: dict, forecast: dict | None, sprint_duration_weeks: int) -> tuple[dict, float]:
-    """
-    Return (estimates, hours_per_point).
-    estimates: {story_id: {est_hours, est_start, est_end}}
-    hours_per_point is 0 if throughput is unknown.
-    """
-    avg_pts_per_workday, _source = _forecast_throughput(forecast, velocity, sprint_duration_weeks)
-    if avg_pts_per_workday <= 0:
-        empty = {s["id"]: {"est_hours": None, "est_start": None, "est_end": None} for s in stories}
-        return empty, 0.0
-
-    hours_per_day    = 7
-    hours_per_point  = hours_per_day / avg_pts_per_workday
-    days_per_point   = 1 / avg_pts_per_workday
-
-    STATUS_ORDER = {
-        "in-progress": 0, "ready-for-qa": 1, "ready": 2,
-        "todo": 3, "draft": 4, "blocked": 5,
-    }
-    not_done = [s for s in stories if s["status"].lower() not in ("done", "dropped")]
-    not_done.sort(key=lambda s: (
-        STATUS_ORDER.get(s["status"].lower(), 9),
-        s["phase"],
-        s.get("epic_id") or "",
-        s["id"],
-    ))
-
-    estimates: dict     = {}
-    today               = date.today()
-    cumulative_days     = 0.0
-
-    for s in not_done:
-        pts = s.get("story_points") or 0
-        if not pts:
-            estimates[s["id"]] = {"est_hours": None, "est_start": None, "est_end": None}
-            continue
-
-        est_hours    = round(pts * hours_per_point, 1)
-        est_duration = pts * days_per_point
-        work_started = _parse_iso_date(s.get("work_started"))
-
-        if work_started:
-            est_start = work_started
-            est_end   = _add_work_days(today, est_duration)
-        else:
-            est_start        = _add_work_days(today, cumulative_days)
-            est_end          = _add_work_days(today, cumulative_days + est_duration)
-            cumulative_days += est_duration
-
-        estimates[s["id"]] = {"est_hours": est_hours, "est_start": est_start, "est_end": est_end}
-
-    for s in stories:
-        if s["id"] not in estimates:
-            estimates[s["id"]] = {
-                "est_hours":  None,
-                "est_start":  _parse_iso_date(s.get("work_started")),
-                "est_end":    _parse_iso_date(s.get("work_done")),
-            }
-
-    return estimates, hours_per_point
-
-
-def _group_planned_dates(stories_in_group: list) -> tuple[date | None, date | None]:
-    """Return (min planned_start, max planned_end) across a group of stories."""
-    starts, ends = [], []
-    for s in stories_in_group:
-        planned_start = _parse_iso_date(s.get("planned_start"))
-        planned_end   = _parse_iso_date(s.get("planned_end"))
-        if planned_start: starts.append(planned_start)
-        if planned_end:   ends.append(planned_end)
-
-    return (min(starts) if starts else None), (max(ends) if ends else None)
-
-
-def _group_actual_dates(stories_in_group: list) -> tuple[date | None, date | None]:
-    """Return (min actual_start, max actual_end) across lifecycle dates."""
-    starts, ends = [], []
-    for s in stories_in_group:
-        actual_start = _parse_iso_date(s.get("work_started"))
-        actual_end   = _parse_iso_date(s.get("work_done"))
-        if actual_start: starts.append(actual_start)
-        if actual_end:   ends.append(actual_end)
-
-    return (min(starts) if starts else None), (max(ends) if ends else None)
-
-
-def _aggregate_status(stories_in_group: list) -> str:
-    """Collapse story workflow states into the report-level progress status."""
-    statuses = {(s.get("status") or "").lower() for s in stories_in_group}
-    statuses.discard("")
-
-    if not statuses:
-        return "PLANNED"
-    if statuses <= {"done", "dropped"}:
-        return "DONE"
-    if statuses & {"in-progress", "ready-for-qa", "blocked"}:
-        return "IN PROGRESS"
-    if statuses & {"done", "dropped"}:
-        return "IN PROGRESS"
-    if "todo" in statuses:
-        return "TODO"
-    return "PLANNED"
-
-
-# ── Hierarchy builder ─────────────────────────────────────────────────────────
-
-def _build_hierarchy(stories: list) -> list:
-    """Return [{phase_id, epics: [{id, title, stories: [...]}]}], all sorted."""
-    phase_map: dict = {}
-    for s in stories:
-        ph      = s["phase"]
-        epic_id = s.get("epic_id") or f"(no epic in {ph})"
-        epic_t  = s.get("epic_title") or epic_id
-        phase_map.setdefault(ph, {}).setdefault(epic_id, {"title": epic_t, "stories": []})
-        phase_map[ph][epic_id]["stories"].append(s)
-
-    result = []
-    for ph_id in sorted(phase_map):
-        epics = []
-        for ep_id in sorted(phase_map[ph_id]):
-            ed = phase_map[ph_id][ep_id]
-            epics.append({
-                "id":      ep_id,
-                "title":   ed["title"],
-                "stories": sorted(ed["stories"], key=lambda s: s["id"]),
-            })
-        result.append({"id": ph_id, "epics": epics})
-    return result
+def _set_optional_date_cell(ws, row_num: int, col: int, value: str | None):
+    parsed = _parse_iso_date(value)
+    if parsed:
+        _set_date_cell(ws.cell(row_num, col), parsed)
 
 
 # ── WBS sheet ─────────────────────────────────────────────────────────────────
@@ -385,94 +185,46 @@ def _set_outline_level(ws, row_num: int, level: int):
     ws.row_dimensions[row_num].outlineLevel = level
 
 
-def _write_phase_row(ws, row_num: int, wbs: str, phase_id: str,
-                     status: str,
-                     planned_start: date | None, planned_end: date | None,
-                     actual_start: date | None, actual_end: date | None):
-    meta                          = PHASE_META.get(phase_id, {})
-    ws.row_dimensions[row_num].height = 20
-    ws.cell(row_num, COL_WBS,       value=wbs)
-    ws.cell(row_num, COL_ID,        value=phase_id)
-    ws.cell(row_num, COL_TITLE,     value=f"   {meta.get('title', phase_id)}")
-    ws.cell(row_num, COL_MILESTONE, value=meta.get("milestone", ""))
-    ws.cell(row_num, COL_PERIOD,    value=_period_label(planned_start, planned_end) or meta.get("period", ""))
-    ws.cell(row_num, COL_PRIORITY,  value=meta.get("priority", ""))
-    ws.cell(row_num, COL_STATUS,    value=status)
-    ws.cell(row_num, COL_HOURS,     value=None)
-    if planned_start: _set_date_cell(ws.cell(row_num, COL_PLANNED_START_DATE), planned_start)
-    if planned_end:   _set_date_cell(ws.cell(row_num, COL_PLANNED_END_DATE),   planned_end)
-    if actual_start:  _set_date_cell(ws.cell(row_num, COL_ACTUAL_START_DATE),  actual_start)
-    if actual_end:    _set_date_cell(ws.cell(row_num, COL_ACTUAL_END_DATE),    actual_end)
-    ws.cell(row_num, COL_ACTUAL_PERIOD, value=_period_label(actual_start, actual_end))
-    apply_row_style(ws, row_num, level=2)
+def _write_group_row(ws, row_num: int, row_data: dict, level: int):
+    ws.row_dimensions[row_num].height = 20 if level == 2 else 18
+    ws.cell(row_num, COL_WBS,       value=row_data["wbs"])
+    ws.cell(row_num, COL_ID,        value=row_data["id"])
+    ws.cell(row_num, COL_TITLE,     value=f"   {row_data['title']}")
+    ws.cell(row_num, COL_MILESTONE, value=row_data.get("milestone", ""))
+    ws.cell(row_num, COL_PERIOD,    value=row_data.get("planned_period"))
+    ws.cell(row_num, COL_PRIORITY,  value=row_data.get("priority", ""))
+    ws.cell(row_num, COL_STATUS,    value=row_data.get("status", ""))
+    ws.cell(row_num, COL_HOURS,     value=row_data.get("est_hours"))
+    _set_optional_date_cell(ws, row_num, COL_PLANNED_START_DATE, row_data.get("planned_start_date"))
+    _set_optional_date_cell(ws, row_num, COL_PLANNED_END_DATE, row_data.get("planned_end_date"))
+    _set_optional_date_cell(ws, row_num, COL_ACTUAL_START_DATE, row_data.get("actual_start_date"))
+    _set_optional_date_cell(ws, row_num, COL_ACTUAL_END_DATE, row_data.get("actual_end_date"))
+    ws.cell(row_num, COL_ACTUAL_PERIOD, value=row_data.get("actual_period"))
+    ws.cell(row_num, COL_NOTES, value=row_data.get("notes") or None)
+    apply_row_style(ws, row_num, level=level)
 
 
-def _write_epic_row(ws, row_num: int, wbs: str, epic_id: str, epic_title: str,
-                    phase_id: str,
-                    status: str,
-                    planned_start: date | None, planned_end: date | None,
-                    actual_start: date | None, actual_end: date | None):
-    meta                          = PHASE_META.get(phase_id, {})
-    ws.row_dimensions[row_num].height = 18
-    ws.cell(row_num, COL_WBS,       value=wbs)
-    ws.cell(row_num, COL_ID,        value=epic_id)
-    ws.cell(row_num, COL_TITLE,     value=f"   {epic_title}")
-    ws.cell(row_num, COL_MILESTONE, value=meta.get("milestone", ""))
-    ws.cell(row_num, COL_PERIOD,    value=_period_label(planned_start, planned_end) or meta.get("period", ""))
-    ws.cell(row_num, COL_PRIORITY,  value=meta.get("priority", ""))
-    ws.cell(row_num, COL_STATUS,    value=status)
-    ws.cell(row_num, COL_HOURS,     value=None)
-    if planned_start: _set_date_cell(ws.cell(row_num, COL_PLANNED_START_DATE), planned_start)
-    if planned_end:   _set_date_cell(ws.cell(row_num, COL_PLANNED_END_DATE),   planned_end)
-    if actual_start:  _set_date_cell(ws.cell(row_num, COL_ACTUAL_START_DATE),  actual_start)
-    if actual_end:    _set_date_cell(ws.cell(row_num, COL_ACTUAL_END_DATE),    actual_end)
-    ws.cell(row_num, COL_ACTUAL_PERIOD, value=_period_label(actual_start, actual_end))
-    apply_row_style(ws, row_num, level=3)
-
-
-def _write_story_row(ws, row_num: int, wbs: str, story: dict,
-                     estimates: dict, hours_per_point: float):
-    sid                           = story["id"]
-    status                        = story["status"].lower()
-    est                           = estimates.get(sid, {})
+def _write_story_row(ws, row_num: int, row_data: dict):
+    status                        = (row_data.get("status") or "").lower()
     ws.row_dimensions[row_num].height = 17
 
-    ws.cell(row_num, COL_WBS,    value=wbs)
-    ws.cell(row_num, COL_ID,     value=sid)
-    ws.cell(row_num, COL_TITLE,  value=f"      {story['title']}")
-    ws.cell(row_num, COL_STATUS, value=STATUS_MAP.get(status, status.upper()))
-    ws.cell(row_num, COL_POINTS, value=story.get("story_points"))
-
-    pts = story.get("story_points") or 0
-    if status in ("done", "dropped", "in-progress", "ready-for-qa"):
-        if pts and hours_per_point > 0:
-            ws.cell(row_num, COL_HOURS, value=round(pts * hours_per_point, 1))
-    elif est.get("est_hours") is not None:
-        ws.cell(row_num, COL_HOURS, value=est["est_hours"])
-
-    planned_start = _parse_iso_date(story.get("planned_start"))
-    planned_end   = _parse_iso_date(story.get("planned_end"))
-    actual_start  = _parse_iso_date(story.get("work_started"))
-    actual_end    = _parse_iso_date(story.get("work_done"))
-
-    ws.cell(row_num, COL_PERIOD, value=_period_label(planned_start, planned_end))
-    if planned_start: _set_date_cell(ws.cell(row_num, COL_PLANNED_START_DATE), planned_start)
-    if planned_end:   _set_date_cell(ws.cell(row_num, COL_PLANNED_END_DATE),   planned_end)
-    if actual_start:  _set_date_cell(ws.cell(row_num, COL_ACTUAL_START_DATE),  actual_start)
-    if actual_end:    _set_date_cell(ws.cell(row_num, COL_ACTUAL_END_DATE),    actual_end)
-    ws.cell(row_num, COL_ACTUAL_PERIOD, value=_period_label(actual_start, actual_end))
-
-    if not planned_start or not planned_end:
-        missing = []
-        if not planned_start:
-            missing.append("start")
-        if not planned_end:
-            missing.append("end")
-        ws.cell(row_num, COL_NOTES, value=f"Missing planned baseline: {', '.join(missing)}")
+    ws.cell(row_num, COL_WBS,    value=row_data["wbs"])
+    ws.cell(row_num, COL_ID,     value=row_data["id"])
+    ws.cell(row_num, COL_TITLE,  value=f"      {row_data['title']}")
+    ws.cell(row_num, COL_STATUS, value=row_data.get("status", ""))
+    ws.cell(row_num, COL_POINTS, value=row_data.get("points"))
+    ws.cell(row_num, COL_HOURS,  value=row_data.get("est_hours"))
+    ws.cell(row_num, COL_PERIOD, value=row_data.get("planned_period"))
+    _set_optional_date_cell(ws, row_num, COL_PLANNED_START_DATE, row_data.get("planned_start_date"))
+    _set_optional_date_cell(ws, row_num, COL_PLANNED_END_DATE, row_data.get("planned_end_date"))
+    _set_optional_date_cell(ws, row_num, COL_ACTUAL_START_DATE, row_data.get("actual_start_date"))
+    _set_optional_date_cell(ws, row_num, COL_ACTUAL_END_DATE, row_data.get("actual_end_date"))
+    ws.cell(row_num, COL_ACTUAL_PERIOD, value=row_data.get("actual_period"))
+    ws.cell(row_num, COL_NOTES, value=row_data.get("notes") or None)
 
     apply_row_style(ws, row_num, level=4)
 
-    if status == "in-progress":
+    if status == "in progress":
         status_fill = _fill(COLOUR_STORY_INPROGRESS_BG)
         for col in range(1, TOTAL_COLS + 1):
             ws.cell(row=row_num, column=col).fill = status_fill
@@ -482,8 +234,7 @@ def _write_story_row(ws, row_num: int, wbs: str, story: dict,
             ws.cell(row=row_num, column=col).fill = status_fill
 
 
-def build_wbs_sheet(ws, hierarchy: list, estimates: dict,
-                    hours_per_point: float, generated_at: str):
+def build_wbs_sheet(ws, rows: list, generated_at: str):
     for col_letter, width in WBS_COLUMN_WIDTHS.items():
         ws.column_dimensions[col_letter].width = width
     ws.sheet_properties.outlinePr.summaryBelow = False
@@ -507,77 +258,51 @@ def build_wbs_sheet(ws, hierarchy: list, estimates: dict,
         "Actual Period", "Actual Start Date", "Actual End Date", "Notes",
     ])
 
-    row    = 3
-    ph_num = 0
+    row_num_by_wbs: dict[str, int] = {}
+    row = 3
+    for report_row in rows:
+        kind = report_row["kind"]
+        row_num_by_wbs[report_row["wbs"]] = row
+        if kind == "phase":
+            _write_group_row(ws, row, report_row, level=2)
+        elif kind == "epic":
+            _write_group_row(ws, row, report_row, level=3)
+            _set_outline_level(ws, row, 1)
+        else:
+            _write_story_row(ws, row, report_row)
+            _set_outline_level(ws, row, 2)
+        row += 1
 
-    for phase in hierarchy:
-        ph_id  = phase["id"]
-        ph_num += 1
-        ph_wbs  = str(ph_num)
-
-        phase_row            = row
-        row                 += 1
-        epic_rows_this_phase = []
-
-        ep_num = 0
-        for epic in phase["epics"]:
-            ep_num  += 1
-            ep_wbs   = f"{ph_wbs}.{ep_num}"
-            epic_row = row
-            epic_rows_this_phase.append(epic_row)
-            row     += 1
-
-            first_story_row = row
-            st_num          = 0
-
-            for story in epic["stories"]:
-                st_num += 1
-                _write_story_row(ws, row, f"{ep_wbs}.{st_num}", story, estimates, hours_per_point)
-                _set_outline_level(ws, row, 2)
-                row    += 1
-
-            last_story_row = row - 1
-            ep_planned_start, ep_planned_end = _group_planned_dates(epic["stories"])
-            ep_actual_start, ep_actual_end   = _group_actual_dates(epic["stories"])
-            ep_status                        = _aggregate_status(epic["stories"])
-            _write_epic_row(ws, epic_row, ep_wbs, epic["id"], epic["title"],
-                            ph_id, ep_status, ep_planned_start, ep_planned_end,
-                            ep_actual_start, ep_actual_end)
-            _set_outline_level(ws, epic_row, 1)
-
-            pts_formula = (f"=SUM(G{first_story_row}:G{last_story_row})"
-                           if last_story_row >= first_story_row else 0)
-            ws.cell(epic_row, COL_POINTS).value = pts_formula
-            apply_row_style(ws, epic_row, level=3)
-            if ep_status == "DONE":
+    for index, report_row in enumerate(rows):
+        kind = report_row["kind"]
+        row_num = row_num_by_wbs[report_row["wbs"]]
+        if kind == "epic":
+            child_rows = [
+                row_num_by_wbs[row["wbs"]]
+                for row in rows[index + 1:]
+                if row["kind"] == "story" and row["wbs"].startswith(f"{report_row['wbs']}.")
+            ]
+            ws.cell(row_num, COL_POINTS).value = (
+                f"=SUM(G{min(child_rows)}:G{max(child_rows)})" if child_rows else 0
+            )
+            if report_row.get("status") == "DONE":
                 done_fill = _fill(COLOUR_EPIC_DONE_BG)
                 for col in range(1, TOTAL_COLS + 1):
-                    ws.cell(row=epic_row, column=col).fill = done_fill
-
-        all_phase_stories = [s for ep in phase["epics"] for s in ep["stories"]]
-        ph_planned_start, ph_planned_end = _group_planned_dates(all_phase_stories)
-        ph_actual_start, ph_actual_end   = _group_actual_dates(all_phase_stories)
-        ph_status                        = _aggregate_status(all_phase_stories)
-        _write_phase_row(ws, phase_row, ph_wbs, ph_id, ph_status, ph_planned_start, ph_planned_end,
-                         ph_actual_start, ph_actual_end)
-
-        if epic_rows_this_phase:
-            refs = ",".join(f"G{r}" for r in epic_rows_this_phase)
-            ws.cell(phase_row, COL_POINTS).value = f"=SUM({refs})"
-        else:
-            ws.cell(phase_row, COL_POINTS).value = 0
-        apply_row_style(ws, phase_row, level=2)
+                    ws.cell(row=row_num, column=col).fill = done_fill
+        elif kind == "phase":
+            refs = [
+                f"G{row_num_by_wbs[row['wbs']]}"
+                for row in rows[index + 1:]
+                if row["kind"] == "epic" and row["wbs"].startswith(f"{report_row['wbs']}.")
+            ]
+            ws.cell(row_num, COL_POINTS).value = f"=SUM({','.join(refs)})" if refs else 0
 
     ws.sheet_view.showGridLines = False
 
 
 # ── Phase Summary sheet ───────────────────────────────────────────────────────
 
-def build_phase_summary_sheet(ws, phases: list, stories: list):
-    epics_by_phase: dict = {}
-    for s in stories:
-        epics_by_phase.setdefault(s["phase"], set()).add(s.get("epic_id") or "?")
-
+def build_phase_summary_sheet(ws, phases: list):
     for col, width in zip("ABCDEFGHIJ", [10, 55, 12, 30, 8, 9, 12, 12, 13, 13]):
         ws.column_dimensions[col].width = width
 
@@ -590,22 +315,19 @@ def build_phase_summary_sheet(ws, phases: list, stories: list):
     totals = {"epics": 0, "stories": 0, "total": 0, "done": 0, "wip": 0, "remaining": 0}
     row    = 3
     for ph_dto in sorted(phases, key=lambda p: p["phase"]):
-        ph_id      = ph_dto["phase"]
-        meta       = PHASE_META.get(ph_id, {})
-        epic_count = len(epics_by_phase.get(ph_id, set()))
         ws.row_dimensions[row].height = 18
 
         data = [
-            ph_id,
-            meta.get("title", ph_id),
-            meta.get("period", ""),
-            meta.get("milestone", ""),
-            epic_count,
-            ph_dto["story_count"],
-            ph_dto["points_total"],
-            ph_dto["points_done"],
-            ph_dto["points_in_progress"],
-            ph_dto["points_remaining"],
+            ph_dto["phase"],
+            ph_dto["title"],
+            ph_dto["period"],
+            ph_dto["milestone"],
+            ph_dto["epics"],
+            ph_dto["stories"],
+            ph_dto["total"],
+            ph_dto["done"],
+            ph_dto["wip"],
+            ph_dto["remaining"],
         ]
         for col, val in enumerate(data, start=1):
             c            = ws.cell(row=row, column=col, value=val)
@@ -614,12 +336,12 @@ def build_phase_summary_sheet(ws, phases: list, stories: list):
             if col >= 5:
                 c.fill   = _fill("FFE8F0FA")
 
-        totals["epics"]     += epic_count
-        totals["stories"]   += ph_dto["story_count"]
-        totals["total"]     += ph_dto["points_total"]
-        totals["done"]      += ph_dto["points_done"]
-        totals["wip"]       += ph_dto["points_in_progress"]
-        totals["remaining"] += ph_dto["points_remaining"]
+        totals["epics"]     += ph_dto["epics"]
+        totals["stories"]   += ph_dto["stories"]
+        totals["total"]     += ph_dto["total"]
+        totals["done"]      += ph_dto["done"]
+        totals["wip"]       += ph_dto["wip"]
+        totals["remaining"] += ph_dto["remaining"]
         row += 1
 
     ws.row_dimensions[row].height = 20
@@ -638,7 +360,7 @@ def build_phase_summary_sheet(ws, phases: list, stories: list):
 
 # ── Sprint Burndown sheet ─────────────────────────────────────────────────────
 
-def build_sprint_burndown_sheet(ws, sprints: list, velocity: dict, forecast: dict, generated_at: str):
+def build_sprint_burndown_sheet(ws, sprint_rows: list, velocity: dict, forecast: dict, generated_at: str, daily_avg: float):
     for col, width in zip("ABCDEFGH", [28, 13, 13, 14, 14, 14, 16, 18]):
         ws.column_dimensions[col].width = width
 
@@ -647,10 +369,8 @@ def build_sprint_burndown_sheet(ws, sprints: list, velocity: dict, forecast: dic
     avg       = velocity.get("avg_points_per_sprint", 0)
     remaining = velocity.get("remaining_points", 0)
     completed = velocity.get("completed_sprint_count", 0)
-    dur       = velocity.get("sprint_duration_weeks", 2)
     completion = forecast.get("completion", {}) if forecast else {}
     throughput = forecast.get("throughput", {}) if forecast else {}
-    daily_avg, forecast_source = _forecast_throughput(forecast, velocity, dur)
     observed_days = throughput.get("observed_day_count", 0) or 0
     p50 = completion.get("p50_date")
     p80 = completion.get("p80_date")
@@ -674,84 +394,41 @@ def build_sprint_burndown_sheet(ws, sprints: list, velocity: dict, forecast: dic
         "Rate (avg)", "Remaining (cum.)", "Status",
     ])
 
-    total_delivered_all  = sum(s.get("delivered_points", 0) for s in sprints)
-    cumulative_remaining = velocity.get("remaining_points", 0) + total_delivered_all
     row                  = 4
 
-    for s in sprints:
-        is_past    = s.get("is_past", False)
-        is_current = s.get("is_current", False)
-        if is_past:
+    for sprint in sprint_rows:
+        status = sprint.get("status") or "planned"
+        is_projected = status.startswith("projected")
+        if is_projected:
+            row_bg = "FFF5F5F5"
+        elif status == "closed":
             status_str, row_bg = "completed", "FFEBF5EB"
-        elif is_current:
+        elif status == "active":
             status_str, row_bg = "active",    "FFFFF3CD"
         else:
             status_str, row_bg = "planned",   "FFFFFFFF"
+        if is_projected:
+            status_str = "projected"
 
         ws.row_dimensions[row].height = 17
-        cumulative_remaining -= s.get("delivered_points", 0)
         row_data = [
-            s["sprint_name"],
-            s["start_date"],
-            s["end_date"],
-            s.get("planned_points", 0) or None,
-            s.get("delivered_points", 0) if (is_past or is_current) else None,
-            avg if is_past and s.get("planned_points", 0) > 0 else None,
-            cumulative_remaining if (is_past or is_current) else None,
+            sprint["name"],
+            sprint["start_date"],
+            sprint["end_date"],
+            sprint.get("planned_points"),
+            sprint.get("delivered_points"),
+            sprint.get("rate"),
+            sprint.get("remaining"),
             status_str,
         ]
         for col, val in enumerate(row_data, start=1):
             c            = ws.cell(row=row, column=col, value=val)
-            c.font       = Font(color=COLOUR_DARK_FG, size=10)
+            c.font       = Font(color="FF888888" if is_projected else COLOUR_DARK_FG, italic=is_projected, size=9 if is_projected else 10)
             c.fill       = PatternFill(fill_type="solid", fgColor=row_bg[2:])
             c.alignment  = Alignment(horizontal="left" if col == 1 else "center", vertical="center")
             if col in (4, 5, 6, 7) and val is not None:
                 c.number_format = "0"
         row += 1
-
-    if p80 and daily_avg > 0 and sprints:
-        last_end       = datetime.strptime(sprints[-1]["end_date"], "%Y-%m-%d").date()
-        sprint_days    = dur * 7
-        proj_remaining = cumulative_remaining
-        sprint_num     = 1
-
-        ws.row_dimensions[row].height = 4
-        row += 1
-
-        ws.merge_cells(f"A{row}:H{row}")
-        ws.row_dimensions[row].height = 17
-        c            = ws.cell(row=row, column=1, value=f"▸ Projected future sprints (based on {forecast_source})")
-        c.font       = Font(bold=True, italic=True, color="FF444444", size=9)
-        c.alignment  = Alignment(horizontal="left", vertical="center")
-        row         += 1
-
-        while proj_remaining > 0 and sprint_num <= 40:
-            proj_start         = last_end + timedelta(days=1 + (sprint_num - 1) * sprint_days)
-            proj_end           = proj_start + timedelta(days=sprint_days - 1)
-            work_days          = _work_days_between_inclusive(proj_start, proj_end)
-            projected_delivery = min(daily_avg * work_days, proj_remaining)
-            proj_remaining     = max(0, proj_remaining - projected_delivery)
-
-            ws.row_dimensions[row].height = 16
-            row_data = [
-                f"S{len(sprints) + sprint_num:03d}.projected",
-                proj_start.strftime("%Y-%m-%d"),
-                proj_end.strftime("%Y-%m-%d"),
-                round(daily_avg * work_days),
-                round(projected_delivery),
-                daily_avg,
-                max(0, proj_remaining),
-                "projected",
-            ]
-            for col, val in enumerate(row_data, start=1):
-                c            = ws.cell(row=row, column=col, value=val)
-                c.font       = Font(color="FF888888", italic=True, size=9)
-                c.fill       = PatternFill(fill_type="solid", fgColor="F5F5F5")
-                c.alignment  = Alignment(horizontal="left" if col == 1 else "center", vertical="center")
-                if col in (4, 5, 6, 7):
-                    c.number_format = "0"
-            row       += 1
-            sprint_num += 1
 
     ws.sheet_view.showGridLines = False
 
@@ -871,29 +548,31 @@ def main():
 
     data         = envelope["data"]
     stories      = data["stories"]
-    sprints      = data["sprints"]
-    phases       = data["phases"]
     velocity     = data["velocity"]
     forecast     = data["forecast"]
     generated_at = data["generated_at"]
-
-    hierarchy              = _build_hierarchy(stories)
-    sprint_dur             = velocity.get("sprint_duration_weeks", 2)
-    estimates, hpp         = _compute_estimates(stories, velocity, forecast, sprint_dur)
-    avg_daily, source      = _forecast_throughput(forecast, velocity, sprint_dur)
+    wbs_rows     = data.get("wbs_rows")
+    phase_rows   = data.get("phase_rows")
+    sprint_rows  = data.get("sprint_rows")
+    if wbs_rows is None or phase_rows is None or sprint_rows is None:
+        print("ERROR: report JSON is missing precomputed rows; rerun with a current kanban binary.", file=sys.stderr)
+        sys.exit(1)
+    hpp          = data.get("hours_per_point", 0) or 0
+    avg_daily    = data.get("daily_avg", 0) or 0
+    source       = data.get("throughput_source", "no throughput data")
 
     wb = openpyxl.Workbook()
 
     ws_wbs       = wb.active
     ws_wbs.title = "WBS – AutoPASS IP 2.0"
     print("Building WBS sheet …", file=sys.stderr)
-    build_wbs_sheet(ws_wbs, hierarchy, estimates, hpp, generated_at)
+    build_wbs_sheet(ws_wbs, wbs_rows, generated_at)
 
     print("Building Phase Summary sheet …", file=sys.stderr)
-    build_phase_summary_sheet(wb.create_sheet("Phase Summary"), phases, stories)
+    build_phase_summary_sheet(wb.create_sheet("Phase Summary"), phase_rows)
 
     print("Building Sprint Burndown sheet …", file=sys.stderr)
-    build_sprint_burndown_sheet(wb.create_sheet("Sprint Burndown"), sprints, velocity, forecast, generated_at)
+    build_sprint_burndown_sheet(wb.create_sheet("Sprint Burndown"), sprint_rows, velocity, forecast, generated_at, avg_daily)
 
     print("Building Legend sheet …", file=sys.stderr)
     build_legend_sheet(wb.create_sheet("Legend & Guide"))
@@ -902,8 +581,8 @@ def main():
     wb.save(str(output_path))
     print(f"Report saved: {output_path}", file=sys.stderr)
     print(f"  Stories: {len(stories)}", file=sys.stderr)
-    print(f"  Sprints: {len(sprints)}", file=sys.stderr)
-    print(f"  Phases:  {len(phases)}", file=sys.stderr)
+    print(f"  Sprints: {len([row for row in sprint_rows if not (row.get('status') or '').startswith('projected')])}", file=sys.stderr)
+    print(f"  Phases:  {len(phase_rows)}", file=sys.stderr)
     if hpp > 0:
         print(
             f"  Hours/point: {hpp:.1f}h  "

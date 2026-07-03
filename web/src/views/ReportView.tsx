@@ -1,12 +1,10 @@
-import type { DashboardMetrics } from "@shared/generated/api.js";
+import type { Forecast } from "@shared/generated/api.js";
 import type { ReactNode } from "react";
-import { useMetrics, useRepository } from "../api/hooks.js";
-import { roundMetric, computeEstimates } from "../report/estimates.js";
-import { buildWbsRows } from "../report/wbs.js";
-import { buildSprintRows, phaseRows } from "../report/sprints.js";
+import { useReport } from "../api/hooks.js";
+import { roundMetric } from "../report/estimates.js";
 
-function formatForecast(metrics: DashboardMetrics): string {
-  const c = metrics.forecast.completion;
+function formatForecast(forecast: Forecast): string {
+  const c = forecast.completion;
   if (!c.p80Date) return "No forecast yet";
   return `P50 ${c.p50Date ?? "-"} / P80 ${c.p80Date} / P90 ${c.p90Date ?? "-"}`;
 }
@@ -26,19 +24,13 @@ function ReportTable({ children, className = "" }: { children: ReactNode; classN
 }
 
 export function ReportView() {
-  const repository = useRepository();
-  const metrics = useMetrics();
-  if (repository.isLoading || metrics.isLoading) return <div className="view">Loading...</div>;
-  if (repository.error || metrics.error) return <div className="view">Failed to load report data.</div>;
+  const reportQuery = useReport();
+  if (reportQuery.isLoading) return <div className="view">Loading...</div>;
+  if (reportQuery.error) return <div className="view">Failed to load report data.</div>;
 
-  const repo = repository.data!;
-  const m = metrics.data!;
-  const estimates = computeEstimates(repo.stories, m, repo);
-  const wbsRows = buildWbsRows(repo, estimates.estimates, estimates.hoursPerPoint);
-  const sprintRows = buildSprintRows(repo, m, estimates.dailyAvg, estimates.source);
-  const phases = phaseRows(repo);
-  const generated = m.forecast.generatedAt.slice(0, 10);
-  const completedPct = m.progress.totalPoints > 0 ? Math.round((m.progress.donePoints / m.progress.totalPoints) * 100) : 0;
+  const report = reportQuery.data!;
+  const generated = report.generatedAt.slice(0, 10);
+  const completedPct = report.progress.totalPoints > 0 ? Math.round((report.progress.donePoints / report.progress.totalPoints) * 100) : 0;
 
   return (
     <div className="view report-view">
@@ -52,10 +44,10 @@ export function ReportView() {
       </div>
 
       <div className="report-kpi-grid">
-        <Kpi label="Project complete" value={`${completedPct}%`} sub={`${m.progress.donePoints} / ${m.progress.totalPoints} pts`} />
-        <Kpi label="Throughput" value={`${roundMetric(estimates.dailyAvg)} pts/workday`} sub={estimates.source} />
-        <Kpi label="Forecast" value={m.forecast.completion.p80Date ?? "-"} sub={formatForecast(m)} />
-        <Kpi label="Hours/point" value={estimates.hoursPerPoint > 0 ? `${roundMetric(estimates.hoursPerPoint)}h` : "-"} sub={`${m.forecast.remainingPoints} pts remaining`} />
+        <Kpi label="Project complete" value={`${completedPct}%`} sub={`${report.progress.donePoints} / ${report.progress.totalPoints} pts`} />
+        <Kpi label="Throughput" value={`${roundMetric(report.dailyAvg)} pts/workday`} sub={report.throughputSource} />
+        <Kpi label="Forecast" value={report.forecast.completion.p80Date ?? "-"} sub={formatForecast(report.forecast)} />
+        <Kpi label="Hours/point" value={report.hoursPerPoint > 0 ? `${roundMetric(report.hoursPerPoint)}h` : "-"} sub={`${report.remainingPoints} pts remaining`} />
       </div>
 
       <div className="report-main">
@@ -68,7 +60,7 @@ export function ReportView() {
               </tr>
             </thead>
             <tbody>
-              {wbsRows.map((row) => (
+              {report.wbsRows.map((row) => (
                 <tr key={`${row.kind}-${row.wbs}-${row.id}`} className={`report-row-${row.kind} ${row.status === "DONE" ? "report-row-done" : ""} ${row.status === "IN PROGRESS" ? "report-row-active" : ""}`}>
                   <td>{row.wbs}</td><td>{row.id}</td><td>{row.title}</td><td>{row.milestone}</td><td>{row.period}</td><td>{row.priority}</td><td>{row.status}</td><td>{row.points ?? ""}</td><td>{row.estHours ?? ""}</td><td>{row.startDate ?? ""}</td><td>{row.endDate ?? ""}</td><td>{row.notes}</td>
                 </tr>
@@ -83,7 +75,7 @@ export function ReportView() {
             <ReportTable>
               <thead><tr><th>Phase</th><th>Title</th><th>Period</th><th>Milestone</th><th>Epics</th><th>Stories</th><th>Total</th><th>Done</th><th>WIP</th><th>Remaining</th></tr></thead>
               <tbody>
-                {phases.map((row) => <tr key={row.phase}><td>{row.phase}</td><td>{row.title}</td><td>{row.period}</td><td>{row.milestone}</td><td>{row.epics}</td><td>{row.stories}</td><td>{row.total}</td><td>{row.done}</td><td>{row.wip}</td><td>{row.remaining}</td></tr>)}
+                {report.phaseRows.map((row) => <tr key={row.phase}><td>{row.phase}</td><td>{row.title}</td><td>{row.period}</td><td>{row.milestone}</td><td>{row.epics}</td><td>{row.stories}</td><td>{row.total}</td><td>{row.done}</td><td>{row.wip}</td><td>{row.remaining}</td></tr>)}
               </tbody>
             </ReportTable>
           </section>
@@ -93,7 +85,7 @@ export function ReportView() {
             <ReportTable>
               <thead><tr><th>Sprint</th><th>Start</th><th>End</th><th>Planned</th><th>Delivered</th><th>Rate</th><th>Remaining</th><th>Status</th></tr></thead>
               <tbody>
-                {sprintRows.map((row) => <tr key={row.name} className={row.status.startsWith("projected") ? "report-row-projected" : ""}><td>{row.name}</td><td>{row.startDate}</td><td>{row.endDate}</td><td>{row.plannedPoints ?? ""}</td><td>{row.deliveredPoints ?? ""}</td><td>{row.rate ?? ""}</td><td>{row.remaining ?? ""}</td><td>{row.status}</td></tr>)}
+                {report.sprintRows.map((row) => <tr key={row.name} className={row.status.startsWith("projected") ? "report-row-projected" : ""}><td>{row.name}</td><td>{row.startDate}</td><td>{row.endDate}</td><td>{row.plannedPoints ?? ""}</td><td>{row.deliveredPoints ?? ""}</td><td>{row.rate ?? ""}</td><td>{row.remaining ?? ""}</td><td>{row.status}</td></tr>)}
               </tbody>
             </ReportTable>
           </section>

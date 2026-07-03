@@ -57,6 +57,28 @@ fn feature_disabled_error(mode: DispatchMode, feature: &str, repo_root: &Path) -
     }
 }
 
+fn report_sprints(repo_root: &Path) -> Result<Vec<kanban_core::SprintOverview>> {
+    let config = load_kanban_config(repo_root)?;
+    if config.features().sprints {
+        summarize_sprints(repo_root)
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+fn report_current_sprint_name(
+    repo_root: &Path,
+    sprints: &[kanban_core::SprintOverview],
+) -> Option<String> {
+    if sprints.is_empty() {
+        None
+    } else {
+        summarize_current_sprint(repo_root)
+            .ok()
+            .map(|s| s.sprint_name)
+    }
+}
+
 fn ensure_sprints_enabled(mode: DispatchMode, repo_root: &Path) -> Result<()> {
     let config = load_kanban_config(repo_root)?;
     if !config.features().sprints {
@@ -635,22 +657,18 @@ pub(crate) fn execute_command(
         Command::Report { command } => match command {
             ReportCommand::Wbs { repo_root } => {
                 let stories = list_all_stories(repo_root)?;
-                let sprints = summarize_sprints(repo_root)?;
-                let current = summarize_current_sprint(repo_root)
-                    .ok()
-                    .map(|s| s.sprint_name);
-                CommandOutcome::ReportWbs(ReportWbsDto::build(
+                let sprints = report_sprints(repo_root)?;
+                let current = report_current_sprint_name(repo_root, &sprints);
+                CommandOutcome::ReportWbs(Box::new(ReportWbsDto::build(
                     &stories,
                     &sprints,
                     current.as_deref(),
-                ))
+                )))
             }
             ReportCommand::Forecast { repo_root } => {
                 let stories = list_all_stories(repo_root)?;
-                let sprints = summarize_sprints(repo_root)?;
-                let current = summarize_current_sprint(repo_root)
-                    .ok()
-                    .map(|s| s.sprint_name);
+                let sprints = report_sprints(repo_root)?;
+                let current = report_current_sprint_name(repo_root, &sprints);
                 CommandOutcome::ReportForecast(ReportForecastDto::build(
                     &stories,
                     &sprints,

@@ -132,6 +132,27 @@ pub(crate) async fn api_metrics(
     Ok(Json(metrics))
 }
 
+pub(crate) async fn api_report(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<WebReportDashboard>, ApiResponse> {
+    let repo_root = state.repo_root.clone();
+    let report = run_blocking(move || {
+        let stories = list_all_stories(&repo_root)?;
+        let sprints = summarize_sprints(&repo_root)?;
+        let current_sprint_name = sprints
+            .iter()
+            .find(|sprint| sprint.readme_status.as_deref() == Some("active"))
+            .map(|sprint| sprint.sprint_name.as_str());
+        Ok(WebReportDashboard::from(ReportDashboardDto::build(
+            &stories,
+            &sprints,
+            current_sprint_name,
+        )))
+    })
+    .await?;
+    Ok(Json(report))
+}
+
 pub(crate) async fn api_config(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ConfigResponse>, ApiResponse> {

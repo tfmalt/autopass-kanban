@@ -359,26 +359,32 @@ pub(crate) fn build_forecast(stories: &[StoryOverview], sprints: &[SprintOvervie
         .find(|sprint| sprint.readme_status.as_deref() == Some("active"))
         .map(|sprint| sprint.sprint_name.as_str());
     let dto = ReportForecastDto::build(stories, sprints, current_sprint_name);
-    Forecast {
-        generated_at: dto.generated_at,
-        remaining_points: dto.remaining_points,
-        sprint_duration_weeks: dto.sprint_duration_weeks as i64,
-        projection_start_date: dto.projection_start_date,
-        throughput: ForecastThroughput {
-            samples: dto.throughput.samples,
-            average: dto.throughput.average,
-            median: dto.throughput.median,
-            observed_day_count: dto.throughput.observed_day_count,
-        },
-        completion: ForecastCompletion {
-            p50_days: dto.completion.p50_days.map(i64::from),
-            p80_days: dto.completion.p80_days.map(i64::from),
-            p90_days: dto.completion.p90_days.map(i64::from),
-            p50_date: dto.completion.p50_date,
-            p80_date: dto.completion.p80_date,
-            p90_date: dto.completion.p90_date,
-        },
-        confidence: dto.confidence,
+    Forecast::from(dto)
+}
+
+impl From<ReportForecastDto> for Forecast {
+    fn from(dto: ReportForecastDto) -> Self {
+        Forecast {
+            generated_at: dto.generated_at,
+            remaining_points: dto.remaining_points,
+            sprint_duration_weeks: dto.sprint_duration_weeks as i64,
+            projection_start_date: dto.projection_start_date,
+            throughput: ForecastThroughput {
+                samples: dto.throughput.samples,
+                average: dto.throughput.average,
+                median: dto.throughput.median,
+                observed_day_count: dto.throughput.observed_day_count,
+            },
+            completion: ForecastCompletion {
+                p50_days: dto.completion.p50_days.map(i64::from),
+                p80_days: dto.completion.p80_days.map(i64::from),
+                p90_days: dto.completion.p90_days.map(i64::from),
+                p50_date: dto.completion.p50_date,
+                p80_date: dto.completion.p80_date,
+                p90_date: dto.completion.p90_date,
+            },
+            confidence: dto.confidence,
+        }
     }
 }
 

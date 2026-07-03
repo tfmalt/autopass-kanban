@@ -1,4 +1,4 @@
-import type { DashboardMetrics, RepositorySnapshot, Story } from "@shared/generated/api.js";
+import type { DashboardMetrics, ReportDashboard, RepositorySnapshot, Story } from "@shared/generated/api.js";
 
 export function story(input: Partial<Story> & Pick<Story, "id" | "title" | "status" | "storyPoints">): Story {
   const {
@@ -113,6 +113,36 @@ export function metrics(overrides?: Partial<DashboardMetrics>): DashboardMetrics
       confidence: "low",
     },
     progress: repository().progress,
+    ...overrides,
+  };
+}
+
+export function report(overrides?: Partial<ReportDashboard>): ReportDashboard {
+  return {
+    generatedAt: "2026-06-10T10:00:00+0200",
+    dailyAvg: 2.67,
+    throughputSource: "daily throughput over 3 observed workdays",
+    hoursPerPoint: 7 / 2.67,
+    remainingPoints: 8,
+    progress: { donePoints: 5, totalPoints: 13, doneStories: 1, totalStories: 2 },
+    forecast: metrics().forecast,
+    estimates: [
+      { storyId: "US-F1-001", estHours: null, estStart: "2026-06-01", estEnd: "2026-06-03" },
+      { storyId: "US-F1-002", estHours: 21, estStart: "2026-06-10", estEnd: "2026-06-15" },
+    ],
+    wbsRows: [
+      { kind: "phase", wbs: "1", id: "F1", title: "Phase 1 - Etablering (Establishment)", milestone: "MP1 - Foundation", period: "Q2 2026", priority: "Critical", status: "", points: 13, estHours: null, startDate: "2026-06-01", endDate: "2026-06-15", notes: "" },
+      { kind: "epic", wbs: "1.1", id: "EP-F1-01", title: "Platform", milestone: "MP1 - Foundation", period: "Q2 2026", priority: "Critical", status: "", points: 13, estHours: null, startDate: "2026-06-01", endDate: "2026-06-15", notes: "" },
+      { kind: "story", wbs: "1.1.1", id: "US-F1-001", title: "Done story", milestone: "MP1 - Foundation", period: "Q2 2026", priority: "Critical", status: "DONE", points: 5, estHours: 13.1, startDate: "2026-06-01", endDate: "2026-06-03", notes: "Sprint S000.start" },
+      { kind: "story", wbs: "1.1.2", id: "US-F1-002", title: "Todo story", milestone: "MP1 - Foundation", period: "Q2 2026", priority: "Critical", status: "TODO", points: 8, estHours: 21, startDate: "2026-06-10", endDate: "2026-06-15", notes: "Sprint S001.next; Assignee Test User <test@example.com>" },
+    ],
+    phaseRows: [
+      { phase: "F1", title: "Phase 1 - Etablering (Establishment)", period: "Q2 2026", milestone: "MP1 - Foundation", epics: 1, stories: 2, total: 13, done: 5, wip: 0, remaining: 8 },
+    ],
+    sprintRows: [
+      { name: "S000.start", startDate: "2026-06-01", endDate: "2026-06-14", plannedPoints: 5, deliveredPoints: 5, rate: 2.67, remaining: 8, status: "closed" },
+      { name: "S002.projected", startDate: "2026-06-15", endDate: "2026-06-28", plannedPoints: 27, deliveredPoints: 8, rate: 2.7, remaining: 0, status: "projected (daily throughput over 3 observed workdays)" },
+    ],
     ...overrides,
   };
 }
