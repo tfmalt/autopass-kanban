@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { slugifyHeadline } from "./domain.js";
+import { normalizeStatus, slugifyHeadline } from "./domain.js";
 
 describe("slugifyHeadline", () => {
   // Keep these cases aligned with crates/core/src/util.rs tests.
@@ -8,5 +8,14 @@ describe("slugifyHeadline", () => {
     expect(slugifyHeadline("  Alpha   Beta  ")).toBe("alpha-beta");
     expect(slugifyHeadline("Roadmap_2026")).toBe("roadmap-2026");
     expect(slugifyHeadline("---")).toBe("");
+  });
+});
+
+describe("normalizeStatus", () => {
+  it("matches core status alias normalization", () => {
+    expect(normalizeStatus(" In Progress ")).toBe("in-progress");
+    expect(normalizeStatus("to do")).toBe("todo");
+    expect(normalizeStatus("backlog")).toBe("ready");
+    expect(normalizeStatus("ready-for-qa")).toBe("ready-for-qa");
   });
 });

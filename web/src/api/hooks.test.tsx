@@ -410,7 +410,7 @@ describe("optimistic snapshot helpers", () => {
     expect(next.sprints[1]?.storiesByStatus.todo.map((candidate) => candidate.id)).toEqual(["US-F1-001"]);
   });
 
-  it("applyUpdateSprintSnapshot renames sprint references in top-level and epic stories only", () => {
+  it("applyUpdateSprintSnapshot renames sprint references everywhere", () => {
     const sprintStory = makeStory({ id: "US-F1-001", status: "todo", sprint: "S000.start" });
     const backlogStory = makeStory({ id: "US-F1-002", status: "todo", sprint: null });
     const snapshot: RepositorySnapshot = {
@@ -443,7 +443,7 @@ describe("optimistic snapshot helpers", () => {
     expect(next.sprints[0]?.name).toBe("S000.renamed-sprint");
     expect(next.stories.find((story) => story.id === "US-F1-001")?.sprint).toBe("S000.renamed-sprint");
     expect(next.epics[0]?.stories.find((story) => story.id === "US-F1-001")?.sprint).toBe("S000.renamed-sprint");
-    expect(next.sprints[0]?.storiesByStatus.todo[0]?.sprint).toBe("S000.start");
+    expect(next.sprints[0]?.storiesByStatus.todo[0]?.sprint).toBe("S000.renamed-sprint");
   });
 });
 

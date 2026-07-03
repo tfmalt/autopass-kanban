@@ -44,10 +44,9 @@ impl StoryStatus {
     ];
 
     pub fn parse(status: &str) -> Option<Self> {
-        let trimmed = status.trim().to_ascii_lowercase();
-        match trimmed.as_str() {
+        let normalized = normalize_status_alias(status);
+        match normalized.as_str() {
             "draft" => Some(StoryStatus::Draft),
-            "backlog" => Some(StoryStatus::Backlog),
             "ready" => Some(StoryStatus::Ready),
             "planned" => Some(StoryStatus::Planned),
             "todo" => Some(StoryStatus::Todo),
@@ -56,11 +55,7 @@ impl StoryStatus {
             "done" => Some(StoryStatus::Done),
             "blocked" => Some(StoryStatus::Blocked),
             "dropped" => Some(StoryStatus::Dropped),
-            _ => match normalize_status_alias(status).as_str() {
-                "todo" => Some(StoryStatus::Todo),
-                "in-progress" => Some(StoryStatus::InProgress),
-                _ => None,
-            },
+            _ => None,
         }
     }
 
@@ -118,13 +113,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_accepts_aliases_but_preserves_backlog_canonical_value() {
+    fn parse_accepts_aliases_using_core_normalization() {
         assert_eq!(
             StoryStatus::parse("In Progress"),
             Some(StoryStatus::InProgress)
         );
         assert_eq!(StoryStatus::parse("to do"), Some(StoryStatus::Todo));
-        assert_eq!(StoryStatus::parse("backlog"), Some(StoryStatus::Backlog));
+        assert_eq!(StoryStatus::parse("backlog"), Some(StoryStatus::Ready));
         assert_eq!(StoryStatus::Backlog.as_str(), "backlog");
     }
 

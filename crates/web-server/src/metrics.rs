@@ -7,8 +7,16 @@ use ts_rs::TS;
 use crate::dto::{ProjectProgress, RepositorySnapshot, WebSprint, WebStory};
 use crate::snapshot::compute_progress;
 
-fn counts_toward_scope(story: &WebStory) -> bool {
+fn story_status(story: &WebStory) -> Option<StoryStatus> {
+    StoryStatus::parse(&story.status)
+}
+
+fn story_counts_toward_scope(story: &WebStory) -> bool {
     StoryStatus::parse(&story.status).is_none_or(StoryStatus::counts_toward_scope)
+}
+
+fn story_is_done(story: &WebStory) -> bool {
+    story_status(story) == Some(StoryStatus::Done)
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -103,7 +111,7 @@ pub(crate) fn compute_metrics(
 pub(crate) fn build_burnup(stories: &[WebStory], sprints: &[WebSprint]) -> Vec<BurnupPoint> {
     let today = Local::now().date_naive();
     let mut completed_by_date = BTreeMap::<NaiveDate, i64>::new();
-    for story in stories.iter().filter(|story| story.status == "done") {
+    for story in stories.iter().filter(|story| story_is_done(story)) {
         let Some(date) = story_completion_date(story) else {
             continue;
         };
@@ -218,7 +226,7 @@ pub(crate) fn build_burndown(sprints: &[WebSprint]) -> Vec<BurndownPoint> {
 
     let mut completed_by_date = BTreeMap::<NaiveDate, i64>::new();
     for story in sprint.stories_by_status.values().flatten() {
-        if story.status != "done" {
+        if !story_is_done(story) {
             continue;
         }
         let Some(date) = story_completion_date(story) else {
@@ -275,7 +283,7 @@ fn sprint_total_points(sprint: &WebSprint) -> i64 {
         .stories_by_status
         .values()
         .flatten()
-        .filter(|story| counts_toward_scope(story))
+        .filter(|story| story_counts_toward_scope(story))
         .map(|story| story.story_points.unwrap_or(0))
         .sum()
 }
@@ -297,7 +305,7 @@ pub(crate) fn build_lead_time(stories: &[WebStory]) -> Vec<LeadTimePoint> {
     let mut done = stories
         .iter()
         .filter(|story| {
-            story.status == "done" && story.work_started.is_some() && story.work_done.is_some()
+            story_is_done(story) && story.work_started.is_some() && story.work_done.is_some()
         })
         .collect::<Vec<_>>();
     done.sort_by(|a, b| a.work_done.cmp(&b.work_done));
@@ -335,7 +343,7 @@ pub(crate) fn build_velocity(sprints: &[WebSprint]) -> Vec<VelocityPoint> {
                 .map(|stories| {
                     stories
                         .iter()
-                        .filter(|story| counts_toward_scope(story))
+                        .filter(|story| story_counts_toward_scope(story))
                         .map(|story| story.story_points.unwrap_or(0))
                         .sum()
                 })

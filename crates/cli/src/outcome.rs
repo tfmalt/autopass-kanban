@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use kanban_core::{
-    CompletionDto, ConfigInitResult, ConfigSetResult, DeleteStoryResult, DoctorFinding, Epic,
-    EpicDetails, ListIdItemDto, MoveStoryResult, PhaseOverview, PlanStoryResult, ReportForecastDto,
-    ReportWbsDto, SprintOverview, Story, StoryDetails, StoryOverview, TaskListResult,
-    TaskMutationResult, ValidationReport,
+    CompletionDto, ConfigInitResult, ConfigSetResult, CreateSprintResult, DeleteStoryResult,
+    DoctorFinding, Epic, EpicDetails, EpicUpdateResult, KanbanErrorBody, ListIdItemDto,
+    MoveStoryResult, PhaseOverview, PlanStoryResult, ReportForecastDto, ReportWbsDto,
+    RolloverResult, SprintOverview, Story, StoryDetails, StoryOverview, StoryUpdateResult,
+    TaskListResult, TaskMutationResult, ValidationReport,
 };
 
 use crate::layout::OutputLayout;
@@ -15,6 +16,7 @@ use crate::render::phase::print_phase_overview;
 use crate::render::sprint::{print_sprint_overview, print_sprint_overview_short};
 use crate::render::story::{print_story_details, print_story_list, render_task_list};
 use crate::theme::Theme;
+use crate::web::{WebLogDto, WebRestartDto, WebStartDto, WebStatusDto, WebStopDto};
 use crate::{doctor_cli::print_doctor_findings, theme::Style};
 
 pub(crate) enum FeatureToggleAction {
@@ -53,6 +55,11 @@ pub(crate) enum CommandOutcome {
         sprints: Vec<SprintOverview>,
         current_name: Option<String>,
     },
+    SprintCreate {
+        result: CreateSprintResult,
+        repo_root: PathBuf,
+    },
+    SprintRollover(RolloverResult),
     PhaseShow(PhaseOverview),
     EpicShow {
         id: String,
@@ -86,12 +93,36 @@ pub(crate) enum CommandOutcome {
         result: DeleteStoryResult,
         repo_root: PathBuf,
     },
+    EpicUpdate {
+        result: EpicUpdateResult,
+        repo_root: PathBuf,
+    },
+    StoryUpdate {
+        result: StoryUpdateResult,
+        repo_root: PathBuf,
+    },
     TaskMutation {
         kind: &'static str,
         result: TaskMutationResult,
         repo_root: PathBuf,
     },
     SprintSync(Vec<String>),
+    WebStatus(WebStatusDto),
+    WebStart(WebStartDto),
+    WebStop(WebStopDto),
+    WebRestart(WebRestartDto),
+    WebLog(WebLogDto),
+    Edited {
+        kind: &'static str,
+        path: PathBuf,
+    },
+    NoData {
+        kind: &'static str,
+    },
+    Error {
+        kind: &'static str,
+        body: KanbanErrorBody,
+    },
 }
 
 impl CommandOutcome {
@@ -116,6 +147,8 @@ impl CommandOutcome {
             }
             CommandOutcome::SprintOverview { kind, .. } => kind,
             CommandOutcome::SprintList { .. } => "sprint.list",
+            CommandOutcome::SprintCreate { .. } => "sprint.create",
+            CommandOutcome::SprintRollover(_) => "sprint.rollover",
             CommandOutcome::PhaseShow(_) => "phase.show",
             CommandOutcome::EpicShow { .. } => "epic.show",
             CommandOutcome::StoryShow { .. } => "story.show",
@@ -128,8 +161,18 @@ impl CommandOutcome {
             CommandOutcome::StoryMove { .. } => "story.move",
             CommandOutcome::StoryPlan { .. } => "story.plan",
             CommandOutcome::StoryDelete { .. } => "story.delete",
+            CommandOutcome::EpicUpdate { .. } => "epic.update",
+            CommandOutcome::StoryUpdate { .. } => "story.update",
             CommandOutcome::TaskMutation { kind, .. } => kind,
             CommandOutcome::SprintSync(_) => "sprint.sync",
+            CommandOutcome::WebStatus(_) => "web.status",
+            CommandOutcome::WebStart(_) => "web.start",
+            CommandOutcome::WebStop(_) => "web.stop",
+            CommandOutcome::WebRestart(_) => "web.restart",
+            CommandOutcome::WebLog(_) => "web.log",
+            CommandOutcome::Edited { kind, .. }
+            | CommandOutcome::NoData { kind }
+            | CommandOutcome::Error { kind, .. } => kind,
         }
     }
 }
@@ -230,6 +273,21 @@ pub(crate) fn print_human_outcome(theme: &Theme, outcome: CommandOutcome) {
                         .unwrap_or_default()
                 );
             }
+        }
+        CommandOutcome::SprintCreate { result, .. } => {
+            println!(
+                "{} created sprint: {}",
+                theme.ok_label(),
+                result.sprint_name
+            );
+            println!(
+                "{} path: {}",
+                theme.info_label(),
+                theme.path(result.sprint_path.display())
+            );
+        }
+        CommandOutcome::SprintRollover(result) => {
+            crate::prompt::print_rollover_result(theme, &result);
         }
         CommandOutcome::PhaseShow(phase) => {
             print_phase_overview(theme, OutputLayout::for_stdout().unwrap(), &phase);
@@ -343,6 +401,32 @@ pub(crate) fn print_human_outcome(theme: &Theme, outcome: CommandOutcome) {
                 println!("{} updated sprint: {}", theme.info_label(), sprint_name);
             }
         }
+        CommandOutcome::EpicUpdate { result, .. } => {
+            println!(
+                "{} updated {} ({})",
+                theme.ok_label(),
+                theme.id(&result.epic_id),
+                result.updated_fields.join(", ")
+            );
+            println!(
+                "{} epic: {}",
+                theme.info_label(),
+                theme.path(result.epic_path.display())
+            );
+        }
+        CommandOutcome::StoryUpdate { result, .. } => {
+            println!(
+                "{} updated {} ({})",
+                theme.ok_label(),
+                theme.id(&result.story_id),
+                result.updated_fields.join(", ")
+            );
+            println!(
+                "{} story: {}",
+                theme.info_label(),
+                theme.path(result.story_path.display())
+            );
+        }
         CommandOutcome::TaskMutation { kind, result, .. } => {
             let verb = match kind {
                 "task.add" => "added",
@@ -388,6 +472,100 @@ pub(crate) fn print_human_outcome(theme: &Theme, outcome: CommandOutcome) {
                     println!("{} sprint: {}", theme.info_label(), theme.id(sprint));
                 }
             }
+        }
+        CommandOutcome::WebStatus(status) => print_web_status_dto(theme, status),
+        CommandOutcome::WebStart(started) => {
+            println!(
+                "{} started kanban web UI: {}",
+                theme.ok_label(),
+                started.url
+            );
+            println!("{} pid: {}", theme.info_label(), started.pid);
+            println!(
+                "{} log: {}",
+                theme.info_label(),
+                theme.path(&started.log_file)
+            );
+        }
+        CommandOutcome::WebStop(stopped) => {
+            if stopped.stopped {
+                println!("{} stopped web UI.", theme.ok_label());
+            } else {
+                println!("{} web UI is not running.", theme.info_label());
+            }
+        }
+        CommandOutcome::WebRestart(restarted) => {
+            if restarted.stopped_existing {
+                println!("{} stopped existing web UI.", theme.info_label());
+            }
+            println!(
+                "{} started kanban web UI: {}",
+                theme.ok_label(),
+                restarted.started.url
+            );
+            println!("{} pid: {}", theme.info_label(), restarted.started.pid);
+            println!(
+                "{} log: {}",
+                theme.info_label(),
+                theme.path(&restarted.started.log_file)
+            );
+        }
+        CommandOutcome::WebLog(log) => {
+            if log.exists {
+                print!("{}", log.content);
+                if !log.content.is_empty() && !log.content.ends_with('\n') {
+                    println!();
+                }
+            } else {
+                println!(
+                    "{} no web log found: {}",
+                    theme.warning_label(),
+                    theme.path(&log.path)
+                );
+            }
+        }
+        CommandOutcome::Edited { path, .. } => {
+            println!("{} edited {}", theme.ok_label(), theme.path(path.display()));
+        }
+        CommandOutcome::NoData { .. } => {}
+        CommandOutcome::Error { body, .. } => {
+            eprintln!(
+                "{} {}",
+                theme.error_label(),
+                theme.highlight_commands(&body.message)
+            );
+        }
+    }
+}
+
+fn print_web_status_dto(theme: &Theme, status: WebStatusDto) {
+    match status.state.as_str() {
+        "running" => {
+            println!("{} web UI: running", theme.ok_label());
+            if let Some(pid) = status.pid {
+                println!("{} pid: {pid}", theme.info_label());
+            }
+            println!("{} url: {}", theme.info_label(), status.url);
+            println!(
+                "{} log: {}",
+                theme.info_label(),
+                theme.path(&status.log_file)
+            );
+        }
+        "stale" => {
+            match status.stale_pid {
+                Some(pid) => println!("{} web UI: stale PID {pid}", theme.warning_label()),
+                None => println!("{} web UI: stale PID file", theme.warning_label()),
+            }
+            println!(
+                "{} pid file: {}",
+                theme.info_label(),
+                theme.path(&status.pid_file)
+            );
+        }
+        _ => {
+            println!("{} web UI: stopped", theme.info_label());
+            println!("{} url: {}", theme.info_label(), status.url);
         }
     }
 }

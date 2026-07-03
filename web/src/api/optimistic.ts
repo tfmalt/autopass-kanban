@@ -298,8 +298,12 @@ export function applyUpdateSprintSnapshot(current: RepositorySnapshot, vars: Upd
           endDate: vars.end,
           status: vars.status,
           wipLimit: vars.wipLimit,
+          storiesByStatus: mapStoryBuckets(sprint.storiesByStatus, (stories) => stories.map(renameStory)),
         }
-      : sprint),
+      : {
+          ...sprint,
+          storiesByStatus: mapStoryBuckets(sprint.storiesByStatus, (stories) => stories.map(renameStory)),
+        }),
   };
 }
 

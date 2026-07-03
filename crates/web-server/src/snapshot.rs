@@ -10,6 +10,10 @@ fn story_status(story: &WebStory) -> Option<StoryStatus> {
     StoryStatus::parse(&story.status)
 }
 
+fn story_is_done(story: &WebStory) -> bool {
+    story_status(story) == Some(StoryStatus::Done)
+}
+
 pub(crate) fn load_repository_snapshot(repo_root: &Path) -> Result<RepositorySnapshot> {
     let repository = read_repository(repo_root)?;
     let mut stories = repository
@@ -232,7 +236,7 @@ pub(crate) fn compute_progress(stories: &[WebStory]) -> ProjectProgress {
             total_points += points;
             total_stories += 1;
         }
-        if story.status == "done" {
+        if story_is_done(story) {
             entry.done_points += points;
             entry.done_stories += 1;
             done_points += points;

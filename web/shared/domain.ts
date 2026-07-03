@@ -17,7 +17,11 @@ export type {
 const ASSIGNEE_PLACEHOLDER = /^Name <email@example\.com>$/i;
 
 export function normalizeStatus(value: string): string {
-  return value.toLowerCase().trim();
+  const normalized = value.toLowerCase().trim();
+  if (normalized === "backlog") return "ready";
+  if (normalized === "to do") return "todo";
+  if (normalized === "in progress") return "in-progress";
+  return normalized;
 }
 
 export function isBoardStatus(value: string): value is StoryStatus {
