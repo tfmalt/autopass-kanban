@@ -52,7 +52,7 @@ COLOUR_STORY_DONE_BG       = "FFD0F0D0"  # soft green
 COLOUR_WHITE_FG            = "FFFFFFFF"
 COLOUR_DARK_FG             = "FF1F1F1F"
 
-# ── Output column layout (A–O, 15 columns) ───────────────────────────────────
+# ── Output column layout (A–P, 16 columns) ───────────────────────────────────
 COL_WBS                = 1   # A: hierarchical WBS number (1.1.2)
 COL_ID                 = 2   # B: ID (phase code / EP-* / US-*)
 COL_TITLE              = 3   # C: Title
@@ -67,8 +67,9 @@ COL_PLANNED_END_DATE   = 11  # K: Planned End Date
 COL_ACTUAL_PERIOD      = 12  # L: Actual Period
 COL_ACTUAL_START_DATE  = 13  # M: Actual Start Date
 COL_ACTUAL_END_DATE    = 14  # N: Actual End Date
-COL_NOTES              = 15  # O: Notes
-TOTAL_COLS             = 15
+COL_COMPLETED_IN_SPRINT = 15  # O: Completed In Sprint
+COL_NOTES              = 16  # P: Notes
+TOTAL_COLS             = 16
 
 WBS_COLUMN_WIDTHS = {
     "A": 10,   # WBS No
@@ -85,7 +86,8 @@ WBS_COLUMN_WIDTHS = {
     "L": 17,   # Actual Period
     "M": 17,   # Actual Start Date
     "N": 15,   # Actual End Date
-    "O": 35,   # Notes
+    "O": 24,   # Completed In Sprint
+    "P": 45,   # Notes
 }
 
 DATE_FMT = "YYYY-MM-DD"
@@ -200,6 +202,7 @@ def _write_group_row(ws, row_num: int, row_data: dict, level: int):
     _set_optional_date_cell(ws, row_num, COL_ACTUAL_START_DATE, row_data.get("actual_start_date"))
     _set_optional_date_cell(ws, row_num, COL_ACTUAL_END_DATE, row_data.get("actual_end_date"))
     ws.cell(row_num, COL_ACTUAL_PERIOD, value=row_data.get("actual_period"))
+    ws.cell(row_num, COL_COMPLETED_IN_SPRINT, value=row_data.get("completed_in_sprint"))
     ws.cell(row_num, COL_NOTES, value=row_data.get("notes") or None)
     apply_row_style(ws, row_num, level=level)
 
@@ -220,6 +223,7 @@ def _write_story_row(ws, row_num: int, row_data: dict):
     _set_optional_date_cell(ws, row_num, COL_ACTUAL_START_DATE, row_data.get("actual_start_date"))
     _set_optional_date_cell(ws, row_num, COL_ACTUAL_END_DATE, row_data.get("actual_end_date"))
     ws.cell(row_num, COL_ACTUAL_PERIOD, value=row_data.get("actual_period"))
+    ws.cell(row_num, COL_COMPLETED_IN_SPRINT, value=row_data.get("completed_in_sprint"))
     ws.cell(row_num, COL_NOTES, value=row_data.get("notes") or None)
 
     apply_row_style(ws, row_num, level=4)
@@ -255,7 +259,7 @@ def build_wbs_sheet(ws, rows: list, generated_at: str):
     _write_header_row(ws, 2, [
         "WBS No", "ID", "Title", "Milestone", "Priority",
         "Status", "Story Pts", "Est Hours", "Planned Period", "Planned Start Date", "Planned End Date",
-        "Actual Period", "Actual Start Date", "Actual End Date", "Notes",
+        "Actual Period", "Actual Start Date", "Actual End Date", "Completed In Sprint", "Notes",
     ])
 
     row_num_by_wbs: dict[str, int] = {}
@@ -466,6 +470,7 @@ def build_legend_sheet(ws):
             (None, "Actual Period",      "Quarter or period derived from actual lifecycle dates"),
             (None, "Actual Start Date",  "Lifecycle start date from work_started"),
             (None, "Actual End Date",    "Lifecycle completion date from work_done"),
+            (None, "Completed In Sprint", "Terminal stories use retained sprint; completed epics use the inclusive sprint date range containing work_done; blank for phases, groups, and unresolved data"),
             (None, "Notes",              "Missing planned baseline or other report remarks"),
         ]),
     ]

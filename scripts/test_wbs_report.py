@@ -25,6 +25,7 @@ def workbook_row(
     actual_period=None,
     actual_start_date=None,
     actual_end_date=None,
+    completed_in_sprint=None,
     notes="",
 ):
     return {
@@ -43,6 +44,7 @@ def workbook_row(
         "actual_period": actual_period,
         "actual_start_date": actual_start_date,
         "actual_end_date": actual_end_date,
+        "completed_in_sprint": completed_in_sprint,
         "notes": notes,
     }
 
@@ -94,6 +96,7 @@ class WbsReportTests(unittest.TestCase):
                 actual_period="Q2-Q3 2026",
                 actual_start_date="2026-06-17",
                 actual_end_date="2026-07-01",
+                completed_in_sprint="S001.foundation",
             ),
             workbook_row(
                 "story",
@@ -115,6 +118,7 @@ class WbsReportTests(unittest.TestCase):
         self.assertIn("Actual Start Date", headers)
         self.assertIn("Actual End Date", headers)
         self.assertIn("Actual Period", headers)
+        self.assertIn("Completed In Sprint", headers)
 
         self.assertEqual(ws.cell(5, wbs_report.COL_PERIOD).value, "Q2 2026")
         self.assertEqual(ws.cell(5, wbs_report.COL_PLANNED_START_DATE).value, date(2026, 6, 15))
@@ -122,6 +126,7 @@ class WbsReportTests(unittest.TestCase):
         self.assertEqual(ws.cell(5, wbs_report.COL_ACTUAL_START_DATE).value, date(2026, 6, 17))
         self.assertEqual(ws.cell(5, wbs_report.COL_ACTUAL_END_DATE).value, date(2026, 7, 1))
         self.assertEqual(ws.cell(5, wbs_report.COL_ACTUAL_PERIOD).value, "Q2-Q3 2026")
+        self.assertEqual(ws.cell(5, wbs_report.COL_COMPLETED_IN_SPRINT).value, "S001.foundation")
 
         self.assertIsNone(ws.cell(6, wbs_report.COL_PERIOD).value)
         self.assertIsNone(ws.cell(6, wbs_report.COL_PLANNED_START_DATE).value)
@@ -139,6 +144,33 @@ class WbsReportTests(unittest.TestCase):
         self.assertEqual(ws.row_dimensions[4].outlineLevel, 1)
         self.assertEqual(ws.row_dimensions[5].outlineLevel, 2)
         self.assertEqual(ws.row_dimensions[6].outlineLevel, 2)
+
+    def test_completion_sprint_is_rendered_for_stories_and_blank_for_groups(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        rows = [
+            workbook_row("phase", "1", "F1", "Phase 1"),
+            workbook_row("epic", "1.1", "EP-F1-01", "Platform"),
+            workbook_row("story", "1.1.1", "US-F1-001", "Completed", status="DONE", completed_in_sprint="S001.foundation"),
+            workbook_row("story", "1.1.2", "US-F1-002", "Unresolved", status="DROPPED", notes="Unable to resolve completion sprint"),
+        ]
+
+        wbs_report.build_wbs_sheet(ws, rows, "2026-06-11T10:00:00+02:00")
+
+        self.assertIsNone(ws.cell(3, wbs_report.COL_COMPLETED_IN_SPRINT).value)
+        self.assertIsNone(ws.cell(4, wbs_report.COL_COMPLETED_IN_SPRINT).value)
+        self.assertEqual(ws.cell(5, wbs_report.COL_COMPLETED_IN_SPRINT).value, "S001.foundation")
+        self.assertIsNone(ws.cell(6, wbs_report.COL_COMPLETED_IN_SPRINT).value)
+        self.assertEqual(ws.cell(6, wbs_report.COL_NOTES).value, "Unable to resolve completion sprint")
+
+    def test_legend_documents_completion_sprint_semantics(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        wbs_report.build_legend_sheet(ws)
+
+        values = [cell.value for row in ws.iter_rows() for cell in row if cell.value]
+        self.assertIn("Completed In Sprint", values)
+        self.assertTrue(any("inclusive sprint date range" in value for value in values if isinstance(value, str)))
 
     def test_done_epic_and_dropped_story_use_done_row_highlight(self):
         wb = openpyxl.Workbook()
