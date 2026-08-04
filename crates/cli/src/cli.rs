@@ -471,11 +471,13 @@ OUTPUT WORKBOOK — four sheets:
       H  Story Pts    Story points; SUM formula on epic and phase rows
       I  Est Hours    Estimated hours (story points × hours/point from velocity);
                       shown for all stories including done and in-progress
-      J  Start Date   Actual work_started for done/in-progress stories;
-                      velocity-based estimate for not-yet-started stories
-      K  End Date     Actual work_done for done stories; estimated completion
-                      for in-progress and not-yet-started stories
-      L  Notes        Carried over from the template for rows that exist there
+      J  Planned Start Date   Stored markdown baseline start date
+      K  Planned End Date     Stored markdown baseline end date
+      L  Actual Period        Quarter derived from lifecycle dates
+      M  Actual Start Date    Lifecycle work_started date
+      N  Actual End Date      Lifecycle work_done date
+      O  Completed In Sprint  Retained story sprint or inclusive epic date match
+      P  Notes                Missing baseline or unresolved completion remarks
 
     Hours per point = (sprint_weeks × 5 days × 7 h/day) ÷ avg_pts_per_sprint
     Date estimates are sequenced in planning order (F1 → F5, then by epic and

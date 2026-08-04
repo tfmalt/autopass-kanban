@@ -72,6 +72,14 @@ pub fn read_epic_sources(config: &KanbanConfig) -> Result<Vec<Epic>> {
         .collect()
 }
 
+pub fn list_all_epic_overviews(repo_root: impl AsRef<Path>) -> Result<Vec<EpicOverview>> {
+    let config = load_kanban_config(repo_root)?;
+    Ok(read_epic_sources(&config)?
+        .iter()
+        .map(epic_overview)
+        .collect())
+}
+
 /// Resolve the canonical epic source for `epic_id` from already-read sources.
 ///
 /// Matching is case-insensitive on the frontmatter `id`; ties are broken by the

@@ -28,12 +28,12 @@ use kanban_core::{
     ReportForecastDto, ReportWbsDto, add_task_to_story, config_show_value, create_sprint,
     delete_story, delete_task_from_story, doctor_repository, find_epic_with_source, find_story,
     find_story_with_source, get_config_json, get_config_value, init_config_with_features,
-    list_all_stories, list_epic_ids, list_sprint_names, list_story_completion_items,
-    list_story_ids, list_tasks_for_story, load_kanban_config, move_story_to_status_with_assignee,
-    plan_story_into_sprint, read_story_file, rollover_sprint, set_config_value,
-    story_markdown_file, suggested_sprint_dates, summarize_current_sprint, summarize_phase,
-    summarize_sprint, summarize_sprints, sync_sprint_rosters, update_epic_frontmatter,
-    update_story_frontmatter, update_task_in_story, validate_repository,
+    list_all_epic_overviews, list_all_stories, list_epic_ids, list_sprint_names,
+    list_story_completion_items, list_story_ids, list_tasks_for_story, load_kanban_config,
+    move_story_to_status_with_assignee, plan_story_into_sprint, read_story_file, rollover_sprint,
+    set_config_value, story_markdown_file, suggested_sprint_dates, summarize_current_sprint,
+    summarize_phase, summarize_sprint, summarize_sprints, sync_sprint_rosters,
+    update_epic_frontmatter, update_story_frontmatter, update_task_in_story, validate_repository,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -658,10 +658,12 @@ pub(crate) fn execute_command(
             ReportCommand::Wbs { repo_root } => {
                 let stories = list_all_stories(repo_root)?;
                 let sprints = report_sprints(repo_root)?;
+                let epics = list_all_epic_overviews(repo_root)?;
                 let current = report_current_sprint_name(repo_root, &sprints);
-                CommandOutcome::ReportWbs(Box::new(ReportWbsDto::build(
+                CommandOutcome::ReportWbs(Box::new(ReportWbsDto::build_with_epics(
                     &stories,
                     &sprints,
+                    &epics,
                     current.as_deref(),
                 )))
             }

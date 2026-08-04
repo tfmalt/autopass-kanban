@@ -2,7 +2,7 @@ use chrono::{Datelike, Days};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{SprintOverview, StoryOverview, StoryStatus};
+use crate::{EpicOverview, SprintOverview, StoryOverview, StoryStatus};
 
 use super::{ForecastInputs, ReportForecastDto, parse_points, path_string};
 
@@ -308,6 +308,7 @@ pub struct ReportWorkbookRowDto {
     pub actual_period: Option<String>,
     pub actual_start_date: Option<String>,
     pub actual_end_date: Option<String>,
+    pub completed_in_sprint: Option<String>,
     pub notes: String,
 }
 
@@ -540,6 +541,15 @@ impl ReportWbsDto {
         sprints: &[SprintOverview],
         current_sprint_name: Option<&str>,
     ) -> Self {
+        Self::build_with_epics(stories, sprints, &[], current_sprint_name)
+    }
+
+    pub fn build_with_epics(
+        stories: &[StoryOverview],
+        sprints: &[SprintOverview],
+        epics: &[EpicOverview],
+        current_sprint_name: Option<&str>,
+    ) -> Self {
         use chrono::Local;
 
         let today = Local::now().date_naive();
@@ -552,7 +562,7 @@ impl ReportWbsDto {
             today,
         );
         let forecast = ReportForecastDto::from_inputs(prepared.forecast_inputs);
-        let derived = derive_report_rows(stories, sprints, &forecast);
+        let derived = derive_report_rows(stories, sprints, Some(epics), &forecast);
 
         ReportWbsDto {
             generated_at,
@@ -599,7 +609,7 @@ impl ReportDashboardDto {
             today,
         );
         let forecast = ReportForecastDto::from_inputs(prepared.forecast_inputs);
-        let derived = derive_report_rows(stories, sprints, &forecast);
+        let derived = derive_report_rows(stories, sprints, None, &forecast);
 
         Self {
             generated_at,
@@ -625,10 +635,11 @@ impl ReportDashboardDto {
 fn derive_report_rows(
     stories: &[StoryOverview],
     sprints: &[SprintOverview],
+    epics: Option<&[EpicOverview]>,
     forecast: &ReportForecastDto,
 ) -> DerivedReportRows {
     let estimate_context = build_estimates(stories, sprints, forecast);
-    let (web_wbs_rows, workbook_rows) = build_wbs_rows(stories, &estimate_context);
+    let (web_wbs_rows, workbook_rows) = build_wbs_rows(stories, sprints, epics, &estimate_context);
     let phase_rows = build_phase_rows(stories);
     let sprint_rows = build_sprint_rows(sprints, forecast, &estimate_context);
     let progress = build_progress(stories);
@@ -942,6 +953,67 @@ fn maybe_date_string(date: Option<chrono::NaiveDate>) -> Option<String> {
     date.map(date_string)
 }
 
+fn completion_sprint_for_date(
+    date: Option<chrono::NaiveDate>,
+    sprints: &[SprintOverview],
+) -> Option<String> {
+    let date = date?;
+    sprints
+        .iter()
+        .filter(|sprint| {
+            let start = parse_date_prefix(&sprint.start_date);
+            let end = parse_date_prefix(&sprint.end_date);
+            start.is_some_and(|start| date >= start) && end.is_some_and(|end| date <= end)
+        })
+        .min_by(|left, right| {
+            left.sprint_name
+                .cmp(&right.sprint_name)
+                .then_with(|| left.start_date.cmp(&right.start_date))
+        })
+        .map(|sprint| sprint.sprint_name.clone())
+}
+
+fn epic_completion_sprint(
+    epic_id: &str,
+    epics: Option<&[EpicOverview]>,
+    sprints: &[SprintOverview],
+) -> Option<String> {
+    let epic = epics?
+        .iter()
+        .find(|epic| epic.id.eq_ignore_ascii_case(epic_id))?;
+    completion_sprint_for_date(
+        epic.work_done.as_deref().and_then(parse_date_prefix),
+        sprints,
+    )
+}
+
+fn epic_completion_note(
+    epic_id: &str,
+    epics: Option<&[EpicOverview]>,
+    sprints: &[SprintOverview],
+) -> String {
+    let Some(epics) = epics else {
+        return String::new();
+    };
+    let Some(epic) = epics
+        .iter()
+        .find(|epic| epic.id.eq_ignore_ascii_case(epic_id))
+    else {
+        return String::new();
+    };
+    let is_terminal = matches!(
+        normalize_story_status(&epic.status).as_str(),
+        "done" | "dropped"
+    );
+    if is_terminal && epic_completion_sprint(epic_id, Some(epics), sprints).is_none() {
+        "Unable to resolve completion sprint from epic work_done and known sprint ranges."
+            .to_string()
+    } else {
+        String::new()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_group_workbook_row(
     kind: &str,
     wbs: String,
@@ -950,6 +1022,8 @@ fn build_group_workbook_row(
     meta: PhaseReportMeta,
     stories: &[&StoryOverview],
     points: i64,
+    completed_in_sprint: Option<String>,
+    notes: String,
 ) -> ReportWorkbookRowDto {
     let (planned_start, planned_end) = group_planned_dates(stories);
     let (actual_start, actual_end) = group_actual_dates(stories);
@@ -975,7 +1049,8 @@ fn build_group_workbook_row(
         actual_period: period_label(actual_start, actual_end),
         actual_start_date: maybe_date_string(actual_start),
         actual_end_date: maybe_date_string(actual_end),
-        notes: String::new(),
+        completed_in_sprint,
+        notes,
     }
 }
 
@@ -1014,6 +1089,25 @@ fn build_story_workbook_row(
         missing.push("end");
     }
 
+    let mut notes = if missing.is_empty() {
+        String::new()
+    } else {
+        format!("Missing planned baseline: {}", missing.join(", "))
+    };
+    let completed_in_sprint = if story_is_terminal(story) {
+        story.sprint.clone()
+    } else {
+        None
+    };
+    if story_is_terminal(story) && completed_in_sprint.is_none() {
+        if !notes.is_empty() {
+            notes.push_str("; ");
+        }
+        notes.push_str(
+            "Unable to resolve completion sprint: terminal story has no retained sprint.",
+        );
+    }
+
     ReportWorkbookRowDto {
         kind: "story".to_string(),
         wbs,
@@ -1030,16 +1124,15 @@ fn build_story_workbook_row(
         actual_period: period_label(actual_start, actual_end),
         actual_start_date: maybe_date_string(actual_start),
         actual_end_date: maybe_date_string(actual_end),
-        notes: if missing.is_empty() {
-            String::new()
-        } else {
-            format!("Missing planned baseline: {}", missing.join(", "))
-        },
+        completed_in_sprint,
+        notes,
     }
 }
 
 fn build_wbs_rows(
     stories: &[StoryOverview],
+    sprints: &[SprintOverview],
+    epics: Option<&[EpicOverview]>,
     estimates: &EstimateContext,
 ) -> (Vec<ReportWbsRowDto>, Vec<ReportWorkbookRowDto>) {
     let mut web_rows = Vec::new();
@@ -1081,6 +1174,8 @@ fn build_wbs_rows(
             meta,
             &phase_stories,
             sum_points(phase_stories.iter().copied()),
+            None,
+            String::new(),
         ));
 
         for (epic_index, epic) in phase.epics.into_iter().enumerate() {
@@ -1109,6 +1204,8 @@ fn build_wbs_rows(
                 meta,
                 &epic.stories,
                 sum_points(epic.stories.iter().copied()),
+                epic_completion_sprint(&epic.id, epics, sprints),
+                epic_completion_note(&epic.id, epics, sprints),
             ));
 
             for (story_index, story) in epic.stories.into_iter().enumerate() {
@@ -1402,6 +1499,23 @@ mod tests {
         }
     }
 
+    fn epic(id: &str, work_done: Option<&str>) -> EpicOverview {
+        EpicOverview {
+            id: id.to_string(),
+            title: "Platform".to_string(),
+            status: "done".to_string(),
+            phase: Some("1".to_string()),
+            priority: None,
+            owner: None,
+            milestone: None,
+            work_started: None,
+            work_done: work_done.map(str::to_string),
+            planned_start: None,
+            planned_end: None,
+            relative_path: PathBuf::from(format!("delivery/backlog/{id}.md")),
+        }
+    }
+
     #[test]
     fn report_story_dto_serializes_planned_dates_from_frontmatter_metadata() {
         let overview = crate::StoryOverview {
@@ -1497,5 +1611,132 @@ mod tests {
         assert_eq!(report.phase_rows[0].total, 13);
         assert_eq!(report.sprint_rows[0].name, "S000.start");
         assert!(report.hours_per_point >= 0.0);
+    }
+
+    #[test]
+    fn workbook_rows_resolve_story_completion_sprints_and_unresolved_notes() {
+        let mut done = story(
+            "US-F1-001",
+            "Done story",
+            "done",
+            "5",
+            Some("S001.foundation"),
+        );
+        done.work_done = Some("2026-06-03T12:00:00+0200".to_string());
+        let mut dropped = story(
+            "US-F1-002",
+            "Dropped story",
+            "dropped",
+            "3",
+            Some("S002.delivery"),
+        );
+        dropped.work_done = Some("2026-06-04T12:00:00+0200".to_string());
+        let mut missing_sprint = story("US-F1-003", "Missing sprint", "done", "2", None);
+        missing_sprint.work_done = Some("2026-06-04T12:00:00+0200".to_string());
+        let todo = story(
+            "US-F1-004",
+            "Todo story",
+            "todo",
+            "1",
+            Some("S001.foundation"),
+        );
+        let mut first = sprint("S001.foundation", "closed", vec![done.clone()]);
+        first.end_date = "2026-06-03".to_string();
+        let mut second = sprint("S002.delivery", "closed", vec![dropped.clone()]);
+        second.start_date = "2026-06-04".to_string();
+        second.end_date = "2026-06-10".to_string();
+
+        let report = ReportWbsDto::build_with_epics(
+            &[done, dropped, missing_sprint, todo],
+            &[first, second],
+            &[],
+            None,
+        );
+        let rows = report.wbs_rows;
+        let done_row = rows.iter().find(|row| row.id == "US-F1-001").unwrap();
+        let dropped_row = rows.iter().find(|row| row.id == "US-F1-002").unwrap();
+        let missing_row = rows.iter().find(|row| row.id == "US-F1-003").unwrap();
+        let todo_row = rows.iter().find(|row| row.id == "US-F1-004").unwrap();
+
+        assert_eq!(
+            done_row.completed_in_sprint.as_deref(),
+            Some("S001.foundation")
+        );
+        assert_eq!(
+            dropped_row.completed_in_sprint.as_deref(),
+            Some("S002.delivery")
+        );
+        assert!(missing_row.completed_in_sprint.is_none());
+        assert!(
+            missing_row
+                .notes
+                .contains("terminal story has no retained sprint")
+        );
+        assert!(todo_row.completed_in_sprint.is_none());
+        assert!(
+            rows.iter()
+                .find(|row| row.kind == "phase")
+                .unwrap()
+                .completed_in_sprint
+                .is_none()
+        );
+        assert!(
+            rows.iter()
+                .find(|row| row.kind == "epic")
+                .unwrap()
+                .completed_in_sprint
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn workbook_rows_resolve_epic_completion_on_inclusive_sprint_boundaries() {
+        let mut boundary_story = story("US-F1-001", "Boundary story", "done", "1", None);
+        boundary_story.work_done = Some("2026-06-14T12:00:00+0200".to_string());
+        let mut sprint = sprint("S001.foundation", "closed", vec![]);
+        sprint.start_date = "2026-06-01".to_string();
+        sprint.end_date = "2026-06-14".to_string();
+
+        let report = ReportWbsDto::build_with_epics(
+            &[boundary_story],
+            &[sprint],
+            &[epic("EP-F1-01", Some("2026-06-14T23:59:59+0200"))],
+            None,
+        );
+        let epic_row = report
+            .wbs_rows
+            .iter()
+            .find(|row| row.kind == "epic")
+            .unwrap();
+        assert_eq!(
+            epic_row.completed_in_sprint.as_deref(),
+            Some("S001.foundation")
+        );
+    }
+
+    #[test]
+    fn workbook_rows_leave_unresolved_epic_completion_blank_with_note() {
+        let story = story("US-F1-001", "Done story", "done", "1", None);
+        let mut sprint = sprint("S001.foundation", "closed", vec![]);
+        sprint.start_date = "2026-06-01".to_string();
+        sprint.end_date = "2026-06-14".to_string();
+
+        let report = ReportWbsDto::build_with_epics(
+            &[story],
+            &[sprint],
+            &[epic("EP-F1-01", Some("2026-07-01T12:00:00+0200"))],
+            None,
+        );
+        let epic_row = report
+            .wbs_rows
+            .iter()
+            .find(|row| row.kind == "epic")
+            .unwrap();
+        assert!(epic_row.completed_in_sprint.is_none());
+        assert!(
+            epic_row
+                .notes
+                .contains("Unable to resolve completion sprint")
+        );
     }
 }
