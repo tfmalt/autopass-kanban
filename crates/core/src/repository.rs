@@ -42,6 +42,15 @@ pub fn atomic_write(path: impl AsRef<Path>, contents: &str) -> Result<()> {
 
 pub fn collect_user_story_files(repo_root: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
     let config = load_kanban_config(repo_root)?;
+    collect_user_story_files_with_config(&config)
+}
+
+/// Config-aware variant of [`collect_user_story_files`].
+///
+/// Callers that already hold a [`KanbanConfig`] must use this so a repository
+/// read resolves the git root and parses `.kanban/settings.json` exactly once
+/// instead of once per collected file.
+pub fn collect_user_story_files_with_config(config: &KanbanConfig) -> Result<Vec<PathBuf>> {
     let backlog_root = config.backlog_path();
     let canonical_backlog = backlog_root
         .canonicalize()
@@ -86,6 +95,11 @@ pub fn collect_user_story_files(repo_root: impl AsRef<Path>) -> Result<Vec<PathB
 /// Collect all epic markdown files (`EP-*.md`) from the backlog tree.
 pub fn collect_epic_files(repo_root: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
     let config = load_kanban_config(repo_root)?;
+    collect_epic_files_with_config(&config)
+}
+
+/// Config-aware variant of [`collect_epic_files`].
+pub fn collect_epic_files_with_config(config: &KanbanConfig) -> Result<Vec<PathBuf>> {
     let backlog_root = config.backlog_path();
     let canonical_backlog = backlog_root
         .canonicalize()
@@ -205,12 +219,35 @@ pub fn read_task_file(
 pub fn read_story_file(file_path: impl AsRef<Path>, repo_root: impl AsRef<Path>) -> Result<Story> {
     let repo_root = repo_root.as_ref();
     let config = load_kanban_config(repo_root)?;
-    let file_path = fs::canonicalize(file_path.as_ref())
-        .with_context(|| format!("resolve story file {}", file_path.as_ref().display()))?;
+    read_story_file_inner(file_path.as_ref(), repo_root, &config)
+}
+
+/// Config-aware variant of [`read_story_file`].
+///
+/// Callers that already hold a [`KanbanConfig`] must use this so a repository
+/// read parses `.kanban/settings.json` once instead of once per story. Paths in
+/// the returned `Story` are relative to `config.repo_root`, which is exactly
+/// what `read_repository` has always produced.
+pub fn read_story_file_with_config(
+    file_path: impl AsRef<Path>,
+    config: &KanbanConfig,
+) -> Result<Story> {
+    let repo_root = config.repo_root.clone();
+    read_story_file_inner(file_path.as_ref(), &repo_root, config)
+}
+
+fn read_story_file_inner(
+    file_path: &Path,
+    repo_root: &Path,
+    config: &KanbanConfig,
+) -> Result<Story> {
+    crate::instrument::record_story_parse();
+    let file_path = fs::canonicalize(file_path)
+        .with_context(|| format!("resolve story file {}", file_path.display()))?;
     let markdown = fs::read_to_string(&file_path)
         .with_context(|| format!("read story file {}", file_path.display()))?;
     let parsed = parse_frontmatter(&markdown);
-    let location = story_location(&file_path, &config);
+    let location = story_location(&file_path, config);
     let sprint_name = if config.features().sprints {
         parsed
             .frontmatter
@@ -292,6 +329,7 @@ pub fn read_story_file(file_path: impl AsRef<Path>, repo_root: impl AsRef<Path>)
 
 pub fn read_epic_file(file_path: impl AsRef<Path>, repo_root: impl AsRef<Path>) -> Result<Epic> {
     let repo_root = repo_root.as_ref();
+    crate::instrument::record_epic_parse();
     let file_path = fs::canonicalize(file_path.as_ref())
         .with_context(|| format!("resolve epic file {}", file_path.as_ref().display()))?;
     let markdown = fs::read_to_string(&file_path)
@@ -313,13 +351,31 @@ pub fn read_epic_file(file_path: impl AsRef<Path>, repo_root: impl AsRef<Path>) 
     })
 }
 
+/// Config-aware variant of [`read_epic_file`]. Paths in the returned `Epic` are
+/// relative to `config.repo_root`.
+pub fn read_epic_file_with_config(
+    file_path: impl AsRef<Path>,
+    config: &KanbanConfig,
+) -> Result<Epic> {
+    read_epic_file(file_path, &config.repo_root)
+}
+
 pub fn read_repository(repo_root: impl AsRef<Path>) -> Result<Repository> {
     let config = load_kanban_config(repo_root)?;
+    read_repository_with_config(&config)
+}
+
+/// Config-aware variant of [`read_repository`].
+///
+/// This is the single-pass entry point: exactly one git root resolution and one
+/// `.kanban/settings.json` parse happen in `load_kanban_config`, and every file
+/// below is read through the `_with_config` collectors and readers.
+pub fn read_repository_with_config(config: &KanbanConfig) -> Result<Repository> {
     let repo_root = config.repo_root.clone();
-    let story_files = collect_user_story_files(&repo_root)?;
+    let story_files = collect_user_story_files_with_config(config)?;
     let stories = story_files
         .into_iter()
-        .map(|path| read_story_file(path, &repo_root))
+        .map(|path| read_story_file_with_config(path, config))
         .collect::<Result<Vec<_>>>()?;
     Ok(Repository { repo_root, stories })
 }
@@ -530,5 +586,129 @@ mod tests {
             !names.contains(&"US-002-symlink.md".to_string()),
             "symlinked story file must be skipped"
         );
+    }
+}
+
+#[cfg(test)]
+mod read_path_budget_tests {
+    use super::*;
+    use crate::epic::find_epic;
+    use crate::instrument::ReadPathCounters;
+    use crate::testsupport::{FixtureSpec, generate_backlog_fixture};
+
+    /// B1 + B4: one `read_repository` resolves the git root and parses
+    /// `.kanban/settings.json` exactly once, and parses each story exactly once.
+    #[test]
+    fn read_repository_resolves_configuration_exactly_once() {
+        for spec in [
+            FixtureSpec::representative().with_stories(40),
+            FixtureSpec::minimal(),
+        ] {
+            let fixture = generate_backlog_fixture(&spec);
+            // Warm the walk outside the counted region so only the read is measured.
+            let expected_stories = collect_user_story_files(fixture.root()).unwrap().len();
+
+            let counters = ReadPathCounters::start();
+            let repository = read_repository(fixture.root()).unwrap();
+            let counts = counters.snapshot();
+            drop(counters);
+
+            assert_eq!(repository.stories.len(), expected_stories);
+            assert_eq!(
+                counts.git_root_resolutions, 1,
+                "B1: exactly one `git rev-parse --show-toplevel` per read_repository, got {counts:?}"
+            );
+            assert_eq!(
+                counts.settings_parses, 1,
+                "B4: exactly one settings.json parse per read_repository, got {counts:?}"
+            );
+            assert_eq!(
+                counts.story_parses, expected_stories,
+                "each story is parsed exactly once, got {counts:?}"
+            );
+        }
+    }
+
+    /// The epic lookup must not rescan the backlog once per epic.
+    #[test]
+    fn find_epic_reads_each_epic_file_once() {
+        let spec = FixtureSpec::representative().with_stories(30);
+        let fixture = generate_backlog_fixture(&spec);
+
+        let counters = ReadPathCounters::start();
+        let epic = find_epic(fixture.root(), "EP-001").unwrap();
+        let counts = counters.snapshot();
+        drop(counters);
+
+        assert!(epic.is_some(), "fixture epic EP-001 must resolve");
+        assert_eq!(counts.git_root_resolutions, 1, "got {counts:?}");
+        assert_eq!(counts.settings_parses, 1, "got {counts:?}");
+        assert_eq!(
+            counts.epic_parses, spec.epics,
+            "each epic file is read once per lookup, got {counts:?}"
+        );
+    }
+
+    /// `read_repository_with_config` performs no resolution of its own, so the
+    /// derivation layers built on top of it can compose without re-resolving.
+    #[test]
+    fn read_repository_with_config_performs_no_resolution() {
+        let fixture = generate_backlog_fixture(&FixtureSpec::minimal());
+        let config = load_kanban_config(fixture.root()).unwrap();
+
+        let counters = ReadPathCounters::start();
+        let repository = read_repository_with_config(&config).unwrap();
+        let counts = counters.snapshot();
+        drop(counters);
+
+        assert!(!repository.stories.is_empty());
+        assert_eq!(counts.git_root_resolutions, 0, "got {counts:?}");
+        assert_eq!(counts.settings_parses, 0, "got {counts:?}");
+    }
+
+    /// Equivalence guard for WP-02: the config-aware readers must produce
+    /// byte-identical parsed stories, in identical order, with identical
+    /// relative paths and task-file resolution.
+    #[test]
+    fn config_aware_readers_match_the_convenience_apis() {
+        for spec in [
+            FixtureSpec::representative().with_stories(60),
+            FixtureSpec::minimal(),
+        ] {
+            let fixture = generate_backlog_fixture(&spec);
+            let config = load_kanban_config(fixture.root()).unwrap();
+
+            let via_convenience = collect_user_story_files(fixture.root()).unwrap();
+            let via_config = collect_user_story_files_with_config(&config).unwrap();
+            assert_eq!(via_convenience, via_config);
+
+            let epics_convenience = collect_epic_files(fixture.root()).unwrap();
+            let epics_config = collect_epic_files_with_config(&config).unwrap();
+            assert_eq!(epics_convenience, epics_config);
+
+            for path in &via_config {
+                let expected = read_story_file(path, &config.repo_root).unwrap();
+                let actual = read_story_file_with_config(path, &config).unwrap();
+                assert_eq!(expected.relative_path, actual.relative_path);
+                assert_eq!(expected.file_path, actual.file_path);
+                assert_eq!(expected.frontmatter, actual.frontmatter);
+                assert_eq!(expected.frontmatter_keys, actual.frontmatter_keys);
+                assert_eq!(expected.body, actual.body);
+                assert_eq!(expected.markdown, actual.markdown);
+                assert_eq!(expected.sprint_name, actual.sprint_name);
+                assert_eq!(
+                    expected.task_file.as_ref().map(|file| (
+                        file.exists,
+                        file.relative_path.clone(),
+                        file.tasks.len()
+                    )),
+                    actual.task_file.as_ref().map(|file| (
+                        file.exists,
+                        file.relative_path.clone(),
+                        file.tasks.len()
+                    ))
+                );
+            }
+        }
     }
 }

@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use crate::constants::*;
 use crate::model::*;
 #[allow(unused_imports)]
@@ -64,7 +65,7 @@ pub fn parse_frontmatter(markdown: &str) -> ParsedFrontmatter {
 
 pub fn parse_task_markdown(markdown: &str) -> Vec<Task> {
     let normalized = markdown.replace("\r\n", "\n");
-    let heading_pattern = Regex::new(TASK_HEADING_PATTERN).expect("valid task heading regex");
+    let heading_pattern = &*crate::regexes::TASK_HEADING;
     let matches: Vec<_> = heading_pattern
         .captures_iter(&normalized)
         .filter_map(|captures| {
@@ -312,7 +313,7 @@ pub(crate) fn rewrite_task_markdown(
     description: Option<&str>,
 ) -> Result<String> {
     let normalized = markdown.replace("\r\n", "\n");
-    let heading_pattern = Regex::new(TASK_HEADING_PATTERN).expect("valid task heading regex");
+    let heading_pattern = &*crate::regexes::TASK_HEADING;
     let matches: Vec<_> = heading_pattern
         .captures_iter(&normalized)
         .filter_map(|captures| {

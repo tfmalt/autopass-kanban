@@ -218,24 +218,35 @@ pub fn validate_story_with_config(
 }
 
 pub fn validate_repository(repo_root: impl AsRef<Path>) -> Result<ValidationReport> {
-    let repository = read_repository(repo_root)?;
+    let config = load_kanban_config(repo_root)?;
+    let repository = read_repository_with_config(&config)?;
+    validate_parsed_repository(repository, &config)
+}
+
+/// Config-aware, non-reloading variant of [`validate_repository`].
+///
+/// Takes ownership of an already-parsed repository so callers that also need
+/// the parsed stories (`doctor`) do not read the backlog a second time.
+pub fn validate_parsed_repository(
+    repository: Repository,
+    config: &KanbanConfig,
+) -> Result<ValidationReport> {
     let mut issues = Vec::new();
-    let config = load_kanban_config(&repository.repo_root)?;
 
     let features = config.features();
     if features.sprints {
-        issues.extend(validate_sprint_readmes(&config)?);
+        issues.extend(validate_sprint_readmes(config)?);
     }
 
     if features.epics {
-        for epic_file in collect_epic_files(&repository.repo_root)? {
-            let epic = read_epic_file(epic_file, &repository.repo_root)?;
+        for epic_file in collect_epic_files_with_config(config)? {
+            let epic = read_epic_file_with_config(epic_file, config)?;
             issues.extend(validate_epic(&epic));
         }
     }
 
     for story in &repository.stories {
-        issues.extend(validate_story_with_config(story, &features, Some(&config)));
+        issues.extend(validate_story_with_config(story, &features, Some(config)));
         if let Some(task_file) = &story.task_file
             && !task_file.exists
             && !matches!(
@@ -555,9 +566,8 @@ pub(crate) fn validate_timestamp_field(
         return;
     }
 
-    let timestamp_pattern = Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}$")
-        .expect("valid timestamp regex");
-    let date_pattern = Regex::new(r"^\d{4}-\d{2}-\d{2}$").expect("valid date regex");
+    let timestamp_pattern = &*crate::regexes::LOCAL_TIMESTAMP;
+    let date_pattern = &*crate::regexes::MARKDOWN_DATE;
     if !(timestamp_pattern.is_match(value) || allow_date_only && date_pattern.is_match(value)) {
         let expected_format = if allow_date_only {
             "local ISO 8601 with numeric timezone offset or YYYY-MM-DD"
@@ -589,9 +599,7 @@ pub(crate) fn validate_local_timestamp_frontmatter(field_name: &str, value: &str
     if value.is_empty() || matches!(value, "~" | "null") {
         return Ok(());
     }
-    let timestamp_pattern = Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}$")
-        .expect("valid timestamp regex");
-    if !timestamp_pattern.is_match(value) {
+    if !crate::regexes::LOCAL_TIMESTAMP.is_match(value) {
         bail!(
             "Frontmatter field \"{field_name}\" must use local ISO 8601 with numeric timezone offset."
         );

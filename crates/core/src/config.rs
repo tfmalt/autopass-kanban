@@ -494,6 +494,7 @@ pub fn set_config_value(
 }
 
 fn read_settings(repo_root: &Path) -> Result<Settings> {
+    crate::instrument::record_settings_parse();
     let config_dir = repo_root.join(CONFIG_DIR_NAME);
     let settings_file = config_dir.join(SETTINGS_FILE_NAME);
     let contents = fs::read_to_string(&settings_file)
@@ -533,6 +534,7 @@ fn missing_config_error(repo_root: &Path) -> Result<KanbanConfig> {
 }
 
 fn git_toplevel(path: &Path) -> Option<PathBuf> {
+    crate::instrument::record_git_root_resolution();
     let output = Command::new("git")
         .arg("-C")
         .arg(path)

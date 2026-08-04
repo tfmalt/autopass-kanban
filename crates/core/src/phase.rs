@@ -8,9 +8,9 @@ use crate::story::*;
 use crate::util::*;
 
 pub fn summarize_phase(repo_root: impl AsRef<Path>, phase: &str) -> Result<PhaseOverview> {
-    let repository = read_repository(repo_root)?;
+    let config = load_kanban_config(repo_root)?;
+    let repository = read_repository_with_config(&config)?;
     let phase_number = normalize_phase_input(phase)?;
-    let config = load_kanban_config(&repository.repo_root)?;
     let phase_marker = format!("{}phase-{phase_number}-", config.backlog_marker());
     let mut stories = repository
         .stories

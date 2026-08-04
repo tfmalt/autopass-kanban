@@ -41,8 +41,7 @@ pub fn parse_assignee_list(assignee: &str) -> Vec<String> {
 }
 
 pub(crate) fn validate_assignee_override(assignee: &str) -> Result<String> {
-    let pattern =
-        Regex::new(r"^[^<>\s].*\s<[^<>\s@]+@[^<>\s@]+>$").expect("valid assignee validation regex");
+    let pattern = &*crate::regexes::ASSIGNEE_STRICT;
     let assignees = parse_assignee_list(assignee);
     if assignees.is_empty() {
         bail!("Assignee must use the format `Name <email>`.");

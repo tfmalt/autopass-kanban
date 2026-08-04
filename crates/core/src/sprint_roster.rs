@@ -151,8 +151,7 @@ fn render_assignee_cell(value: &str) -> String {
         return "-".to_string();
     }
 
-    let pattern =
-        Regex::new(r"(?P<name>[^<]+?)\s*<(?P<email>[^>]+)>").expect("valid assignee parse regex");
+    let pattern = &*crate::regexes::ASSIGNEE_CAPTURE;
     let assignees = parse_assignee_list(trimmed);
     let links = assignees
         .iter()

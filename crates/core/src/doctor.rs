@@ -393,9 +393,11 @@ pub(crate) fn collect_doctor_issues_at_date(
     repo_root: impl AsRef<Path>,
     today: NaiveDate,
 ) -> Result<Vec<DoctorIssue>> {
-    let repository = read_repository(repo_root)?;
-    let validation = validate_repository(&repository.repo_root)?;
-    let config = load_kanban_config(&repository.repo_root)?;
+    let config = load_kanban_config(repo_root)?;
+    let repository = read_repository_with_config(&config)?;
+    // `validate_parsed_repository` consumes the repository, so hand it a clone
+    // rather than reading the backlog a second time.
+    let validation = validate_parsed_repository(repository.clone(), &config)?;
     let sprints_enabled = config.features().sprints;
     let sprint_specs = if sprints_enabled {
         discover_sprint_folder_specs(&config)?
@@ -561,18 +563,19 @@ pub(crate) fn collect_doctor_issues_at_date(
     }
 
     if config.features().epics {
-        for epic_file in collect_epic_files(&repository.repo_root)? {
-            let epic = read_epic_file(&epic_file, &repository.repo_root)?;
-            let details = find_epic(
-                &repository.repo_root,
-                epic.frontmatter
-                    .get("id")
-                    .map(String::as_str)
-                    .unwrap_or_default(),
-            )?;
-            let Some(details) = details else {
+        // Read every epic source once; resolving each epic through `find_epic`
+        // would rescan the whole backlog per epic.
+        let epic_sources = read_epic_sources(&config)?;
+        for epic in &epic_sources {
+            let epic_id = epic
+                .frontmatter
+                .get("id")
+                .map(String::as_str)
+                .unwrap_or_default();
+            let Some(canonical) = select_epic_source(&epic_sources, epic_id) else {
                 continue;
             };
+            let details = epic_details_from_source(&repository, &config, canonical);
             if let Some(warning) = epic_status_warning(&details) {
                 let suggested_status = if details
                     .stories_by_status
@@ -994,9 +997,7 @@ pub(crate) fn doctor_timestamp_input_with_preview(
 }
 
 pub(crate) fn validate_doctor_timestamp(timestamp: &str) -> Result<()> {
-    let timestamp_pattern = Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}$")
-        .expect("valid timestamp regex");
-    if !timestamp_pattern.is_match(timestamp) {
+    if !crate::regexes::LOCAL_TIMESTAMP.is_match(timestamp) {
         bail!("Enter a timestamp as local ISO 8601 with numeric timezone offset.");
     }
     Ok(())

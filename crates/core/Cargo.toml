@@ -4,6 +4,11 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 
+[features]
+# Exposes generated backlog fixtures and read-path instrumentation counters to
+# downstream test targets. Never enabled for a release build.
+test-support = []
+
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true

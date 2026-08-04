@@ -38,8 +38,9 @@ pub(crate) struct SprintReadmeInfo {
 }
 
 pub fn summarize_sprints(repo_root: impl AsRef<Path>) -> Result<Vec<SprintOverview>> {
-    let repository = read_repository(repo_root)?;
-    summarize_sprints_from_repository(&repository)
+    let config = load_kanban_config(repo_root)?;
+    let repository = read_repository_with_config(&config)?;
+    summarize_sprints_from_repository(&repository, &config)
 }
 
 pub fn summarize_current_sprint(repo_root: impl AsRef<Path>) -> Result<SprintOverview> {
@@ -50,14 +51,16 @@ pub fn summarize_current_sprint_at_date(
     repo_root: impl AsRef<Path>,
     today: NaiveDate,
 ) -> Result<SprintOverview> {
-    let repository = read_repository(repo_root)?;
-    let sprints = summarize_sprints_from_repository(&repository)?;
+    let config = load_kanban_config(repo_root)?;
+    let repository = read_repository_with_config(&config)?;
+    let sprints = summarize_sprints_from_repository(&repository, &config)?;
     select_current_sprint(&sprints, today)
 }
 
 pub fn summarize_sprint(repo_root: impl AsRef<Path>, sprint_name: &str) -> Result<SprintOverview> {
-    let repository = read_repository(repo_root)?;
-    let sprints = summarize_sprints_from_repository(&repository)?;
+    let config = load_kanban_config(repo_root)?;
+    let repository = read_repository_with_config(&config)?;
+    let sprints = summarize_sprints_from_repository(&repository, &config)?;
     sprints
         .into_iter()
         .find(|sprint| sprint.sprint_name == sprint_name)
@@ -75,8 +78,9 @@ pub fn list_current_sprint_stories(
 pub fn list_next_sprint_stories(
     repo_root: impl AsRef<Path>,
 ) -> Result<(String, Vec<StoryOverview>)> {
-    let repository = read_repository(repo_root)?;
-    let sprints = summarize_sprints_from_repository(&repository)?;
+    let config = load_kanban_config(repo_root)?;
+    let repository = read_repository_with_config(&config)?;
+    let sprints = summarize_sprints_from_repository(&repository, &config)?;
     let current = select_current_sprint(&sprints, Local::now().date_naive())?;
     let current_number = parse_sprint_number(&current.sprint_name).ok_or_else(|| {
         anyhow!(
@@ -203,7 +207,7 @@ pub fn rollover_sprint(
 ) -> Result<RolloverResult> {
     let config = load_kanban_config(repo_root)?;
     let repo_root = config.repo_root.clone();
-    let repository = read_repository(&repo_root)?;
+    let repository = read_repository_with_config(&config)?;
     let specs = discover_sprint_folder_specs(&config)?;
     let current_spec = specs
         .iter()
@@ -286,12 +290,17 @@ pub fn rollover_sprint(
     })
 }
 
-pub(crate) fn summarize_sprints_from_repository(
+/// Build sprint overviews from an already-parsed repository and its config.
+///
+/// This is the non-reloading entry point: it performs no git root resolution
+/// and no `.kanban/settings.json` parse of its own, so a caller that already
+/// holds both can derive sprints without a second repository read.
+pub fn summarize_sprints_from_repository(
     repository: &Repository,
+    config: &KanbanConfig,
 ) -> Result<Vec<SprintOverview>> {
     let today = Local::now().date_naive();
-    let config = load_kanban_config(&repository.repo_root)?;
-    let specs = discover_sprint_folder_specs(&config)?;
+    let specs = discover_sprint_folder_specs(config)?;
     let mut sprints = specs
         .iter()
         .map(|spec| sprint_overview_from_spec(repository, spec, today))
@@ -546,7 +555,7 @@ pub(crate) fn readme_table_value(markdown: &str, key: &str) -> Option<String> {
 }
 
 pub(crate) fn parse_sprint_file_name(file_name: &str) -> Option<(String, String)> {
-    let pattern = Regex::new(SPRINT_FILE_PATTERN).expect("valid sprint file regex");
+    let pattern = &*crate::regexes::SPRINT_FILE_NAME;
     let captures = pattern.captures(file_name)?;
     let sprint_id = captures.get(1)?.as_str().to_string();
     let headline = captures.get(2)?.as_str().to_string();
@@ -578,7 +587,7 @@ pub(crate) fn regenerate_sprint_roster(config: &KanbanConfig, sprint_name: &str)
     if !sprint_file.is_file() {
         return Ok(false);
     }
-    let repository = read_repository(&config.repo_root)?;
+    let repository = read_repository_with_config(config)?;
     let rows = repository
         .stories
         .iter()

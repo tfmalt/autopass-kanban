@@ -8,19 +8,42 @@ mod lock;
 mod markdown;
 mod model;
 mod phase;
+mod regexes;
 mod repository;
 mod sprint;
 mod sprint_roster;
 mod status;
 mod story;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testsupport;
 #[cfg(test)]
 mod testutil;
 mod util;
 mod validate;
 
+/// Read-path instrumentation counters (B1-B4 in the loading improvement plan).
+///
+/// Only compiled for tests or with the `test-support` feature; production
+/// builds get the inlined no-op shims below, so no global mutable state ships.
+#[cfg(any(test, feature = "test-support"))]
+pub mod instrument;
+
+#[cfg(not(any(test, feature = "test-support")))]
+mod instrument {
+    #[inline(always)]
+    pub(crate) fn record_git_root_resolution() {}
+    #[inline(always)]
+    pub(crate) fn record_settings_parse() {}
+    #[inline(always)]
+    pub(crate) fn record_story_parse() {}
+    #[inline(always)]
+    pub(crate) fn record_epic_parse() {}
+}
+
 pub(crate) mod prelude {
     pub(crate) use anyhow::{Context, Result, anyhow, bail};
     pub(crate) use chrono::{Datelike, Days, Local, NaiveDate, TimeZone, Weekday};
+    #[allow(unused_imports)]
     pub(crate) use regex::Regex;
     pub(crate) use serde::{Deserialize, Serialize};
     pub(crate) use std::collections::{BTreeMap, BTreeSet};

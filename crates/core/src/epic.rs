@@ -27,23 +27,76 @@ pub(crate) fn epic_status_warning(details: &EpicDetails) -> Option<String> {
 }
 
 pub fn find_epic(repo_root: impl AsRef<Path>, epic_id: &str) -> Result<Option<EpicDetails>> {
-    let repo_root = repo_root.as_ref();
-    let repository = read_repository(repo_root)?;
-    let epic = find_epic_source(repo_root, epic_id)?;
-    Ok(epic.map(|epic| epic_details_from_parts(repo_root, &repository, &epic)))
+    let config = load_kanban_config(repo_root)?;
+    let repository = read_repository_with_config(&config)?;
+    find_epic_in_repository(&repository, &config, epic_id)
 }
 
 pub fn find_epic_with_source(
     repo_root: impl AsRef<Path>,
     epic_id: &str,
 ) -> Result<Option<(EpicDetails, Epic)>> {
-    let repo_root = repo_root.as_ref();
-    let repository = read_repository(repo_root)?;
-    let epic = find_epic_source(repo_root, epic_id)?;
+    let config = load_kanban_config(repo_root)?;
+    let repository = read_repository_with_config(&config)?;
+    let epic = find_epic_source_with_config(&config, epic_id)?;
     Ok(epic.map(|epic| {
-        let details = epic_details_from_parts(repo_root, &repository, &epic);
+        let details = epic_details_from_parts(&config.repo_root, &repository, &epic);
         (details, epic)
     }))
+}
+
+/// Config-aware, non-reloading variant of [`find_epic`].
+///
+/// Callers that already parsed the repository must use this: [`find_epic`]
+/// performs a full `read_repository` plus a full epic-file rescan, so calling it
+/// inside a loop over epics is quadratic in repository size.
+pub fn find_epic_in_repository(
+    repository: &Repository,
+    config: &KanbanConfig,
+    epic_id: &str,
+) -> Result<Option<EpicDetails>> {
+    let epic = find_epic_source_with_config(config, epic_id)?;
+    Ok(epic.map(|epic| epic_details_from_parts(&config.repo_root, repository, &epic)))
+}
+
+/// Read every epic source in the backlog exactly once, in `collect_epic_files`
+/// order.
+///
+/// Callers that need more than one epic must read the sources once and resolve
+/// against the returned slice with [`select_epic_source`]; resolving each epic
+/// through [`find_epic`] rescans the whole backlog per epic.
+pub fn read_epic_sources(config: &KanbanConfig) -> Result<Vec<Epic>> {
+    collect_epic_files_with_config(config)?
+        .into_iter()
+        .map(|path| read_epic_file_with_config(path, config))
+        .collect()
+}
+
+/// Resolve the canonical epic source for `epic_id` from already-read sources.
+///
+/// Matching is case-insensitive on the frontmatter `id`; ties are broken by the
+/// lowest `relative_path`. Sources without an `id` never match, which is what
+/// makes an epic file with no `id` frontmatter invisible to epic lookups.
+pub fn select_epic_source<'a>(sources: &'a [Epic], epic_id: &str) -> Option<&'a Epic> {
+    let normalized = epic_id.trim().to_ascii_uppercase();
+    sources
+        .iter()
+        .filter(|epic| {
+            epic.frontmatter
+                .get("id")
+                .map(|id| id.eq_ignore_ascii_case(&normalized))
+                .unwrap_or(false)
+        })
+        .min_by(|left, right| left.relative_path.cmp(&right.relative_path))
+}
+
+/// Build [`EpicDetails`] for an already-read epic source and repository.
+pub fn epic_details_from_source(
+    repository: &Repository,
+    config: &KanbanConfig,
+    epic: &Epic,
+) -> EpicDetails {
+    epic_details_from_parts(&config.repo_root, repository, epic)
 }
 
 pub fn update_epic_frontmatter(
@@ -69,7 +122,7 @@ pub fn update_epic_frontmatter(
         }
     }
 
-    let epic = find_epic_source(&config.repo_root, &normalized_epic_id)?
+    let epic = find_epic_source_with_config(&config, &normalized_epic_id)?
         .ok_or_else(|| KanbanError::epic_not_found(&normalized_epic_id))?;
     let update_refs = updates
         .iter()
@@ -90,23 +143,9 @@ pub fn update_epic_frontmatter(
     })
 }
 
-fn find_epic_source(repo_root: &Path, epic_id: &str) -> Result<Option<Epic>> {
-    let normalized = epic_id.trim().to_ascii_uppercase();
-    let mut matches = collect_epic_files(repo_root)?
-        .into_iter()
-        .map(|path| read_epic_file(path, repo_root))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .filter(|epic| {
-            epic.frontmatter
-                .get("id")
-                .map(|id| id.eq_ignore_ascii_case(&normalized))
-                .unwrap_or(false)
-        })
-        .collect::<Vec<_>>();
-
-    matches.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    Ok(matches.into_iter().next())
+fn find_epic_source_with_config(config: &KanbanConfig, epic_id: &str) -> Result<Option<Epic>> {
+    let sources = read_epic_sources(config)?;
+    Ok(select_epic_source(&sources, epic_id).cloned())
 }
 
 fn epic_details_from_parts(repo_root: &Path, repository: &Repository, epic: &Epic) -> EpicDetails {

@@ -1,5 +1,6 @@
 use crate::config::*;
 use crate::constants::*;
+use crate::epic::read_epic_sources;
 use crate::error::KanbanError;
 use crate::lock::RepoLock;
 use crate::markdown::*;
@@ -14,6 +15,14 @@ use crate::util::*;
 pub fn list_all_stories(repo_root: impl AsRef<Path>) -> Result<Vec<StoryOverview>> {
     let repository = read_repository(repo_root)?;
     Ok(unique_story_overviews(&repository))
+}
+
+/// Non-reloading variant of [`list_all_stories`].
+///
+/// Derives the deduplicated story overviews from an already-parsed repository,
+/// so a caller that also needs the raw stories does not read the backlog twice.
+pub fn story_overviews_from_repository(repository: &Repository) -> Vec<StoryOverview> {
+    unique_story_overviews(repository)
 }
 
 pub fn move_story_to_status(
@@ -33,7 +42,7 @@ pub fn move_story_to_status_with_assignee(
     let config = load_kanban_config(repo_root)?;
     let _lock = RepoLock::acquire(&config.repo_root)?;
     let sprints_enabled = config.features().sprints;
-    let repository = read_repository(&config.repo_root)?;
+    let repository = read_repository_with_config(&config)?;
     let normalized_story_id = story_id.trim().to_ascii_uppercase();
     let normalized_status = normalize_story_status_input(target_status)?;
     let assignee_override = match assignee_override {
@@ -113,7 +122,7 @@ pub fn move_story_to_status_with_assignee(
         &now,
     )?;
     if sprints_enabled {
-        regenerate_sprint_roster(&load_kanban_config(&repository.repo_root)?, &sprint_name)?;
+        regenerate_sprint_roster(&config, &sprint_name)?;
     }
     Ok(MoveStoryResult {
         story_id: normalized_story_id,
@@ -192,17 +201,12 @@ fn sync_parent_epic_for_story_move(
         return Ok(());
     };
 
-    let epic = collect_epic_files(&config.repo_root)?
-        .into_iter()
-        .map(|path| read_epic_file(path, &config.repo_root))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .find(|epic| {
-            epic.frontmatter
-                .get("id")
-                .map(|id| id.eq_ignore_ascii_case(epic_id))
-                .unwrap_or(false)
-        });
+    let epic = read_epic_sources(config)?.into_iter().find(|epic| {
+        epic.frontmatter
+            .get("id")
+            .map(|id| id.eq_ignore_ascii_case(epic_id))
+            .unwrap_or(false)
+    });
 
     let Some(epic) = epic else {
         return Ok(());
@@ -275,7 +279,7 @@ pub fn plan_story_into_sprint(
         .cloned()
         .ok_or_else(|| KanbanError::sprint_not_found(sprint_query))?;
 
-    let repository = read_repository(&repo_root)?;
+    let repository = read_repository_with_config(&config)?;
     let story = repository
         .stories
         .iter()
@@ -333,7 +337,7 @@ pub fn plan_story_into_sprint(
 pub fn delete_story(repo_root: impl AsRef<Path>, story_id: &str) -> Result<DeleteStoryResult> {
     let config = load_kanban_config(repo_root)?;
     let _lock = RepoLock::acquire(&config.repo_root)?;
-    let repository = read_repository(&config.repo_root)?;
+    let repository = read_repository_with_config(&config)?;
     let story = find_story_for_write(&repository, story_id)?.clone();
     let story_id_value = story.fields.id.clone();
     let sprint_name = story
@@ -573,7 +577,7 @@ pub fn update_story_frontmatter(
 ) -> Result<StoryUpdateResult> {
     let config = load_kanban_config(repo_root)?;
     let _lock = RepoLock::acquire(&config.repo_root)?;
-    let repository = read_repository(&config.repo_root)?;
+    let repository = read_repository_with_config(&config)?;
     let story = find_story_for_write(&repository, story_id)?;
     if updates.is_empty() {
         return Err(
