@@ -9,26 +9,26 @@ use anyhow::{Context, Result};
 use axum::Json;
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
-use axum::http::{HeaderValue, StatusCode, Uri, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use chrono::{Days, Local};
-use include_dir::{Dir, include_dir};
 use kanban_core::*;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tokio::task;
 
 use crate::AppState;
+use crate::changes::ChangeBroadcaster;
 use crate::dto::*;
 use crate::metrics::*;
+use crate::read_model::WebReadModel;
 use crate::snapshot::{load_epic_detail, load_repository_snapshot, load_story_detail};
 use crate::sprint_io::{
     CreateSprintInputWeb, UpdateSprintInput, parse_date_or, update_sprint_file,
 };
 use crate::team::load_team;
 
-static WEB_ASSETS: Dir<'_> = include_dir!("$KANBAN_WEB_ASSET_DIR");
 const SSE_SUBSCRIBER_CAP: usize = 64;
 
 struct SseSubscriberGuard {
@@ -122,13 +122,7 @@ pub(crate) async fn api_metrics(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<DashboardMetrics>, ApiResponse> {
     let repo_root = state.repo_root.clone();
-    let metrics = run_blocking(move || {
-        let web_snapshot = load_repository_snapshot(&repo_root)?;
-        let stories = list_all_stories(&repo_root)?;
-        let sprints = summarize_sprints(&repo_root)?;
-        Ok(compute_metrics(&web_snapshot, &stories, &sprints))
-    })
-    .await?;
+    let metrics = run_blocking(move || Ok(WebReadModel::build(&repo_root)?.metrics())).await?;
     Ok(Json(metrics))
 }
 
@@ -136,20 +130,7 @@ pub(crate) async fn api_report(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<WebReportDashboard>, ApiResponse> {
     let repo_root = state.repo_root.clone();
-    let report = run_blocking(move || {
-        let stories = list_all_stories(&repo_root)?;
-        let sprints = summarize_sprints(&repo_root)?;
-        let current_sprint_name = sprints
-            .iter()
-            .find(|sprint| sprint.readme_status.as_deref() == Some("active"))
-            .map(|sprint| sprint.sprint_name.as_str());
-        Ok(WebReportDashboard::from(ReportDashboardDto::build(
-            &stories,
-            &sprints,
-            current_sprint_name,
-        )))
-    })
-    .await?;
+    let report = run_blocking(move || Ok(WebReadModel::build(&repo_root)?.report())).await?;
     Ok(Json(report))
 }
 
@@ -189,17 +170,19 @@ pub(crate) async fn api_team_avatar(
     let avatars_dir = state.repo_root.join(".kanban").join("team_avatars");
     let file_path = avatars_dir.join(&path);
 
-    let canonical = file_path
-        .canonicalize()
-        .map_err(|_| ApiResponse::not_found("not found"))?;
-    if !canonical.starts_with(&avatars_dir) {
-        return Err(ApiResponse::not_found("invalid path"));
-    }
-    if !canonical.is_file() {
-        return Err(ApiResponse::not_found("not found"));
-    }
-
-    let data = fs::read(&canonical).map_err(|_| ApiResponse::not_found("not found"))?;
+    // US-023: canonicalize + read are blocking filesystem calls and must not run
+    // on the async runtime.
+    let data = run_blocking(move || {
+        let canonical = file_path
+            .canonicalize()
+            .with_context(|| format!("resolve avatar {}", file_path.display()))?;
+        if !canonical.starts_with(&avatars_dir) || !canonical.is_file() {
+            anyhow::bail!("avatar path is outside the avatars directory");
+        }
+        fs::read(&canonical).with_context(|| format!("read avatar {}", canonical.display()))
+    })
+    .await
+    .map_err(|_| ApiResponse::not_found("not found"))?;
     let mime = mime_guess::from_path(&path).first_or_octet_stream();
     if mime.type_().as_str() != "image" {
         let mut response = ApiResponse::not_found("not found").into_response();
@@ -258,7 +241,7 @@ pub(crate) async fn api_move_story(
         move_story_to_status_with_assignee(&repo_root, &id_for_move, &status, assignee.as_deref())
     })
     .await?;
-    let _ = state.events.send(());
+    state.changes.notify();
     Ok(Json(
         json!({ "ok": true, "data": MoveStoryDto::from_result(&result, &state.repo_root) }),
     ))
@@ -275,7 +258,7 @@ pub(crate) async fn api_plan_story(
     let sprint = input.sprint.clone();
     let result =
         run_blocking(move || plan_story_into_sprint(&repo_root, &id_for_plan, &sprint)).await?;
-    let _ = state.events.send(());
+    state.changes.notify();
     Ok(Json(
         json!({ "ok": true, "data": PlanStoryDto::from_result(&result, &state.repo_root) }),
     ))
@@ -311,7 +294,7 @@ pub(crate) async fn api_update_task(
         )
     })
     .await?;
-    let _ = state.events.send(());
+    state.changes.notify();
     Ok(Json(
         json!({ "ok": true, "data": TaskMutationDto::from_result(&result, &state.repo_root) }),
     ))
@@ -334,7 +317,7 @@ pub(crate) async fn api_update_story_body(
             .with_context(|| format!("write story file {}", source.file_path.display()))
     })
     .await?;
-    let _ = state.events.send(());
+    state.changes.notify();
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -370,7 +353,7 @@ pub(crate) async fn api_update_story_fields(
     let result =
         run_blocking(move || update_story_frontmatter(&repo_root, &id_for_update, &updates))
             .await?;
-    let _ = state.events.send(());
+    state.changes.notify();
     Ok(Json(
         json!({ "ok": true, "data": StoryUpdateDto::from_result(&result, &state.repo_root) }),
     ))
@@ -407,7 +390,7 @@ pub(crate) async fn api_update_epic_fields(
     let id_for_update = id.clone();
     let result =
         run_blocking(move || update_epic_frontmatter(&repo_root, &id_for_update, &updates)).await?;
-    let _ = state.events.send(());
+    state.changes.notify();
     Ok(Json(
         json!({ "ok": true, "data": EpicUpdateDto::from_result(&result, &state.repo_root) }),
     ))
@@ -439,7 +422,7 @@ pub(crate) async fn api_create_sprint(
         create_sprint(&repo_root, &create_input)
     })
     .await?;
-    let _ = state.events.send(());
+    state.changes.notify();
     Ok(Json(
         json!({ "ok": true, "data": SprintCreateDto::from_result(&result, &state.repo_root) }),
     ))
@@ -455,60 +438,106 @@ pub(crate) async fn api_update_sprint(
     let name_for_update = name.clone();
     let result =
         run_blocking(move || update_sprint_file(&repo_root, &name_for_update, input)).await?;
-    let _ = state.events.send(());
+    state.changes.notify();
     Ok(Json(json!({ "ok": true, "data": result })))
 }
 
-pub(crate) async fn api_events(State(state): State<Arc<AppState>>) -> Response {
+/// State carried through the SSE stream.
+///
+/// The subscriber guard lives here rather than in `api_events`'s body: a local
+/// `_guard` would be dropped the moment the handler returned the response, so
+/// the subscriber count would fall back to zero while the stream was still
+/// open and `SSE_SUBSCRIBER_CAP` would never actually bound anything.
+struct SseStream {
+    rx: broadcast::Receiver<u64>,
+    changes: ChangeBroadcaster,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+    /// Emitted before the first live event when the client is known to have
+    /// missed changes (reconnect gap or a lagged receiver).
+    pending_resync: Option<u64>,
+    _guard: SseSubscriberGuard,
+}
+
+fn change_event(generation: u64, reason: &str) -> Event {
+    Event::default()
+        .id(generation.to_string())
+        .event("change")
+        .data(json!({ "generation": generation, "reason": reason }).to_string())
+}
+
+pub(crate) async fn api_events(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     let previous = state.sse_subscribers.fetch_add(1, Ordering::SeqCst);
     if previous >= SSE_SUBSCRIBER_CAP {
         state.sse_subscribers.fetch_sub(1, Ordering::SeqCst);
         return (StatusCode::SERVICE_UNAVAILABLE, "too many SSE subscribers").into_response();
     }
-    let _guard = SseSubscriberGuard {
+    let guard = SseSubscriberGuard {
         count: state.sse_subscribers.clone(),
     };
-    let rx = state.events.subscribe();
-    let stream = futures::stream::unfold(rx, |mut rx| async move {
-        loop {
-            match rx.recv().await {
-                Ok(()) => {
-                    return Some((
-                        Ok::<Event, Infallible>(Event::default().event("change").data("{}")),
-                        rx,
-                    ));
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => return None,
+
+    // Subscribe before reading the current generation so no change can slip
+    // between the two and be missed by both the resync check and the stream.
+    let rx = state.changes.subscribe();
+    let current = state.changes.current_generation();
+
+    // `EventSource` replays the last seen id on reconnect. If the client is
+    // behind, it missed every change during the gap; tell it to resynchronize
+    // immediately instead of waiting for the next unrelated edit.
+    let pending_resync = last_event_id(&headers)
+        .filter(|seen| *seen < current)
+        .map(|_| current);
+
+    let stream = futures::stream::unfold(
+        SseStream {
+            rx,
+            changes: state.changes.clone(),
+            shutdown: state.shutdown.clone(),
+            pending_resync,
+            _guard: guard,
+        },
+        |mut state| async move {
+            if let Some(generation) = state.pending_resync.take() {
+                return Some((
+                    Ok::<Event, Infallible>(change_event(generation, "resync")),
+                    state,
+                ));
             }
-        }
-    });
+            if *state.shutdown.borrow() {
+                return None;
+            }
+            let next = tokio::select! {
+                // End the stream on shutdown so the connection closes and the
+                // server's graceful shutdown can actually complete.
+                _ = state.shutdown.changed() => return None,
+                next = state.rx.recv() => next,
+            };
+            match next {
+                Ok(generation) => Some((Ok(change_event(generation, "change")), state)),
+                // The subscriber fell behind the broadcast buffer. Silently
+                // continuing would drop those changes permanently, so tell the
+                // client to refetch at the current generation instead.
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    let generation = state.changes.current_generation();
+                    Some((Ok(change_event(generation, "resync")), state))
+                }
+                Err(broadcast::error::RecvError::Closed) => None,
+            }
+        },
+    );
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response()
 }
 
-pub(crate) async fn static_asset(uri: Uri) -> Response {
-    let mut path = uri.path().trim_start_matches('/');
-    if path.is_empty() {
-        path = "index.html";
-    }
-    let file = WEB_ASSETS
-        .get_file(path)
-        .or_else(|| WEB_ASSETS.get_file("index.html"));
-    match file {
-        Some(file) => {
-            let mime = mime_guess::from_path(file.path()).first_or_octet_stream();
-            let mut response = Body::from(file.contents().to_vec()).into_response();
-            response.headers_mut().insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_str(mime.as_ref())
-                    .unwrap_or(HeaderValue::from_static("application/octet-stream")),
-            );
-            response
-        }
-        None => (StatusCode::NOT_FOUND, "kanban web assets are not embedded").into_response(),
-    }
+fn last_event_id(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+}
+
+pub(crate) async fn static_asset(uri: Uri, headers: HeaderMap) -> Response {
+    crate::static_assets::serve(&uri, &headers)
 }
 
 const GIT_PULL_TIMEOUT_SECS: u64 = 60;
@@ -589,7 +618,7 @@ pub(crate) async fn api_git_pull(
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
             if output.status.success() {
-                let _ = state.events.send(());
+                state.changes.notify();
                 Ok(Json(GitPullResponse {
                     ok: true,
                     status: "success",
@@ -715,7 +744,7 @@ mod tests {
     use super::*;
     use axum::http::StatusCode;
     use std::sync::Arc;
-    use tokio::sync::{Mutex, broadcast};
+    use tokio::sync::Mutex;
 
     #[test]
     fn replace_markdown_body_preserves_frontmatter() {
@@ -758,37 +787,170 @@ mod tests {
 
     #[tokio::test]
     async fn cached_git_branch_returns_cached_value_without_repo_access() {
-        let (events, _) = broadcast::channel(8);
-        let state = crate::AppState {
-            repo_root: std::path::PathBuf::from("/tmp/does-not-need-to-exist"),
-            host: "127.0.0.1".to_string(),
-            port: 8080,
-            branch_cache: Arc::new(Mutex::new(Some("cached-branch".to_string()))),
-            sse_subscribers: Arc::new(AtomicUsize::new(0)),
-            events,
-            write_lock: Arc::new(Mutex::new(())),
-            pull_in_progress: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        };
+        let mut state =
+            crate::AppState::for_test(std::path::PathBuf::from("/tmp/does-not-need-to-exist"));
+        state.branch_cache = Arc::new(Mutex::new(Some("cached-branch".to_string())));
         let branch = cached_git_branch(&state)
             .await
             .expect("cached branch should resolve");
         assert_eq!(branch, "cached-branch");
     }
 
+    /// Every emitted SSE frame must carry the generation as its event id, so a
+    /// reconnecting `EventSource` can tell the server where it left off.
+    #[test]
+    fn change_events_carry_the_generation_as_the_event_id() {
+        let rendered = format!("{:?}", change_event(7, "change"));
+        assert!(
+            rendered.contains('7'),
+            "event id must be present: {rendered}"
+        );
+    }
+
+    #[test]
+    fn last_event_id_parses_only_well_formed_generations() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(last_event_id(&headers), None);
+        headers.insert("last-event-id", HeaderValue::from_static(" 42 "));
+        assert_eq!(last_event_id(&headers), Some(42));
+        headers.insert("last-event-id", HeaderValue::from_static("not-a-number"));
+        assert_eq!(last_event_id(&headers), None);
+    }
+
+    /// A client that reconnects behind the current generation missed every
+    /// change in the gap, so the stream must open with a resync rather than
+    /// waiting for the next unrelated edit.
+    #[tokio::test(start_paused = true)]
+    async fn reconnect_behind_the_current_generation_receives_an_immediate_resync() {
+        use futures::StreamExt;
+
+        let state = Arc::new(crate::AppState::for_test(std::path::PathBuf::from(
+            "/tmp/nonexistent-sse-test",
+        )));
+
+        // Advance the server two generations while no client is connected.
+        // A probe subscriber makes publication observable, so the test never
+        // has to guess how many scheduler turns the coalescer needs.
+        let mut probe = state.changes.subscribe();
+        for expected in 1..=2 {
+            state.changes.notify();
+            assert_eq!(probe.recv().await.unwrap(), expected);
+        }
+        assert_eq!(state.changes.current_generation(), 2);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("last-event-id", HeaderValue::from_static("1"));
+        let response = api_events(State(state.clone()), headers).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut body = response.into_body().into_data_stream();
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(1), body.next())
+            .await
+            .expect("resync frame must be emitted without waiting for a new change")
+            .expect("stream must yield")
+            .expect("frame must not error");
+        let frame = String::from_utf8_lossy(&frame).into_owned();
+        assert!(
+            frame.contains("id: 2"),
+            "expected resync at generation 2: {frame}"
+        );
+        assert!(
+            frame.contains("resync"),
+            "expected a resync reason: {frame}"
+        );
+    }
+
+    /// An up-to-date client must not be told to refetch on connect.
+    #[tokio::test(start_paused = true)]
+    async fn reconnect_at_the_current_generation_emits_nothing() {
+        use futures::StreamExt;
+
+        let state = Arc::new(crate::AppState::for_test(std::path::PathBuf::from(
+            "/tmp/nonexistent-sse-test",
+        )));
+        let mut probe = state.changes.subscribe();
+        state.changes.notify();
+        assert_eq!(probe.recv().await.unwrap(), 1);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("last-event-id", HeaderValue::from_static("1"));
+        let response = api_events(State(state.clone()), headers).await;
+        let mut body = response.into_body().into_data_stream();
+
+        let idle = tokio::time::timeout(std::time::Duration::from_millis(50), body.next()).await;
+        assert!(
+            idle.is_err(),
+            "a client already at the current generation must receive no resync"
+        );
+    }
+
+    /// A live-reload stream must end when shutdown begins.
+    ///
+    /// `axum::serve(..).with_graceful_shutdown(..)` waits for in-flight
+    /// connections after the signal arrives, and an SSE stream never ends on its
+    /// own. Without this the server survives SIGTERM for as long as any browser
+    /// tab is open, and `kanban web stop` falls through to SIGKILL.
+    #[tokio::test]
+    async fn shutdown_ends_open_live_reload_streams() {
+        use futures::StreamExt;
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let mut state =
+            crate::AppState::for_test(std::path::PathBuf::from("/tmp/nonexistent-sse-test"));
+        state.shutdown = shutdown_rx;
+        let state = Arc::new(state);
+
+        let response = api_events(State(state.clone()), HeaderMap::new()).await;
+        let mut body = response.into_body().into_data_stream();
+
+        // Nothing changed, so the stream is parked on the broadcast receiver.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), body.next())
+                .await
+                .is_err()
+        );
+
+        shutdown_tx.send(true).expect("signal shutdown");
+        let ended = tokio::time::timeout(Duration::from_secs(1), body.next())
+            .await
+            .expect("the stream must end promptly on shutdown");
+        assert!(ended.is_none(), "the stream must terminate, not emit");
+        assert_eq!(
+            state.sse_subscribers.load(Ordering::SeqCst),
+            0,
+            "ending the stream must release the subscriber slot"
+        );
+    }
+
+    /// The subscriber guard must outlive the handler: it lives in the stream so
+    /// `SSE_SUBSCRIBER_CAP` bounds concurrently open streams, not concurrently
+    /// executing handlers.
+    #[tokio::test]
+    async fn subscriber_count_stays_held_while_the_stream_is_open() {
+        let state = Arc::new(crate::AppState::for_test(std::path::PathBuf::from(
+            "/tmp/nonexistent-sse-test",
+        )));
+        let response = api_events(State(state.clone()), HeaderMap::new()).await;
+        assert_eq!(
+            state.sse_subscribers.load(Ordering::SeqCst),
+            1,
+            "an open stream must count as a subscriber"
+        );
+        drop(response);
+        assert_eq!(
+            state.sse_subscribers.load(Ordering::SeqCst),
+            0,
+            "closing the stream must release the slot"
+        );
+    }
+
     #[tokio::test]
     async fn sse_subscriber_cap_rejects_over_limit() {
-        let (events, _) = broadcast::channel(8);
-        let state = Arc::new(crate::AppState {
-            repo_root: std::path::PathBuf::from("/tmp/nonexistent-csrf-test"),
-            host: "127.0.0.1".to_string(),
-            port: 8080,
-            branch_cache: Arc::new(Mutex::new(None)),
-            sse_subscribers: Arc::new(AtomicUsize::new(SSE_SUBSCRIBER_CAP)),
-            events,
-            write_lock: Arc::new(Mutex::new(())),
-            pull_in_progress: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        });
-        let response = api_events(State(state.clone())).await;
+        let mut state =
+            crate::AppState::for_test(std::path::PathBuf::from("/tmp/nonexistent-csrf-test"));
+        state.sse_subscribers = Arc::new(AtomicUsize::new(SSE_SUBSCRIBER_CAP));
+        let state = Arc::new(state);
+        let response = api_events(State(state.clone()), HeaderMap::new()).await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             state.sse_subscribers.load(Ordering::SeqCst),

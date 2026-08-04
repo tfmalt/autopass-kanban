@@ -12,19 +12,25 @@ use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, watch};
 
 use kanban_core::*;
 
+#[cfg(test)]
+mod bench;
+mod changes;
 mod dto;
 mod handlers;
 mod metrics;
+mod read_model;
 mod snapshot;
 mod sprint_io;
+mod static_assets;
 mod team;
 #[cfg(test)]
 mod typegen;
 
+use changes::ChangeBroadcaster;
 use dto::ApiError;
 use handlers::{
     api_config, api_create_sprint, api_epic, api_events, api_git_pull, api_metrics, api_move_story,
@@ -47,7 +53,18 @@ struct AppState {
     port: u16,
     branch_cache: Arc<Mutex<Option<String>>>,
     sse_subscribers: Arc<AtomicUsize>,
-    events: broadcast::Sender<()>,
+    /// Coalesces source-change signals into at most one identified `change`
+    /// event per burst. Every mutation handler and the filesystem watcher must
+    /// go through this rather than broadcasting directly (see `changes.rs`).
+    changes: ChangeBroadcaster,
+    /// Set to `true` once a shutdown signal arrives.
+    ///
+    /// `axum::serve(..).with_graceful_shutdown(..)` stops accepting new
+    /// connections and then waits for the in-flight ones to finish. An SSE
+    /// stream never finishes on its own, so without this the server survives
+    /// SIGTERM for as long as any browser tab holds `/api/events` open, and
+    /// `kanban web stop` falls through to SIGKILL after its timeout.
+    shutdown: watch::Receiver<bool>,
     /// In-process write mutex that serializes web-server mutation handlers so
     /// concurrent UI actions cannot interleave read-modify-write sequences on
     /// the markdown source of truth (US-013). The core `RepoLock` provides the
@@ -55,6 +72,32 @@ struct AppState {
     write_lock: Arc<Mutex<()>>,
     /// Guard against concurrent git-pull operations triggered from the web UI.
     pull_in_progress: Arc<AtomicBool>,
+}
+
+#[cfg(test)]
+impl AppState {
+    /// Test builder so tests do not hand-construct every field and drift from
+    /// the production wiring as fields are added.
+    ///
+    /// Must be called from inside a Tokio runtime: `ChangeBroadcaster` spawns
+    /// its coalescing task on construction.
+    pub(crate) fn for_test(repo_root: PathBuf) -> Self {
+        let (shutdown_tx, shutdown) = watch::channel(false);
+        // Keep the sender alive for the lifetime of the state so `changed()`
+        // parks instead of resolving immediately on a closed channel.
+        std::mem::forget(shutdown_tx);
+        Self {
+            repo_root,
+            host: "127.0.0.1".to_string(),
+            port: 8080,
+            branch_cache: Arc::new(Mutex::new(None)),
+            sse_subscribers: Arc::new(AtomicUsize::new(0)),
+            changes: ChangeBroadcaster::new(),
+            shutdown,
+            write_lock: Arc::new(Mutex::new(())),
+            pull_in_progress: Arc::new(AtomicBool::new(false)),
+        }
+    }
 }
 
 pub fn serve_blocking(options: WebServeOptions) -> Result<()> {
@@ -138,17 +181,19 @@ fn normalize_loopback_authority(authority: &str) -> String {
 pub async fn serve(options: WebServeOptions) -> Result<()> {
     let config = load_kanban_config(&options.repo_root)?;
     let repo_root = config.repo_root;
-    let (events, _) = broadcast::channel(128);
+    let changes = ChangeBroadcaster::new();
     let branch_cache = Arc::new(Mutex::new(None));
     let sse_subscribers = Arc::new(AtomicUsize::new(0));
-    let _watcher = start_watcher(&repo_root, events.clone(), branch_cache.clone())?;
+    let _watcher = start_watcher(&repo_root, changes.clone(), branch_cache.clone())?;
+    let (shutdown_tx, shutdown) = watch::channel(false);
     let state = Arc::new(AppState {
         repo_root,
         host: options.host,
         port: options.port,
         branch_cache,
         sse_subscribers,
-        events,
+        changes,
+        shutdown,
         write_lock: Arc::new(Mutex::new(())),
         pull_in_progress: Arc::new(AtomicBool::new(false)),
     });
@@ -190,12 +235,17 @@ pub async fn serve(options: WebServeOptions) -> Result<()> {
         state.repo_root.display()
     );
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(shutdown_tx))
         .await
         .context("run kanban web server")
 }
 
-async fn shutdown_signal() {
+/// Resolve on SIGTERM or Ctrl-C, and tell open SSE streams to end first.
+///
+/// The ordering matters: axum only begins waiting for in-flight connections
+/// after this future resolves, and an SSE stream would otherwise hold one open
+/// indefinitely.
+async fn shutdown_signal(shutdown: watch::Sender<bool>) {
     #[cfg(unix)]
     {
         let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
@@ -209,20 +259,24 @@ async fn shutdown_signal() {
     {
         let _ = tokio::signal::ctrl_c().await;
     }
+    let _ = shutdown.send(true);
 }
 
 fn start_watcher(
     repo_root: &Path,
-    events: broadcast::Sender<()>,
+    changes: ChangeBroadcaster,
     branch_cache: Arc<Mutex<Option<String>>>,
 ) -> Result<RecommendedWatcher> {
     let config = load_kanban_config(repo_root)?;
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         if event.is_ok() {
+            // Branch invalidation stays on the raw event: it is a single
+            // `Option` reset, and delaying it behind the debounce window would
+            // serve a stale branch name for up to a second after a checkout.
             if let Ok(mut cache) = branch_cache.try_lock() {
                 *cache = None;
             }
-            let _ = events.send(());
+            changes.notify();
         }
     })?;
     if config.backlog_path().exists() {
@@ -230,6 +284,12 @@ fn start_watcher(
     }
     if config.sprints_path().exists() {
         watcher.watch(&config.sprints_path(), RecursiveMode::Recursive)?;
+    }
+    // Configuration changes alter which files are served and how they are
+    // interpreted, so `.kanban/settings.json` edits must invalidate too.
+    let config_dir = config.repo_root.join(".kanban");
+    if config_dir.exists() {
+        watcher.watch(&config_dir, RecursiveMode::NonRecursive)?;
     }
     Ok(watcher)
 }
@@ -246,17 +306,9 @@ mod tests {
     }
 
     fn csrf_test_state() -> Arc<AppState> {
-        let (events, _) = broadcast::channel(128);
-        Arc::new(AppState {
-            repo_root: PathBuf::from("/tmp/nonexistent-csrf-test"),
-            host: "127.0.0.1".to_string(),
-            port: 8080,
-            branch_cache: Arc::new(Mutex::new(None)),
-            sse_subscribers: Arc::new(AtomicUsize::new(0)),
-            events,
-            write_lock: Arc::new(Mutex::new(())),
-            pull_in_progress: Arc::new(AtomicBool::new(false)),
-        })
+        Arc::new(AppState::for_test(PathBuf::from(
+            "/tmp/nonexistent-csrf-test",
+        )))
     }
 
     #[tokio::test]

@@ -19,6 +19,16 @@ serde_json.workspace = true
 tokio.workspace = true
 ts-rs.workspace = true
 
+[build-dependencies]
+# Build-time asset fingerprinting and precompression (US-034). These never
+# become runtime dependencies of the shipped binary.
+flate2.workspace = true
+sha2.workspace = true
+
 [dev-dependencies]
+kanban-core = { path = "../core", features = ["test-support"] }
 tempfile.workspace = true
+# `test-util` provides the paused clock the change-coalescing tests use instead
+# of real sleeps. Test-only, so it does not reach the shipped binary.
+tokio = { workspace = true, features = ["test-util"] }
 tower.workspace = true

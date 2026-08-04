@@ -15,22 +15,7 @@ fn story_is_done(story: &WebStory) -> bool {
 }
 
 pub(crate) fn load_repository_snapshot(repo_root: &Path) -> Result<RepositorySnapshot> {
-    let repository = read_repository(repo_root)?;
-    let mut stories = repository
-        .stories
-        .iter()
-        .map(|story| web_story_from_core(&repository.repo_root, story))
-        .collect::<Vec<_>>();
-    stories.sort_by(|a, b| a.id.cmp(&b.id));
-    let epics = load_epics(&repository.repo_root, &stories)?;
-    let sprints = load_sprints(&repository.repo_root, &stories)?;
-    let progress = compute_progress(&stories);
-    Ok(RepositorySnapshot {
-        stories,
-        epics,
-        sprints,
-        progress,
-    })
+    Ok(crate::read_model::WebReadModel::build(repo_root)?.into_snapshot())
 }
 
 pub(crate) fn web_story_from_core(repo_root: &Path, story: &kanban_core::Story) -> WebStory {
@@ -100,29 +85,27 @@ pub(crate) fn load_story_detail(repo_root: &Path, id: &str) -> Result<Option<(We
 }
 
 pub(crate) fn load_epic_detail(repo_root: &Path, id: &str) -> Result<Option<(WebEpic, String)>> {
-    let repository = load_repository_snapshot(repo_root)?;
-    let Some(mut epic) = repository
-        .epics
-        .into_iter()
-        .find(|epic| epic.id.eq_ignore_ascii_case(id))
-    else {
-        return Ok(None);
-    };
-    let source = find_epic_with_source(repo_root, id)?;
-    let body = source.map(|(_, source)| source.body).unwrap_or_default();
-    epic.stories.sort_by(|a, b| a.id.cmp(&b.id));
-    Ok(Some((epic, body)))
+    Ok(crate::read_model::WebReadModel::build(repo_root)?.epic_detail(id))
 }
 
-pub(crate) fn load_epics(repo_root: &Path, stories: &[WebStory]) -> Result<Vec<WebEpic>> {
+/// Group stories under their epics.
+///
+/// `epic_sources` are the already-read `EP-*.md` files in `collect_epic_files`
+/// order. An epic file without an `id` frontmatter field is skipped, and when
+/// several files claim the same id (case-insensitively) the lowest
+/// `relative_path` wins — both behaviors are inherited from the `find_epic`
+/// lookup this function replaced, and the fallback-epic path below still
+/// materializes an epic for any `story.epic` value that has no epic file.
+pub(crate) fn build_epics(epic_sources: &[Epic], stories: &[WebStory]) -> Vec<WebEpic> {
     let mut epics = BTreeMap::<String, WebEpic>::new();
-    for path in collect_epic_files(repo_root)? {
-        let source = read_epic_file(&path, repo_root)?;
-        let source_overview = kanban_core::epic_overview(&source);
-        let Some(details) = find_epic(repo_root, &source_overview.id)? else {
+    for source in epic_sources {
+        let Some(raw_id) = source.frontmatter.get("id") else {
             continue;
         };
-        let overview = details.epic;
+        let Some(canonical) = select_epic_source(epic_sources, raw_id) else {
+            continue;
+        };
+        let overview = epic_overview(canonical);
         let id = overview.id.clone();
         epics.insert(
             id.clone(),
@@ -156,12 +139,28 @@ pub(crate) fn load_epics(repo_root: &Path, stories: &[WebStory]) -> Result<Vec<W
             entry.stories.push(story.clone());
         }
     }
-    Ok(epics.into_values().collect())
+    epics.into_values().collect()
 }
 
-pub(crate) fn load_sprints(repo_root: &Path, stories: &[WebStory]) -> Result<Vec<WebSprint>> {
+/// Epic body markdown keyed by uppercased epic id, first file by path wins.
+pub(crate) fn epic_body_index(epic_sources: &[Epic]) -> BTreeMap<String, String> {
+    let mut bodies = BTreeMap::new();
+    for source in epic_sources {
+        let Some(id) = source.frontmatter.get("id") else {
+            continue;
+        };
+        let Some(canonical) = select_epic_source(epic_sources, id) else {
+            continue;
+        };
+        bodies.insert(id.trim().to_ascii_uppercase(), canonical.body.clone());
+    }
+    bodies
+}
+
+/// Bucket stories into board columns per sprint.
+pub(crate) fn build_sprints(overviews: &[SprintOverview], stories: &[WebStory]) -> Vec<WebSprint> {
     let mut sprints = Vec::new();
-    for overview in summarize_sprints(repo_root)? {
+    for overview in overviews {
         let mut by_status = BOARD_STATUSES
             .iter()
             .map(|status| ((*status).to_string(), Vec::<WebStory>::new()))
@@ -193,17 +192,17 @@ pub(crate) fn load_sprints(repo_root: &Path, stories: &[WebStory]) -> Result<Vec
                 .next()
                 .unwrap_or(overview.sprint_name.as_str())
                 .to_string(),
-            headline: overview.headline,
-            goal: overview.sprint_goal,
-            start_date: Some(overview.start_date),
-            end_date: Some(overview.end_date),
-            status: overview.readme_status,
+            headline: overview.headline.clone(),
+            goal: overview.sprint_goal.clone(),
+            start_date: Some(overview.start_date.clone()),
+            end_date: Some(overview.end_date.clone()),
+            status: overview.readme_status.clone(),
             wip_limit: overview.wip_limit,
             stories_by_status: by_status,
         });
     }
     sprints.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(sprints)
+    sprints
 }
 
 pub(crate) fn compute_progress(stories: &[WebStory]) -> ProjectProgress {

@@ -127,7 +127,7 @@ pub(crate) struct WebEpicDetail {
     pub(crate) body: String,
 }
 
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PhaseSummary {
     pub(crate) phase: String,
@@ -137,7 +137,7 @@ pub(crate) struct PhaseSummary {
     pub(crate) total_stories: usize,
 }
 
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProjectProgress {
     pub(crate) done_points: i64,

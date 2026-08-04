@@ -5,7 +5,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use ts_rs::TS;
 
 use crate::dto::{ProjectProgress, RepositorySnapshot, WebSprint, WebStory};
-use crate::snapshot::compute_progress;
 
 fn story_status(story: &WebStory) -> Option<StoryStatus> {
     StoryStatus::parse(&story.status)
@@ -97,14 +96,16 @@ pub(crate) fn compute_metrics(
     core_stories: &[StoryOverview],
     core_sprints: &[SprintOverview],
 ) -> DashboardMetrics {
-    let progress = compute_progress(&repo.stories);
     DashboardMetrics {
         burndown: build_burndown(&repo.sprints),
         burnup: build_burnup(&repo.stories, &repo.sprints),
         lead_time: build_lead_time(&repo.stories),
         velocity: build_velocity(&repo.sprints),
         forecast: build_forecast(core_stories, core_sprints),
-        progress,
+        // `RepositorySnapshot::progress` is already `compute_progress(stories)`
+        // from the same source read; recomputing it here would derive the same
+        // value twice and allow the two to drift.
+        progress: repo.progress.clone(),
     }
 }
 
