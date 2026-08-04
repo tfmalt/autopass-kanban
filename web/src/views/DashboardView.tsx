@@ -5,6 +5,7 @@ import type { BurnupPoint, DashboardMetrics } from "@shared/generated/api.js";
 import { dateToTime, daysBetween, formatDate } from "@shared/dates.js";
 import { useMetrics, useRepository } from "../api/hooks.js";
 import { PhaseBreakdown } from "../components/PhaseBreakdown.js";
+import { DashboardSkeleton } from "../components/Skeletons.js";
 
 interface ForecastRow {
   time: number;
@@ -154,9 +155,15 @@ function Kpi({ label, value, sub }: { label: string; value: string; sub?: string
 export function DashboardView() {
   const metrics = useMetrics();
   const repository = useRepository();
-  if (metrics.isLoading) return <div className="view">Loading...</div>;
-  if (metrics.error) return <div className="view">Failed to load metrics.</div>;
-  const m = metrics.data!;
+  if (metrics.error && !metrics.data) return <div className="view">Failed to load metrics.</div>;
+  // The phase breakdown is driven by `repository.epics`. Without this check a
+  // failed repository fetch silently rendered an empty phase section that looked
+  // like real "no epics" data.
+  if (repository.error && !repository.data) {
+    return <div className="view">Failed to load the repository snapshot.</div>;
+  }
+  if (!metrics.data || !repository.data) return <DashboardSkeleton />;
+  const m = metrics.data;
   const pct = m.progress.totalPoints === 0 ? 0 : Math.round((m.progress.donePoints / m.progress.totalPoints) * 100);
   const lastLeadTime = m.leadTime.at(-1);
   const forecast = buildForecastModel(m);
@@ -238,7 +245,7 @@ export function DashboardView() {
       </div>
 
       <div style={{ marginTop: 12 }}>
-        <PhaseBreakdown phases={m.progress.phases} epics={repository.data?.epics ?? []} />
+        <PhaseBreakdown phases={m.progress.phases} epics={repository.data.epics} />
       </div>
     </div>
   );

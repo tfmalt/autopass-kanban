@@ -1,7 +1,6 @@
 import { useSortable } from "@dnd-kit/sortable";
-import { useMemo, type CSSProperties } from "react";
+import { type CSSProperties } from "react";
 import type { Story, StoryStatus, TeamMember } from "@shared/generated/api.js";
-import { useTeam } from "../api/hooks.js";
 
 const AVATAR_PALETTE = [
   { bg: "#FDE68A", fg: "#92400E" },
@@ -41,19 +40,16 @@ function initials(name: string): string {
     .slice(0, 2);
 }
 
-function useAssigneeMap(): Map<string, TeamMember> {
-  const team = useTeam();
-  return useMemo(() => {
-    const m = new Map<string, TeamMember>();
-    for (const member of team.data ?? []) {
-      m.set(member.email, member);
-    }
-    return m;
-  }, [team.data]);
-}
+/**
+ * The assignee lookup is resolved once per board (see `useAssigneeMap` in
+ * `api/hooks.ts`) and passed down. Subscribing to the team query inside the card
+ * created one query observer and one `Map` per rendered card.
+ */
+type AssigneeMap = ReadonlyMap<string, TeamMember>;
 
-function CardContent({ story }: { story: Story }) {
-  const assigneeMap = useAssigneeMap();
+const EMPTY_ASSIGNEES: AssigneeMap = new Map();
+
+function CardContent({ story, assigneeMap = EMPTY_ASSIGNEES }: { story: Story; assigneeMap?: AssigneeMap }) {
   return (
     <>
       <div className="tid">{story.id}</div>
@@ -88,7 +84,17 @@ function CardContent({ story }: { story: Story }) {
   );
 }
 
-export function StoryCard({ story, status, onOpen }: { story: Story; status: StoryStatus; onOpen?: (story: Story) => void }) {
+export function StoryCard({
+  story,
+  status,
+  onOpen,
+  assigneeMap,
+}: {
+  story: Story;
+  status: StoryStatus;
+  onOpen?: (story: Story) => void;
+  assigneeMap?: AssigneeMap;
+}) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: story.id,
     data: { type: "story", status },
@@ -107,16 +113,16 @@ export function StoryCard({ story, status, onOpen }: { story: Story; status: Sto
       {...attributes}
       onClick={() => onOpen?.(story)}
     >
-      <CardContent story={story} />
+      <CardContent story={story} assigneeMap={assigneeMap} />
     </div>
   );
 }
 
 /** Non-interactive card rendered inside DragOverlay — follows the cursor with a raised look. */
-export function StoryCardOverlay({ story }: { story: Story }) {
+export function StoryCardOverlay({ story, assigneeMap }: { story: Story; assigneeMap?: AssigneeMap }) {
   return (
     <div className="card card--overlay">
-      <CardContent story={story} />
+      <CardContent story={story} assigneeMap={assigneeMap} />
     </div>
   );
 }

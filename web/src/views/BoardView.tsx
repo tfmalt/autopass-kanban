@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { Suspense, lazy, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -12,15 +12,26 @@ import {
 import { arrayMove, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import type { Story } from "@shared/generated/api.js";
 import { isBoardStatus, STORY_STATUSES } from "@shared/domain.js";
-import { useMoveStory, useReorderStories, useRepository } from "../api/hooks.js";
+import { useAssigneeMap, useMoveStory, useReorderStories, useRepository } from "../api/hooks.js";
+import { BoardSkeleton } from "../components/Skeletons.js";
 import { StoryCardOverlay } from "../components/StoryCard.js";
 import { StoryColumn } from "../components/StoryColumn.js";
-import { StoryModal } from "../components/StoryModal.js";
+
+// StoryModal pulls in DOMPurify and the markdown renderer (~129 KB raw). It is
+// not in the entry chunk, but as a static import it was a dependency of the
+// board route chunk and therefore downloaded on every board visit even when no
+// card was ever opened.
+const StoryModal = lazy(async () => {
+  const module = await import("../components/StoryModal.js");
+  return { default: module.StoryModal };
+});
 
 const BOARD_STATUSES = STORY_STATUSES.filter((status) => status !== "planned");
 
 export function BoardView() {
   const repo = useRepository();
+  // Resolved once for the whole board rather than once per card.
+  const assigneeMap = useAssigneeMap();
   const move = useMoveStory();
   const reorderStories = useReorderStories();
   const [open, setOpen] = useState<Story | null>(null);
@@ -37,10 +48,12 @@ export function BoardView() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  if (repo.isLoading) return <div className="view">Loading...</div>;
-  if (repo.error) return <div className="view">Failed to load: {String(repo.error)}</div>;
+  if (repo.error && !repo.data) return <div className="view">Failed to load: {String(repo.error)}</div>;
+  // `placeholderData: keepPreviousData` keeps the previous board on screen during
+  // a background refetch, so the skeleton is only ever shown on a cold load.
+  if (!repo.data) return <BoardSkeleton />;
 
-  const sprints = repo.data!.sprints;
+  const sprints = repo.data.sprints;
   const defaultSprint = sprints.find((s) => s.status === "active") ?? sprints.at(-1);
   const visibleSprint = sprints.find((s) => s.name === selectedSprint) ?? defaultSprint;
   if (!visibleSprint) return <div className="view">No sprint found.</div>;
@@ -136,14 +149,19 @@ export function BoardView() {
               stories={visibleSprint.storiesByStatus[status]}
               onOpen={handleOpen}
               activeDragId={activeStory?.id ?? null}
+              assigneeMap={assigneeMap}
             />
           ))}
         </div>
         <DragOverlay dropAnimation={null}>
-          {activeStory && <StoryCardOverlay story={activeStory} />}
+          {activeStory && <StoryCardOverlay story={activeStory} assigneeMap={assigneeMap} />}
         </DragOverlay>
       </DndContext>
-      {open && <StoryModal story={open} onClose={() => setOpen(null)} />}
+      {open && (
+        <Suspense fallback={null}>
+          <StoryModal story={open} onClose={() => setOpen(null)} />
+        </Suspense>
+      )}
     </div>
   );
 }

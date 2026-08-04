@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -17,7 +17,15 @@ import { BacklogStoryCard, BacklogStoryOverlay } from "../components/backlog/Bac
 import { BacklogDropZone, SprintDropZone } from "../components/backlog/DropZones.js";
 import { BACKLOG_DROP_ID, NO_EPIC_GROUP_ID, SPRINT_DROP_ID } from "../components/backlog/constants.js";
 import { EpicDragOverlay, SortableEpicSection } from "../components/backlog/SortableEpicSection.js";
-import { StoryModal, type StoryStatusOption } from "../components/StoryModal.js";
+import type { StoryStatusOption } from "../components/StoryModal.js";
+
+// Deferred for the same reason as on the board: the modal and its markdown
+// sanitizer are only needed once a story is actually opened.
+const StoryModal = lazy(async () => {
+  const module = await import("../components/StoryModal.js");
+  return { default: module.StoryModal };
+});
+
 const BACKLOG_STORY_STATUS_OPTIONS: StoryStatusOption[] = [
   { value: "draft", label: "draft" },
   { value: "ready", label: "ready" },
@@ -271,7 +279,11 @@ export function BacklogView() {
         {activeStory && <BacklogStoryOverlay story={activeStory} />}
         {!activeStory && activeEpic && <EpicDragOverlay epic={activeEpic} />}
       </DragOverlay>
-      {open && <StoryModal story={open} onClose={() => setOpen(null)} statusOptions={BACKLOG_STORY_STATUS_OPTIONS} />}
+      {open && (
+        <Suspense fallback={null}>
+          <StoryModal story={open} onClose={() => setOpen(null)} statusOptions={BACKLOG_STORY_STATUS_OPTIONS} />
+        </Suspense>
+      )}
     </DndContext>
   );
 }

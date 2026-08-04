@@ -210,3 +210,24 @@ html, body, #root { height: 100%; }
   .report-hero { flex-direction: column; align-items: flex-start; }
   .report-kpi-grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* --- Loading skeletons (WP-05) -------------------------------------------
+   Fixed-dimension placeholders that occupy the space the real content will
+   occupy, so replacing them contributes no layout shift. */
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.skeleton-block, .skeleton-card, .skeleton-kpi, .skeleton-chart { background: var(--surface-2); border-radius: 8px; animation: skeleton-pulse 1.4s ease-in-out infinite; }
+.skeleton-toolbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.skeleton-block--title { width: 320px; height: 24px; margin-bottom: 10px; }
+.skeleton-block--field { width: 360px; max-width: 100%; height: 46px; }
+.skeleton-block--label { display: block; width: 96px; height: 11px; }
+.skeleton-card { height: 70px; border: 1px solid var(--border); box-shadow: none; cursor: default; }
+.skeleton-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+.skeleton-kpi { height: 74px; }
+.skeleton-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.skeleton-chart { height: 260px; }
+@keyframes skeleton-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) { .skeleton-block, .skeleton-card, .skeleton-kpi, .skeleton-chart { animation: none; } }
+
+/* Live-reload degradation indicator. Non-blocking: the polling fallback keeps
+   data fresh, this only explains why updates may lag. */
+.live-reload-warning { font-size: 11px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; white-space: nowrap; }

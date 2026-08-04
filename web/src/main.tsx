@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createBrowserRouter, Navigate } from "react-router-dom";
 import { AppShell } from "./components/AppShell.js";
+import { ViewSkeleton } from "./components/Skeletons.js";
 import "./styles/tokens.css";
 import "./styles/app.css";
 
@@ -31,10 +32,35 @@ const ReportView = lazy(async () => {
   return { default: module.ReportView };
 });
 
-const queryClient = new QueryClient();
+/**
+ * Server-state freshness policy.
+ *
+ * Live reload (SSE) is the primary freshness mechanism, but it is not a
+ * guarantee: a client can miss changes to a reconnect gap, a lagged broadcast
+ * receiver, or the server's subscriber cap. Making SSE the *sole* mechanism —
+ * `staleTime: Infinity` with focus and mount refetching disabled — converts each
+ * of those into permanent, silent staleness in a tool whose entire value is
+ * showing current state.
+ *
+ * A bounded 60 s staleness plus SSE gives the same practical freshness while
+ * degrading gracefully. Now that the server answers in tens of milliseconds, the
+ * refetch this costs on window focus is not worth optimizing away.
+ */
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60_000,
+      refetchOnWindowFocus: true,
+      // A remount inside the stale window is served from cache; SSE and the
+      // staleness bound both still apply.
+      refetchOnMount: false,
+      refetchOnReconnect: true,
+    },
+  },
+});
 
 function RouteFallback() {
-  return <div className="view">Loading...</div>;
+  return <ViewSkeleton label="Loading view" />;
 }
 
 function withSuspense(element: React.ReactElement) {

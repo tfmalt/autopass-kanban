@@ -1,6 +1,6 @@
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import type { Story, StoryStatus } from "@shared/generated/api.js";
+import type { Story, StoryStatus, TeamMember } from "@shared/generated/api.js";
 import { StoryCard } from "./StoryCard.js";
 
 const LABEL: Record<StoryStatus, string> = {
@@ -17,11 +17,13 @@ export function StoryColumn({
   stories,
   onOpen,
   activeDragId,
+  assigneeMap,
 }: {
   status: StoryStatus;
   stories: Story[];
   onOpen?: (s: Story) => void;
   activeDragId?: string | null;
+  assigneeMap?: ReadonlyMap<string, TeamMember>;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status, data: { type: "column", status } });
   const points = stories.reduce((sum, s) => sum + (s.status === "dropped" ? 0 : (s.storyPoints ?? 0)), 0);
@@ -35,7 +37,7 @@ export function StoryColumn({
       </h4>
       <SortableContext items={stories.map((story) => story.id)} strategy={verticalListSortingStrategy}>
         {stories.map((story) => (
-          <StoryCard key={story.id} story={story} status={status} onOpen={onOpen} />
+          <StoryCard key={story.id} story={story} status={status} onOpen={onOpen} assigneeMap={assigneeMap} />
         ))}
       </SortableContext>
       {showPlaceholder && <div className="card-placeholder" />}

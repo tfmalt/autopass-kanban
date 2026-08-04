@@ -4,7 +4,7 @@ import { GitPullButton } from "./GitPullButton.js";
 import { ProjectProgress } from "./ProjectProgress.js";
 
 export function AppShell() {
-  useLiveReload();
+  const liveReload = useLiveReload();
   const repo = useRepository();
   const config = useConfig();
   return (
@@ -24,6 +24,11 @@ export function AppShell() {
           <NavLink to="/report">Report</NavLink>
         </nav>
         <span className="spacer" />
+        {!liveReload.connected && (
+          <span className="live-reload-warning" role="status" title="Falling back to periodic refresh.">
+            Live updates unavailable
+          </span>
+        )}
         {repo.data && <ProjectProgress progress={repo.data.progress} />}
         <GitPullButton />
       </header>

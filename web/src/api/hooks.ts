@@ -1,5 +1,6 @@
-import { useEffect } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { TeamMember } from "@shared/generated/api.js";
 import type { Epic, EpicDetail, Story, StoryDetail } from "@shared/generated/api.js";
 import { parseAssignees } from "@shared/domain.js";
 import {
@@ -34,9 +35,20 @@ import {
 
 export { byPriorityThenId, computePriorityUpdates };
 
-export const useRepository = () => useQuery({ queryKey: ["repository"], queryFn: fetchRepository });
-export const useMetrics = () => useQuery({ queryKey: ["metrics"], queryFn: fetchMetrics });
-export const useReport = () => useQuery({ queryKey: ["report"], queryFn: fetchReport });
+/** Query keys that a source change invalidates. */
+const AGGREGATE_QUERY_KEYS = [["repository"], ["metrics"], ["report"], ["team"]] as const;
+
+// `keepPreviousData` keeps the last good render on screen during a background
+// refetch instead of unmounting the view back to a loading state, which is what
+// produced a full-page layout shift on every live-reload event.
+export const useRepository = () =>
+  useQuery({ queryKey: ["repository"], queryFn: fetchRepository, placeholderData: keepPreviousData });
+export const useMetrics = () =>
+  useQuery({ queryKey: ["metrics"], queryFn: fetchMetrics, placeholderData: keepPreviousData });
+export const useReport = () =>
+  useQuery({ queryKey: ["report"], queryFn: fetchReport, placeholderData: keepPreviousData });
+// Configuration only changes when the user edits `.kanban/settings.json`, which
+// the watcher reports; there is no value in a time-based refetch.
 export const useConfig = () => useQuery({ queryKey: ["config"], queryFn: fetchConfig, staleTime: Infinity });
 
 export function useGitPull() {
@@ -45,7 +57,13 @@ export function useGitPull() {
     mutationFn: gitPull,
     onSuccess: (data) => {
       if (data.ok) {
-        void queryClient.invalidateQueries();
+        // Invalidate the aggregates explicitly. An unfiltered
+        // `invalidateQueries()` also discarded `["config"]` and every
+        // `["story", id]` entry, forcing an open story modal to refetch and
+        // the header to flicker for no reason.
+        for (const queryKey of AGGREGATE_QUERY_KEYS) {
+          void queryClient.invalidateQueries({ queryKey });
+        }
       }
     },
   });
@@ -143,17 +161,117 @@ export function useUpdateSprint() {
   });
 }
 
-export function useLiveReload() {
+/** How often to poll the aggregates while the live-reload stream is down. */
+const LIVE_RELOAD_FALLBACK_POLL_MS = 30_000;
+
+export type LiveReloadState = {
+  /** False while the change stream is unavailable and polling has taken over. */
+  connected: boolean;
+};
+
+/**
+ * Subscribe to server-sent source-change events.
+ *
+ * The server coalesces a burst of filesystem changes into one event carrying a
+ * monotonic generation as the SSE event id, and replays a `resync` event when a
+ * reconnecting client is behind. `EventSource` sends `Last-Event-ID`
+ * automatically, so no id bookkeeping is needed here.
+ *
+ * Losing the stream must never leave the UI permanently stale, so an error
+ * switches on a polling fallback and surfaces the degraded state to the caller.
+ */
+export function useLiveReload(): LiveReloadState {
   const qc = useQueryClient();
+  const [connected, setConnected] = useState(true);
+
   useEffect(() => {
     const source = new EventSource("/api/events");
-    source.addEventListener("change", () => {
-      qc.invalidateQueries({ queryKey: ["repository"] });
-      qc.invalidateQueries({ queryKey: ["metrics"] });
-      qc.invalidateQueries({ queryKey: ["report"] });
-    });
-    return () => source.close();
+    let frame: number | null = null;
+    let poll: ReturnType<typeof setInterval> | null = null;
+
+    const invalidateAggregates = () => {
+      for (const queryKey of AGGREGATE_QUERY_KEYS) {
+        void qc.invalidateQueries({ queryKey });
+      }
+    };
+
+    // Client-side backstop: the server already coalesces bursts, but a resync
+    // arriving alongside a live change must still cost only one refetch.
+    const scheduleInvalidate = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        invalidateAggregates();
+      });
+    };
+
+    const stopPolling = () => {
+      if (poll !== null) {
+        clearInterval(poll);
+        poll = null;
+      }
+    };
+
+    const startPolling = () => {
+      if (poll !== null) return;
+      poll = setInterval(invalidateAggregates, LIVE_RELOAD_FALLBACK_POLL_MS);
+    };
+
+    const onOpen = () => {
+      setConnected(true);
+      stopPolling();
+    };
+
+    const onChange = () => {
+      setConnected(true);
+      stopPolling();
+      scheduleInvalidate();
+    };
+
+    // Reached when the connection drops, and when the server refuses the
+    // subscription outright (`503`, subscriber cap). In both cases the client
+    // would otherwise sit silently on stale data forever.
+    const onError = () => {
+      setConnected(false);
+      startPolling();
+      // Whatever happened, assume something changed while disconnected.
+      scheduleInvalidate();
+    };
+
+    source.addEventListener("open", onOpen);
+    source.addEventListener("change", onChange);
+    source.addEventListener("error", onError);
+
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      stopPolling();
+      source.removeEventListener("open", onOpen);
+      source.removeEventListener("change", onChange);
+      source.removeEventListener("error", onError);
+      source.close();
+    };
   }, [qc]);
+
+  return { connected };
+}
+
+/**
+ * Resolve the team roster into an email-keyed lookup **once**.
+ *
+ * Calling `useTeam` inside a card component created one `QueryObserver`
+ * subscription and one `Map` allocation per rendered card, and every team-cache
+ * update notified all of them. Resolve at the board or column level and pass the
+ * result down.
+ */
+export function useAssigneeMap(): Map<string, TeamMember> {
+  const team = useTeam();
+  return useMemo(() => {
+    const map = new Map<string, TeamMember>();
+    for (const member of team.data ?? []) {
+      map.set(member.email, member);
+    }
+    return map;
+  }, [team.data]);
 }
 
 /** Fetch a single story with its full markdown body. Pass null to disable. */

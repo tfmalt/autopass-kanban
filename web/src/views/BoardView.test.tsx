@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { RepositorySnapshot } from "@shared/generated/api.js";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -78,5 +78,38 @@ describe("BoardView", () => {
     renderWithClient(<BoardView />);
     await screen.findByText("US-F1-061");
     expect(screen.queryByText("Planned")).not.toBeInTheDocument();
+  });
+
+  /**
+   * B12: the cold-load placeholder must occupy the layout the board will
+   * occupy, and announce itself, rather than collapsing to a one-line string.
+   */
+  it("shows an accessible fixed-dimension skeleton before data arrives", () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = render(
+      <QueryClientProvider client={qc}>
+        <BoardView />
+      </QueryClientProvider>,
+    );
+    const status = screen.getByRole("status");
+    expect(status).toHaveAttribute("aria-busy", "true");
+    expect(status).toHaveTextContent("Loading board");
+    expect(container.querySelectorAll(".column").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".skeleton-card").length).toBeGreaterThan(0);
+  });
+
+  /**
+   * The story modal (and the DOMPurify bundle it pulls in) must not be part of
+   * the board's startup graph.
+   */
+  it("loads the story modal only when a card is opened", async () => {
+    renderWithClient(<BoardView />);
+    const card = await screen.findByText("US-F1-061");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    fireEvent.click(card);
+    await waitFor(() => {
+      expect(screen.getByText("Frontend", { selector: "h3, h2, h1" })).toBeInTheDocument();
+    });
   });
 });

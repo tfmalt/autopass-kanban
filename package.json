@@ -9,8 +9,8 @@
     "web:test": "npm --prefix web run test",
     "web:typecheck": "npm --prefix web run typecheck",
     "web:build": "npm --prefix web run build",
-    "web:generate-types": "cargo test -p kanban-web-server export_bindings -- --exact",
-    "web:check-generated": "cargo test -p kanban-web-server generated_bindings_are_current -- --exact",
+    "web:generate-types": "cargo test -p kanban-web-server typegen::export_bindings -- --exact",
+    "web:check-generated": "cargo test -p kanban-web-server typegen::generated_bindings_are_current -- --exact",
     "docker:up": "./docker-compose.up.sh",
     "docker:shell": "./docker-compose.bash.sh"
   }
