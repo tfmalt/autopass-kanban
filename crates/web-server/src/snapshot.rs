@@ -14,6 +14,25 @@ fn story_is_done(story: &WebStory) -> bool {
     story_status(story) == Some(StoryStatus::Done)
 }
 
+fn canonical_phase(value: &str) -> String {
+    let value = value.trim();
+    let number = value
+        .strip_prefix('F')
+        .or_else(|| value.strip_prefix('f'))
+        .unwrap_or(value);
+    if !number.is_empty() && number.chars().all(|character| character.is_ascii_digit()) {
+        let number = number.trim_start_matches('0');
+        return format!("F{}", if number.is_empty() { "0" } else { number });
+    }
+    value.to_string()
+}
+
+fn web_epic_phase(phase: Option<&str>) -> String {
+    phase
+        .map(canonical_phase)
+        .unwrap_or_else(|| "F?".to_string())
+}
+
 pub(crate) fn load_repository_snapshot(repo_root: &Path) -> Result<RepositorySnapshot> {
     Ok(crate::read_model::WebReadModel::build(repo_root)?.into_snapshot())
 }
@@ -111,7 +130,7 @@ pub(crate) fn build_epics(epic_sources: &[Epic], stories: &[WebStory]) -> Vec<We
             id.clone(),
             WebEpic {
                 title: overview.title,
-                phase: overview.phase.unwrap_or_else(|| "F?".to_string()),
+                phase: web_epic_phase(overview.phase.as_deref()),
                 priority: overview.priority,
                 planned_start: overview.planned_start,
                 planned_end: overview.planned_end,
@@ -259,7 +278,8 @@ pub(crate) fn rel_to_root(repo_root: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::PathBuf;
 
     fn test_story(id: &str, status: &str, points: i64) -> WebStory {
         WebStory {
@@ -290,6 +310,34 @@ mod tests {
             },
             frontmatter: BTreeMap::new(),
         }
+    }
+
+    fn test_epic(id: &str, phase: &str) -> Epic {
+        Epic {
+            file_path: PathBuf::from(format!("{id}.md")),
+            relative_path: PathBuf::from(format!("{id}.md")),
+            file_name: format!("{id}.md"),
+            frontmatter: BTreeMap::from([
+                ("id".to_string(), id.to_string()),
+                ("phase".to_string(), phase.to_string()),
+            ]),
+            frontmatter_keys: BTreeSet::from(["id".to_string(), "phase".to_string()]),
+            markdown: String::new(),
+            body: format!("# Epic: {id}"),
+        }
+    }
+
+    #[test]
+    fn build_epics_normalizes_numeric_frontmatter_phases() {
+        let mut story = test_story("US-F2-022", "todo", 5);
+        story.phase = Some("F2".to_string());
+        story.epic = Some("EP-F2-03".to_string());
+
+        let epics = build_epics(&[test_epic("EP-F2-03", "2")], &[story]);
+
+        assert_eq!(epics.len(), 1);
+        assert_eq!(epics[0].phase, "F2");
+        assert_eq!(epics[0].stories[0].id, "US-F2-022");
     }
 
     #[test]
