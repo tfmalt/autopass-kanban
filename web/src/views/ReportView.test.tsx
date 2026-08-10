@@ -23,4 +23,18 @@ describe("ReportView", () => {
     expect(screen.getByText("S000.start")).toBeInTheDocument();
     expect(screen.getAllByText(/daily throughput over 3 observed workdays/).length).toBeGreaterThan(0);
   });
+
+  it("styles dropped stories as completed", async () => {
+    const data = report();
+    const droppedRow = data.wbsRows.find((row) => row.id === "US-F1-002");
+    if (!droppedRow) throw new Error("Expected TODO WBS row in report fixture");
+    droppedRow.title = "Dropped story";
+    droppedRow.status = "DROPPED";
+    const qc = new QueryClient();
+    qc.setQueryData(["report"], data);
+    render(<QueryClientProvider client={qc}><ReportView /></QueryClientProvider>);
+
+    const row = await screen.findByText("Dropped story");
+    expect(row.closest("tr")).toHaveClass("report-row-done");
+  });
 });

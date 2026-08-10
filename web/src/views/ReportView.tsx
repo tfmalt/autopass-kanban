@@ -61,7 +61,7 @@ export function ReportView() {
             </thead>
             <tbody>
               {report.wbsRows.map((row) => (
-                <tr key={`${row.kind}-${row.wbs}-${row.id}`} className={`report-row-${row.kind} ${row.status === "DONE" ? "report-row-done" : ""} ${row.status === "IN PROGRESS" ? "report-row-active" : ""}`}>
+                <tr key={`${row.kind}-${row.wbs}-${row.id}`} className={`report-row-${row.kind} ${row.status === "DONE" || row.status === "DROPPED" ? "report-row-done" : ""} ${row.status === "IN PROGRESS" ? "report-row-active" : ""}`}>
                   <td>{row.wbs}</td><td>{row.id}</td><td>{row.title}</td><td>{row.milestone}</td><td>{row.period}</td><td>{row.priority}</td><td>{row.status}</td><td>{row.points ?? ""}</td><td>{row.estHours ?? ""}</td><td>{row.startDate ?? ""}</td><td>{row.endDate ?? ""}</td><td>{row.notes}</td>
                 </tr>
               ))}
