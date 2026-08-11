@@ -13,6 +13,12 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! docker info >/dev/null 2>&1; then
+  printf 'Error: cannot connect to the Docker daemon.\n' >&2
+  printf 'You are running inside WSL — please start Docker Desktop on your Windows host first.\n' >&2
+  exit 1
+fi
+
 if [[ ! -f "$compose_file" ]]; then
   printf 'Error: missing compose file: %s\n' "$compose_file" >&2
   exit 1
