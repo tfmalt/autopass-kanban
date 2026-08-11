@@ -84,6 +84,11 @@ export function BacklogView() {
     return map;
   }, [unplanned]);
 
+  const visibleEpics = useMemo(
+    () => epicOrder.filter((epic) => (storiesByEpic.get(epic.id)?.length ?? 0) > 0),
+    [epicOrder, storiesByEpic],
+  );
+
   const noEpicStories = storiesByEpic.get(NO_EPIC_GROUP_ID) ?? [];
 
   const targetStories = useMemo(() => {
@@ -219,8 +224,8 @@ export function BacklogView() {
               Priority reordering is disabled while filtering. Planning and story details are still available.
             </p>
           )}
-          <SortableContext items={epicOrder.map((epic) => epic.id)} strategy={verticalListSortingStrategy}>
-            {epicOrder.map((epic) => (
+          <SortableContext items={visibleEpics.map((epic) => epic.id)} strategy={verticalListSortingStrategy}>
+            {visibleEpics.map((epic) => (
               <SortableEpicSection
                 key={epic.id}
                 epic={epic}

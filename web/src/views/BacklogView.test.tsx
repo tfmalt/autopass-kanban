@@ -217,6 +217,17 @@ describe("BacklogView", () => {
     expect(screen.getByLabelText("current sprint drop target")).toHaveTextContent("US-F2-001");
   });
 
+  it("hides an epic when its last remaining story is planned", async () => {
+    renderWithClient(<BacklogView />);
+    const epicSection = await screen.findByTestId("epic-section-EP-F2-01");
+
+    fireEvent.click(within(epicSection).getByRole("button", { name: /add US-F2-002/i }));
+    await waitFor(() => expect(within(epicSection).queryByRole("button", { name: /add US-F2-002/i })).not.toBeInTheDocument());
+
+    fireEvent.click(within(epicSection).getByRole("button", { name: /add US-F2-001/i }));
+    await waitFor(() => expect(screen.queryByTestId("epic-section-EP-F2-01")).not.toBeInTheDocument());
+  });
+
   it("removes a sprint story from the selected sprint", async () => {
     renderWithClient(<BacklogView />);
     const dropTarget = await screen.findByLabelText("current sprint drop target");
@@ -248,7 +259,7 @@ describe("BacklogView", () => {
   it("renders epics in priority order", async () => {
     renderWithClient(<BacklogView />);
     await screen.findByTestId("epic-section-EP-F2-01");
-    expect(epicIdsInBacklog()).toEqual(["EP-F2-02", "EP-F2-01", "EP-F2-03"]);
+    expect(epicIdsInBacklog()).toEqual(["EP-F2-02", "EP-F2-01"]);
   });
 
   it("renders sprint stories in priority order", async () => {
