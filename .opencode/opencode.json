@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "lsp": {
+    "rust": {
+      "command": ["rust-analyzer"]
+    },
+    "typescript": {
+      "command": ["npm", "exec", "--", "typescript-language-server", "--stdio"]
+    }
+  }
+}
