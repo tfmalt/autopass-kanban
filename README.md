@@ -195,8 +195,9 @@ cargo build -p kanban-cli --release
 Cargo builds the Vite client automatically when `web/dist` is missing or older
 than the web sources. If `web/node_modules` is missing, the build script runs
 `npm install` first. Runtime production use of `kanban web start` does not
-require Node.js or npm; it starts the embedded Rust server from the compiled
-`kanban` executable.
+require the kanban source checkout, Node.js, or npm; it starts the embedded Rust
+server from the compiled `kanban` executable. The target backlog repository and
+its `.kanban/settings.json` must still be available locally.
 
 For frontend development, run the API server and Vite separately:
 

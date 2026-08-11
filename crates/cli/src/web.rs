@@ -290,9 +290,9 @@ pub(crate) fn build_web_start_command_spec(
     host: &str,
     port: u16,
 ) -> Result<WebStartCommandSpec> {
-    let web_dir = child_process_path(&web_app_dir(repo_root)?);
     let cwd = child_process_path(repo_root);
     if dev {
+        let web_dir = child_process_path(&web_app_dir(repo_root)?);
         Ok(WebStartCommandSpec {
             program: npm_program(),
             args: vec![
@@ -778,25 +778,34 @@ mod tests {
     }
 
     #[test]
-    fn web_start_specs_select_production_or_dev_command() {
-        let repo_root = Path::new("/tmp/repo");
-
-        let production = build_web_start_command_spec(repo_root, false, "127.0.0.1", 3000).unwrap();
+    fn production_web_start_spec_does_not_require_source_checkout() {
+        let production = build_web_start_command_spec(
+            Path::new("/tmp/backlog-only-repo"),
+            false,
+            "127.0.0.1",
+            3000,
+        )
+        .unwrap();
         assert!(!production.program.is_empty());
-        assert_eq!(production.cwd, PathBuf::from("/tmp/repo"));
+        assert_eq!(production.cwd, PathBuf::from("/tmp/backlog-only-repo"));
         assert_eq!(
             production.args,
             [
                 "web",
                 "serve",
                 "--repo-root",
-                "/tmp/repo",
+                "/tmp/backlog-only-repo",
                 "--host",
                 "127.0.0.1",
                 "--port",
                 "3000",
             ]
         );
+    }
+
+    #[test]
+    fn web_start_specs_select_dev_command() {
+        let repo_root = Path::new("/tmp/repo");
 
         let dev = build_web_start_command_spec(repo_root, true, "127.0.0.1", 3000).unwrap();
         #[cfg(windows)]
