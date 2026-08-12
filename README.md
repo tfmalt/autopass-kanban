@@ -356,3 +356,4 @@ output remains the default when `--format` is omitted.
 
 Full per-command schema documentation:
 `docs/superpowers/specs/2026-06-03-kanban-json-output-design.md` in the served project repository.
+
