@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -21,7 +21,9 @@ use tokio::task;
 use crate::AppState;
 use crate::changes::ChangeBroadcaster;
 use crate::dto::*;
+use crate::git;
 use crate::metrics::*;
+use crate::pending;
 use crate::read_model::WebReadModel;
 use crate::snapshot::{load_epic_detail, load_repository_snapshot, load_story_detail};
 use crate::sprint_io::{
@@ -101,12 +103,24 @@ async fn cached_git_branch(state: &AppState) -> Result<String, ApiResponse> {
         return Ok(branch);
     }
     let repo_root = state.repo_root.clone();
-    let branch = run_blocking(move || Ok(git_branch(&repo_root))).await?;
+    let branch = run_blocking(move || Ok(git::branch(&repo_root))).await?;
     let mut cache = state.branch_cache.lock().await;
     if cache.is_none() {
         *cache = Some(branch.clone());
     }
     Ok(cache.clone().unwrap_or(branch))
+}
+
+async fn record_change(state: &AppState, summary: String, paths: Vec<PathBuf>) {
+    let Some(store) = state.pending.clone() else {
+        return;
+    };
+    if let Err(error) = run_blocking(move || store.record(summary, paths)).await {
+        eprintln!(
+            "kanban-web could not record pending web change: {}",
+            error.message
+        );
+    }
 }
 
 pub(crate) async fn api_repository(
@@ -241,6 +255,18 @@ pub(crate) async fn api_move_story(
         move_story_to_status_with_assignee(&repo_root, &id_for_move, &status, assignee.as_deref())
     })
     .await?;
+    let paths = std::iter::once(result.story_path.clone())
+        .chain(result.task_path.clone())
+        .collect();
+    record_change(
+        &state,
+        format!(
+            "{} moved {} to {}",
+            id, result.from_status, result.to_status
+        ),
+        paths,
+    )
+    .await;
     state.changes.notify();
     Ok(Json(
         json!({ "ok": true, "data": MoveStoryDto::from_result(&result, &state.repo_root) }),
@@ -258,6 +284,15 @@ pub(crate) async fn api_plan_story(
     let sprint = input.sprint.clone();
     let result =
         run_blocking(move || plan_story_into_sprint(&repo_root, &id_for_plan, &sprint)).await?;
+    let paths = std::iter::once(result.story_path.clone())
+        .chain(result.task_path.clone())
+        .collect();
+    record_change(
+        &state,
+        format!("{} planned into {}", id, result.sprint_name),
+        paths,
+    )
+    .await;
     state.changes.notify();
     Ok(Json(
         json!({ "ok": true, "data": PlanStoryDto::from_result(&result, &state.repo_root) }),
@@ -294,6 +329,12 @@ pub(crate) async fn api_update_task(
         )
     })
     .await?;
+    record_change(
+        &state,
+        format!("{id}/{task_id} updated"),
+        vec![result.task_file_path.clone()],
+    )
+    .await;
     state.changes.notify();
     Ok(Json(
         json!({ "ok": true, "data": TaskMutationDto::from_result(&result, &state.repo_root) }),
@@ -311,12 +352,19 @@ pub(crate) async fn api_update_story_body(
     let body = input.body.clone();
     let source = run_blocking(move || find_story_with_source(&repo_root, &id_for_lookup)).await?;
     let (_, source) = source.ok_or_else(|| ApiResponse::not_found("not found"))?;
+    let source_path = source.file_path.clone();
     run_blocking(move || {
         let updated = replace_markdown_body(&source.markdown, &body);
         atomic_write(&source.file_path, &updated)
             .with_context(|| format!("write story file {}", source.file_path.display()))
     })
     .await?;
+    record_change(
+        &state,
+        format!("{id} description updated"),
+        vec![source_path],
+    )
+    .await;
     state.changes.notify();
     Ok(Json(json!({ "ok": true })))
 }
@@ -353,6 +401,12 @@ pub(crate) async fn api_update_story_fields(
     let result =
         run_blocking(move || update_story_frontmatter(&repo_root, &id_for_update, &updates))
             .await?;
+    record_change(
+        &state,
+        format!("{} updated {}", id, result.updated_fields.join(", ")),
+        vec![result.story_path.clone()],
+    )
+    .await;
     state.changes.notify();
     Ok(Json(
         json!({ "ok": true, "data": StoryUpdateDto::from_result(&result, &state.repo_root) }),
@@ -390,6 +444,12 @@ pub(crate) async fn api_update_epic_fields(
     let id_for_update = id.clone();
     let result =
         run_blocking(move || update_epic_frontmatter(&repo_root, &id_for_update, &updates)).await?;
+    record_change(
+        &state,
+        format!("{} updated {}", id, result.updated_fields.join(", ")),
+        vec![result.epic_path.clone()],
+    )
+    .await;
     state.changes.notify();
     Ok(Json(
         json!({ "ok": true, "data": EpicUpdateDto::from_result(&result, &state.repo_root) }),
@@ -422,6 +482,12 @@ pub(crate) async fn api_create_sprint(
         create_sprint(&repo_root, &create_input)
     })
     .await?;
+    record_change(
+        &state,
+        format!("sprint {} created", result.sprint_name),
+        vec![result.sprint_path.clone()],
+    )
+    .await;
     state.changes.notify();
     Ok(Json(
         json!({ "ok": true, "data": SprintCreateDto::from_result(&result, &state.repo_root) }),
@@ -438,6 +504,13 @@ pub(crate) async fn api_update_sprint(
     let name_for_update = name.clone();
     let result =
         run_blocking(move || update_sprint_file(&repo_root, &name_for_update, input)).await?;
+    let path = result
+        .get("sprintPath")
+        .and_then(Value::as_str)
+        .map(|path| state.repo_root.join(path))
+        .into_iter()
+        .collect();
+    record_change(&state, format!("sprint {name} updated"), path).await;
     state.changes.notify();
     Ok(Json(json!({ "ok": true, "data": result })))
 }
@@ -542,6 +615,196 @@ pub(crate) async fn static_asset(uri: Uri, headers: HeaderMap) -> Response {
 
 const GIT_PULL_TIMEOUT_SECS: u64 = 60;
 
+pub(crate) async fn api_git_status(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<GitStatusResponse>, ApiResponse> {
+    let Some(git_context) = state.git.clone() else {
+        return Ok(Json(GitStatusResponse {
+            available: false,
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            pending_count: 0,
+        }));
+    };
+    let pending = state.pending.clone();
+    let status = run_blocking(move || {
+        // Refresh the upstream tracking ref so the polled pull count reflects
+        // remote changes, not only the last time a user manually pulled.
+        let _ = git::run(
+            &git_context.repo_root,
+            &["fetch", "--quiet", "--no-tags"],
+            true,
+        );
+        let upstream = git::upstream_state(&git_context.repo_root);
+        let pending_count = pending
+            .map(|store| store.load().map(|changes| changes.len()))
+            .transpose()?
+            .unwrap_or(0);
+        Ok(GitStatusResponse {
+            available: true,
+            upstream: upstream.upstream,
+            ahead: upstream.ahead,
+            behind: upstream.behind,
+            pending_count,
+        })
+    })
+    .await?;
+    Ok(Json(status))
+}
+
+pub(crate) async fn api_git_push(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<GitPushResponse>, ApiResponse> {
+    if state
+        .push_in_progress
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Ok(Json(GitPushResponse {
+            ok: false,
+            status: "in_progress",
+            message: "A push is already in progress.".to_string(),
+            commit_sha: None,
+        }));
+    }
+    struct ResetFlag(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for ResetFlag {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let _reset = ResetFlag(state.push_in_progress.clone());
+    let Some(git_context) = state.git.clone() else {
+        return Ok(Json(GitPushResponse {
+            ok: false,
+            status: "error",
+            message: "The data directory is not a git repository.".to_string(),
+            commit_sha: None,
+        }));
+    };
+    let Some(pending_store) = state.pending.clone() else {
+        return Ok(Json(GitPushResponse {
+            ok: false,
+            status: "error",
+            message: "Pending web changes are unavailable.".to_string(),
+            commit_sha: None,
+        }));
+    };
+    let _write_guard = state.write_lock.lock().await;
+    let result = run_blocking(move || {
+        let changes = pending_store.load()?;
+        let upstream = git::upstream_state(&git_context.repo_root);
+        if changes.is_empty() && upstream.ahead == 0 {
+            return Ok(GitPushResponse {
+                ok: true,
+                status: "nothing_to_do",
+                message: "Nothing to commit or push.".to_string(),
+                commit_sha: None,
+            });
+        }
+        let mut commit_sha = None;
+        if !changes.is_empty() {
+            let paths = pending::commit_paths(&changes)?;
+            let existing_paths = paths
+                .iter()
+                .filter(|path| {
+                    git::run(
+                        &git_context.repo_root,
+                        &["ls-files", "--error-unmatch", "--", path],
+                        false,
+                    )
+                    .is_ok_and(|output| output.status.success())
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let new_paths = paths
+                .iter()
+                .filter(|path| {
+                    !existing_paths.contains(path) && git_context.repo_root.join(path).exists()
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let commit_paths = existing_paths
+                .iter()
+                .chain(&new_paths)
+                .cloned()
+                .collect::<Vec<_>>();
+            if !new_paths.is_empty() {
+                let mut args = vec![
+                    "add".to_string(),
+                    "--intent-to-add".to_string(),
+                    "--".to_string(),
+                ];
+                args.extend(new_paths);
+                let output = git::run_owned(&git_context.repo_root, &args, false)?;
+                if !output.status.success() {
+                    return Ok(GitPushResponse {
+                        ok: false,
+                        status: "error",
+                        message: format!(
+                            "Commit preparation failed: {}",
+                            git::output_text(&output)
+                        ),
+                        commit_sha: None,
+                    });
+                }
+            }
+            if !commit_paths.is_empty() {
+                let mut args = vec![
+                    "commit".to_string(),
+                    "--only".to_string(),
+                    "-m".to_string(),
+                    pending::commit_message(&changes),
+                    "--".to_string(),
+                ];
+                args.extend(commit_paths);
+                let output = git::run_owned(&git_context.repo_root, &args, false)?;
+                if !output.status.success() {
+                    return Ok(GitPushResponse {
+                        ok: false,
+                        status: "error",
+                        message: format!(
+                            "Commit failed: {}",
+                            git::output_text(&output)
+                                .chars()
+                                .take(200)
+                                .collect::<String>()
+                        ),
+                        commit_sha: None,
+                    });
+                }
+                let head = git::run(&git_context.repo_root, &["rev-parse", "HEAD"], false)?;
+                commit_sha = Some(String::from_utf8_lossy(&head.stdout).trim().to_string());
+                // A failed push leaves the commit ahead of its upstream, but
+                // the ledger is safe to clear once its entries are committed.
+                pending_store.clear()?;
+            }
+        }
+        let output = git::run(&git_context.repo_root, &["push"], true)?;
+        if output.status.success() {
+            Ok(GitPushResponse {
+                ok: true,
+                status: "success",
+                message: "Changes pushed.".to_string(),
+                commit_sha,
+            })
+        } else {
+            Ok(GitPushResponse {
+                ok: false,
+                status: "error",
+                message: git::classify_push_error(&git::output_text(&output)),
+                commit_sha,
+            })
+        }
+    })
+    .await?;
+    if result.ok {
+        state.changes.notify();
+    }
+    Ok(Json(result))
+}
+
 pub(crate) async fn api_git_pull(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<GitPullResponse>, ApiResponse> {
@@ -560,17 +823,14 @@ pub(crate) async fn api_git_pull(
             pulled_at: None,
         }));
     }
+    let _write_guard = state.write_lock.lock().await;
 
     let repo_root = state.repo_root.clone();
     let pull_flag = state.pull_in_progress.clone();
 
     let result = tokio::time::timeout(
         Duration::from_secs(GIT_PULL_TIMEOUT_SECS),
-        task::spawn_blocking(move || {
-            std::process::Command::new("git")
-                .args(["-C", &repo_root.to_string_lossy(), "pull", "--ff-only"])
-                .output()
-        }),
+        task::spawn_blocking(move || git::run(&repo_root, &["pull", "--ff-only"], true)),
     )
     .await;
 
@@ -635,7 +895,7 @@ pub(crate) async fn api_git_pull(
                 let combined = format!("{}\n{}", stdout.trim(), stderr.trim())
                     .trim()
                     .to_string();
-                let message = classify_git_error(&combined);
+                let message = git::classify_pull_error(&combined);
                 Ok(Json(GitPullResponse {
                     ok: false,
                     status: "error",
@@ -657,60 +917,12 @@ pub(crate) async fn api_git_pull(
     }
 }
 
-fn classify_git_error(output: &str) -> String {
-    let lower = output.to_lowercase();
-    if lower.contains("conflict") {
-        "Pull failed: merge conflict. Resolve conflicts locally before syncing.".to_string()
-    } else if lower.contains("local changes") || lower.contains("would be overwritten") {
-        "Pull failed: local uncommitted changes would be overwritten. Commit or stash them first."
-            .to_string()
-    } else if lower.contains("authentication")
-        || lower.contains("auth")
-        || lower.contains("403")
-        || lower.contains("401")
-    {
-        "Pull failed: authentication error. Check your credentials.".to_string()
-    } else if lower.contains("could not resolve host")
-        || lower.contains("network")
-        || lower.contains("unable to connect")
-    {
-        "Pull failed: network error. Check your internet connection.".to_string()
-    } else if lower.contains("not a git repository") {
-        "Pull failed: the data directory is not a git repository.".to_string()
-    } else if lower.contains("no remote")
-        || lower.contains("no tracking")
-        || lower.contains("no upstream")
-    {
-        "Pull failed: no remote tracking branch configured.".to_string()
-    } else if output.is_empty() {
-        "git pull failed with no output.".to_string()
-    } else {
-        format!(
-            "git pull failed: {}",
-            output.chars().take(200).collect::<String>()
-        )
-    }
-}
-
 pub(crate) fn parse_tags(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(str::trim)
         .filter(|tag| !tag.is_empty())
         .map(str::to_string)
         .collect()
-}
-
-pub(crate) fn git_branch(repo_root: &Path) -> String {
-    std::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(repo_root)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "unknown".to_string())
 }
 
 pub(crate) fn replace_markdown_body(markdown: &str, body: &str) -> String {

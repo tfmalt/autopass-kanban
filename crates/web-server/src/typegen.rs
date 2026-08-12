@@ -5,10 +5,11 @@ use anyhow::{Context, Result};
 use ts_rs::{Config, TS};
 
 use crate::dto::{
-    ConfigResponse, GitPullResponse, PhaseSummary, ProjectProgress, RepositorySnapshot,
-    StoryPointsResponse, WebEpic, WebEpicDetail, WebReportDashboard, WebReportEstimate,
-    WebReportPhaseRow, WebReportProgress, WebReportSprintProjection, WebReportWbsRow, WebSprint,
-    WebStory, WebStoryDetail, WebTask, WebTaskSummary, WebTeamMember,
+    ConfigResponse, GitPullResponse, GitPushResponse, GitStatusResponse, PhaseSummary,
+    ProjectProgress, RepositorySnapshot, StoryPointsResponse, WebEpic, WebEpicDetail,
+    WebReportDashboard, WebReportEstimate, WebReportPhaseRow, WebReportProgress,
+    WebReportSprintProjection, WebReportWbsRow, WebSprint, WebStory, WebStoryDetail, WebTask,
+    WebTaskSummary, WebTeamMember,
 };
 use crate::metrics::{
     BurndownPoint, BurnupPoint, DashboardMetrics, Forecast, ForecastCompletion, ForecastThroughput,
@@ -77,6 +78,8 @@ fn generated_declarations(cfg: &Config) -> Vec<String> {
         export_declaration(StoryPointsResponse::decl(cfg)),
         export_declaration(ConfigResponse::decl(cfg)),
         export_declaration(GitPullResponse::decl(cfg)),
+        export_declaration(GitStatusResponse::decl(cfg)),
+        export_declaration(GitPushResponse::decl(cfg)),
         export_declaration(WebTeamMember::decl(cfg)),
     ]
 }

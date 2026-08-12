@@ -20,8 +20,10 @@ use kanban_core::*;
 mod bench;
 mod changes;
 mod dto;
+mod git;
 mod handlers;
 mod metrics;
+mod pending;
 mod read_model;
 mod snapshot;
 mod sprint_io;
@@ -33,10 +35,10 @@ mod typegen;
 use changes::ChangeBroadcaster;
 use dto::ApiError;
 use handlers::{
-    api_config, api_create_sprint, api_epic, api_events, api_git_pull, api_metrics, api_move_story,
-    api_plan_story, api_report, api_repository, api_story, api_team, api_team_avatar,
-    api_update_epic_fields, api_update_sprint, api_update_story_body, api_update_story_fields,
-    api_update_task, static_asset,
+    api_config, api_create_sprint, api_epic, api_events, api_git_pull, api_git_push,
+    api_git_status, api_metrics, api_move_story, api_plan_story, api_report, api_repository,
+    api_story, api_team, api_team_avatar, api_update_epic_fields, api_update_sprint,
+    api_update_story_body, api_update_story_fields, api_update_task, static_asset,
 };
 
 #[derive(Debug, Clone)]
@@ -72,6 +74,10 @@ struct AppState {
     write_lock: Arc<Mutex<()>>,
     /// Guard against concurrent git-pull operations triggered from the web UI.
     pull_in_progress: Arc<AtomicBool>,
+    /// Guard against concurrent git-push operations triggered from the web UI.
+    push_in_progress: Arc<AtomicBool>,
+    git: Option<git::GitContext>,
+    pending: Option<pending::PendingStore>,
 }
 
 #[cfg(test)]
@@ -86,6 +92,10 @@ impl AppState {
         // Keep the sender alive for the lifetime of the state so `changed()`
         // parks instead of resolving immediately on a closed channel.
         std::mem::forget(shutdown_tx);
+        let git = git::GitContext::discover(&repo_root);
+        let pending = git.as_ref().map(|context| {
+            pending::PendingStore::new(context.repo_root.clone(), context.pending_file())
+        });
         Self {
             repo_root,
             host: "127.0.0.1".to_string(),
@@ -96,6 +106,9 @@ impl AppState {
             shutdown,
             write_lock: Arc::new(Mutex::new(())),
             pull_in_progress: Arc::new(AtomicBool::new(false)),
+            push_in_progress: Arc::new(AtomicBool::new(false)),
+            git,
+            pending,
         }
     }
 }
@@ -186,6 +199,10 @@ pub async fn serve(options: WebServeOptions) -> Result<()> {
     let sse_subscribers = Arc::new(AtomicUsize::new(0));
     let _watcher = start_watcher(&repo_root, changes.clone(), branch_cache.clone())?;
     let (shutdown_tx, shutdown) = watch::channel(false);
+    let git = git::GitContext::discover(&repo_root);
+    let pending = git.as_ref().map(|context| {
+        pending::PendingStore::new(context.repo_root.clone(), context.pending_file())
+    });
     let state = Arc::new(AppState {
         repo_root,
         host: options.host,
@@ -196,6 +213,9 @@ pub async fn serve(options: WebServeOptions) -> Result<()> {
         shutdown,
         write_lock: Arc::new(Mutex::new(())),
         pull_in_progress: Arc::new(AtomicBool::new(false)),
+        push_in_progress: Arc::new(AtomicBool::new(false)),
+        git,
+        pending,
     });
     let app = Router::new()
         .route("/api/repository", get(api_repository))
@@ -217,6 +237,8 @@ pub async fn serve(options: WebServeOptions) -> Result<()> {
         .route("/api/sprints", post(api_create_sprint))
         .route("/api/sprints/{name}", post(api_update_sprint))
         .route("/api/git-pull", post(api_git_pull))
+        .route("/api/git-push", post(api_git_push))
+        .route("/api/git-status", get(api_git_status))
         .route("/api/events", get(api_events))
         .fallback(static_asset)
         .layer(middleware::from_fn_with_state(state.clone(), csrf_guard))

@@ -3,9 +3,9 @@ import { useGitPull } from "../api/hooks.js";
 
 type PullState = "idle" | "loading" | "success" | "error";
 
-const ICON_SIZE = 15;
+const ICON_SIZE = 16;
 
-function SyncIcon({ spin, color }: { spin?: boolean; color: string }) {
+export function PullIcon({ spin, color }: { spin?: boolean; color: string }) {
   return (
     <svg
       width={ICON_SIZE}
@@ -19,8 +19,9 @@ function SyncIcon({ spin, color }: { spin?: boolean; color: string }) {
       aria-hidden="true"
       style={spin ? { animation: "git-pull-spin 0.9s linear infinite" } : undefined}
     >
-      <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
-      <path d="M21 3v5h-5" />
+      <path d="M12 3v11" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M4 20h16" />
     </svg>
   );
 }
@@ -84,7 +85,7 @@ export function GitPullButton() {
           from { transform: rotate(0deg); }
           to   { transform: rotate(360deg); }
         }
-        .git-pull-btn {
+        .git-sync-btn {
           background: none;
           border: 1px solid transparent;
           border-radius: 7px;
@@ -96,23 +97,23 @@ export function GitPullButton() {
           transition: background 0.12s, border-color 0.12s;
           line-height: 0;
         }
-        .git-pull-btn:hover:not(:disabled),
-        .git-pull-btn:focus-visible {
+        .git-sync-btn:hover:not(:disabled),
+        .git-sync-btn:focus-visible {
           background: var(--surface-2);
           border-color: var(--border);
           outline: none;
         }
-        .git-pull-btn:disabled { cursor: default; }
+        .git-sync-btn:disabled { cursor: default; }
       `}</style>
       <button
         type="button"
-        className="git-pull-btn"
+        className="git-sync-btn"
         onClick={handleClick}
         disabled={uiState === "loading"}
         aria-label={tooltipLabel}
         title={tooltipLabel}
       >
-        <SyncIcon spin={uiState === "loading"} color={iconColor} />
+        <PullIcon spin={uiState === "loading"} color={iconColor} />
       </button>
     </>
   );

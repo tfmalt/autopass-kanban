@@ -220,7 +220,7 @@ describe("useLiveReload", () => {
 });
 
 describe("useGitPull", () => {
-  it("invalidates only the aggregate keys", async () => {
+  it("invalidates aggregates and the git sync status", async () => {
     const qc = productionLikeClient();
     qc.setQueryData(["config"], { version: "test" });
     qc.setQueryData(["story", "US-001"], { id: "US-001" });
@@ -240,6 +240,7 @@ describe("useGitPull", () => {
       '["metrics"]',
       '["report"]',
       '["team"]',
+      '["gitStatus"]',
     ]);
     expect(
       keys,

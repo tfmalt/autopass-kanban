@@ -30,6 +30,30 @@ pub(crate) struct GitPullResponse {
     pub(crate) pulled_at: Option<String>,
 }
 
+#[derive(Debug, Serialize, TS)]
+#[ts(rename = "GitStatusResponse")]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitStatusResponse {
+    pub(crate) available: bool,
+    pub(crate) upstream: Option<String>,
+    pub(crate) ahead: u32,
+    pub(crate) behind: u32,
+    pub(crate) pending_count: usize,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(rename = "GitPushResponse")]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitPushResponse {
+    pub(crate) ok: bool,
+    #[ts(type = "\"success\" | \"nothing_to_do\" | \"error\" | \"in_progress\"")]
+    pub(crate) status: &'static str,
+    pub(crate) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub(crate) commit_sha: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(rename = "TaskSummary")]
 #[serde(rename_all = "camelCase")]

@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useLiveReload, useConfig, useRepository } from "../api/hooks.js";
-import { GitPullButton } from "./GitPullButton.js";
+import { GitSyncControls } from "./GitSyncControls.js";
 import { ProjectProgress } from "./ProjectProgress.js";
 
 export function AppShell() {
@@ -30,7 +30,7 @@ export function AppShell() {
           </span>
         )}
         {repo.data && <ProjectProgress progress={repo.data.progress} />}
-        <GitPullButton />
+        <GitSyncControls />
       </header>
       <main>
         <Outlet />

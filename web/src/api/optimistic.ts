@@ -334,6 +334,7 @@ export function useOptimisticSnapshotMutation<TData, TVariables>({
     onSettled: (data, error, vars, context) => {
       void queryClient.invalidateQueries({ queryKey: ["repository"] });
       void queryClient.invalidateQueries({ queryKey: ["report"] });
+      void queryClient.invalidateQueries({ queryKey: ["gitStatus"] });
       onSettled?.({ data, error, vars, context, queryClient });
     },
   });

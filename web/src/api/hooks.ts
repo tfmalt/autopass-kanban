@@ -7,12 +7,14 @@ import {
   createSprint,
   fetchConfig,
   fetchEpic,
+  fetchGitStatus,
   fetchMetrics,
   fetchReport,
   fetchRepository,
   fetchStory,
   fetchTeam,
   gitPull,
+  gitPush,
   moveStory,
   planStory,
   updateEpicFields,
@@ -64,7 +66,31 @@ export function useGitPull() {
         for (const queryKey of AGGREGATE_QUERY_KEYS) {
           void queryClient.invalidateQueries({ queryKey });
         }
+        void queryClient.invalidateQueries({ queryKey: ["gitStatus"] });
       }
+    },
+  });
+}
+
+/** Local Git state is cheap to query; refresh it regularly without polling the remote. */
+export const useGitStatus = () =>
+  useQuery({
+    queryKey: ["gitStatus"],
+    queryFn: fetchGitStatus,
+    refetchInterval: 20_000,
+    refetchOnWindowFocus: true,
+    placeholderData: keepPreviousData,
+  });
+
+export function useGitPush() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: gitPush,
+    onSuccess: () => {
+      for (const queryKey of AGGREGATE_QUERY_KEYS) {
+        void queryClient.invalidateQueries({ queryKey });
+      }
+      void queryClient.invalidateQueries({ queryKey: ["gitStatus"] });
     },
   });
 }

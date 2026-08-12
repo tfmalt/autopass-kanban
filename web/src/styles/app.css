@@ -17,6 +17,9 @@ html, body, #root { height: 100%; }
 .nav a { color: var(--text-muted); padding: 5px 11px; border-radius: 7px; text-decoration: none; font-size: 13px; }
 .nav a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .spacer { flex: 1; }
+.git-sync-controls { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.git-sync-buttons { display: inline-flex; align-items: center; gap: 2px; }
+.git-sync-summary { color: var(--text-faint); font-size: 10px; line-height: 1; white-space: nowrap; }
 .view { padding: 18px; }
 .backlog-planning-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; }
 .backlog-column { border: 1px dashed transparent; border-radius: var(--radius); margin: -8px; min-height: 190px; padding: 8px; transition: border-color 0.12s ease, background 0.12s ease; }

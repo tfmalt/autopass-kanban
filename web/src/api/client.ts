@@ -1,4 +1,4 @@
-import type { ConfigResponse, DashboardMetrics, EpicDetail, GitPullResponse, ReportDashboard, RepositorySnapshot, StoryDetail, TeamMember } from "@shared/generated/api.js";
+import type { ConfigResponse, DashboardMetrics, EpicDetail, GitPullResponse, GitPushResponse, GitStatusResponse, ReportDashboard, RepositorySnapshot, StoryDetail, TeamMember } from "@shared/generated/api.js";
 
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -61,3 +61,5 @@ export const updateTaskStatus = (storyId: string, taskId: string, status: string
   sendJson("PATCH", `/api/stories/${encodeURIComponent(storyId)}/tasks/${encodeURIComponent(taskId)}`, { status });
 
 export const gitPull = () => sendJson<GitPullResponse>("POST", "/api/git-pull", {});
+export const gitPush = () => sendJson<GitPushResponse>("POST", "/api/git-push", {});
+export const fetchGitStatus = () => getJson<GitStatusResponse>("/api/git-status");

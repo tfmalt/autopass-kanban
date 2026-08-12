@@ -95,5 +95,9 @@ export type ConfigResponse = { port: number, host: string, style: string, versio
 
 export type GitPullResponse = { ok: boolean, status: "success" | "error" | "in_progress", message: string, stdout?: string, stderr?: string, pulledAt?: string, };
 
+export type GitStatusResponse = { available: boolean, upstream: string | null, ahead: number, behind: number, pendingCount: number, };
+
+export type GitPushResponse = { ok: boolean, status: "success" | "nothing_to_do" | "error" | "in_progress", message: string, commitSha?: string, };
+
 export type TeamMember = { name: string, email: string, label: string, avatarUrl?: string, };
 
