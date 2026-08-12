@@ -219,6 +219,101 @@ pub(crate) enum EpicCommand {
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum StoryCommand {
     #[command(
+        about = "Create a story from the user-story template. Effect: writes one canonical story markdown file near its parent epic in the configured backlog path. Side effects: regenerates sprint story table when a non-empty sprint is set."
+    )]
+    Create {
+        #[arg(
+            long,
+            value_name = "TITLE",
+            help = "Story title written to `# User Story: ...` in the markdown body."
+        )]
+        title: String,
+        #[arg(
+            long,
+            value_name = "EPIC",
+            help = "Parent epic id, for example EP-F1-06."
+        )]
+        epic: String,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Optional story id, for example US-F1-053. Omit to auto-generate the next story id for the epic phase."
+        )]
+        id: Option<String>,
+        #[arg(
+            long,
+            default_value = "draft",
+            value_name = "STATUS",
+            help = "Initial story status. Defaults to draft."
+        )]
+        status: String,
+        #[arg(
+            long,
+            default_value = "~",
+            value_name = "SPRINT",
+            help = "Initial sprint frontmatter value. Defaults to `~`."
+        )]
+        sprint: String,
+        #[arg(
+            long = "story-points",
+            default_value = "5",
+            value_name = "POINTS",
+            help = "Initial story_points value. Defaults to 5."
+        )]
+        story_points: String,
+        #[arg(
+            long,
+            value_name = "ASSIGNEE",
+            help = "Optional assignee in `Name <email>` format (or comma-separated list)."
+        )]
+        assignee: Option<String>,
+        #[arg(
+            long,
+            value_name = "RANK",
+            help = "Optional priority as a non-negative integer."
+        )]
+        priority: Option<String>,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Optional task_file frontmatter value."
+        )]
+        task_file: Option<String>,
+        #[arg(
+            long,
+            value_name = "TIMESTAMP",
+            help = "Optional activated timestamp (local ISO 8601 with numeric timezone offset)."
+        )]
+        activated: Option<String>,
+        #[arg(
+            long,
+            value_name = "TIMESTAMP",
+            help = "Optional work_started timestamp (local ISO 8601 with numeric timezone offset)."
+        )]
+        work_started: Option<String>,
+        #[arg(
+            long,
+            value_name = "TIMESTAMP",
+            help = "Optional work_done timestamp (local ISO 8601 with numeric timezone offset)."
+        )]
+        work_done: Option<String>,
+        #[arg(
+            long,
+            value_name = "TIMESTAMP",
+            help = "Optional created timestamp (local ISO 8601 with numeric timezone offset). Defaults to now."
+        )]
+        created: Option<String>,
+        #[arg(
+            long,
+            value_name = "TIMESTAMP",
+            help = "Optional updated timestamp (local ISO 8601 with numeric timezone offset). Defaults to now."
+        )]
+        updated: Option<String>,
+        #[arg(help = "Repository root to update. Defaults to the current directory.")]
+        #[arg(default_value = ".")]
+        repo_root: PathBuf,
+    },
+    #[command(
         about = "Show one story. Effect: read-only inspection of the canonical story file plus acceptance criteria and tasks. Side effects: none."
     )]
     Show {
@@ -953,7 +1048,8 @@ pub(crate) fn command_repo_root(command: &Command) -> Option<&PathBuf> {
             }
         },
         Command::Story { command } => match command {
-            StoryCommand::Show { repo_root, .. }
+            StoryCommand::Create { repo_root, .. }
+            | StoryCommand::Show { repo_root, .. }
             | StoryCommand::List { repo_root, .. }
             | StoryCommand::Move { repo_root, .. }
             | StoryCommand::Plan { repo_root, .. }
@@ -1272,6 +1368,51 @@ mod tests {
                 assert_eq!(story_points, Some(Some("5".to_string())));
                 assert_eq!(priority, None);
                 assert_eq!(status, Some(Some("ready".to_string())));
+                assert_eq!(repo_root, PathBuf::from("."));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn story_create_parses_required_and_optional_fields() {
+        let args = Args::try_parse_from([
+            "kanban",
+            "story",
+            "create",
+            "--title",
+            "Add create command",
+            "--epic",
+            "EP-F1-06",
+            "--story-points",
+            "M",
+            "--status",
+            "draft",
+            "--sprint",
+            "~",
+        ])
+        .unwrap();
+
+        match args.command {
+            Command::Story {
+                command:
+                    StoryCommand::Create {
+                        title,
+                        epic,
+                        id,
+                        status,
+                        sprint,
+                        story_points,
+                        repo_root,
+                        ..
+                    },
+            } => {
+                assert_eq!(title, "Add create command");
+                assert_eq!(epic, "EP-F1-06");
+                assert_eq!(id, None);
+                assert_eq!(status, "draft");
+                assert_eq!(sprint, "~");
+                assert_eq!(story_points, "M");
                 assert_eq!(repo_root, PathBuf::from("."));
             }
             _ => panic!("unexpected command"),

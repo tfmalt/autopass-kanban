@@ -10,11 +10,11 @@ use crate::dispatch::{DispatchMode, config_show_json_value, execute_command};
 use crate::outcome::CommandOutcome;
 use crate::theme::Theme;
 use kanban_core::{
-    ColorMode, ConfigGetDto, ConfigInitDto, ConfigSetDto, DeleteStoryDto, DoctorDto, EpicShowDto,
-    EpicUpdateDto, JsonEnvelope, KanbanErrorBody, KanbanErrorCode, ListIdsDto, MoveStoryDto,
-    NoData, PhaseShowDto, PlanStoryDto, SprintCreateDto, SprintListDto, SprintOverviewDto,
-    SprintRolloverDto, SprintSyncDto, StoryListDto, StoryShowDto, StoryUpdateDto, TaskMutationDto,
-    TaskShowDto, ValidateDto,
+    ColorMode, ConfigGetDto, ConfigInitDto, ConfigSetDto, CreateStoryDto, DeleteStoryDto,
+    DoctorDto, EpicShowDto, EpicUpdateDto, JsonEnvelope, KanbanErrorBody, KanbanErrorCode,
+    ListIdsDto, MoveStoryDto, NoData, PhaseShowDto, PlanStoryDto, SprintCreateDto, SprintListDto,
+    SprintOverviewDto, SprintRolloverDto, SprintSyncDto, StoryListDto, StoryShowDto,
+    StoryUpdateDto, TaskMutationDto, TaskShowDto, ValidateDto,
 };
 
 /// Serialize a `JsonEnvelope` to stdout and return its exit code.
@@ -74,6 +74,7 @@ fn json_kind(command: &Command) -> &'static str {
             EpicCommand::Update { .. } => "epic.update",
         },
         Command::Story { command } => match command {
+            StoryCommand::Create { .. } => "story.create",
             StoryCommand::Show { .. } => "story.show",
             StoryCommand::List { .. } => "story.list",
             StoryCommand::Move { .. } => "story.move",
@@ -210,6 +211,10 @@ fn emit_shared_outcome(outcome: CommandOutcome) -> i32 {
                 ),
             )),
         },
+        CommandOutcome::StoryCreate { result, repo_root } => print_envelope(&JsonEnvelope::ok(
+            kind,
+            CreateStoryDto::from_result(&result, &repo_root),
+        )),
         CommandOutcome::StoryList { scope, stories } => print_envelope(&JsonEnvelope::ok(
             kind,
             StoryListDto::new(scope.json_label(), &stories),

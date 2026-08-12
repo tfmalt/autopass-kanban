@@ -37,6 +37,21 @@ fn write_story(root: &Path, rel: &str, frontmatter: &str, body: &str) {
     fs::write(&full_path, content).expect("write story file");
 }
 
+fn write_story_template(root: &Path) {
+    let template_path = root.join("templates/TEMPLATE-user-story-en.md");
+    fs::create_dir_all(
+        template_path
+            .parent()
+            .expect("template path should have parent"),
+    )
+    .expect("create template dir");
+    fs::write(
+        &template_path,
+        include_str!("../../../templates/TEMPLATE-user-story-en.md"),
+    )
+    .expect("write story template");
+}
+
 fn init_repo(dir: &std::path::Path) {
     git_init(dir);
     let repo_root = dir.to_string_lossy().into_owned();
@@ -459,6 +474,64 @@ fn epic_show_missing_id_emits_epic_not_found() {
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(json["status"], "error");
     assert_eq!(json["error"]["code"], "epic_not_found");
+}
+
+#[test]
+fn story_create_emits_result_and_writes_story_from_template() {
+    let dir = tempdir().expect("temp dir should be created");
+    let repo_root = dir.path().to_string_lossy().into_owned();
+
+    init_repo(dir.path());
+    write_story_template(dir.path());
+
+    let epic_rel =
+        "delivery/backlog/phase-1/06.tooling/EP-F1-06-git-driven-kanban-and-backlog-tooling.md";
+    let epic_frontmatter = "id: EP-F1-06\ntype: epic\nstatus: draft\nphase: 1\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-06-11T14:08:39+0200\n";
+    let epic_body = "# Epic: Git-driven kanban and backlog tooling\n";
+    write_story(dir.path(), epic_rel, epic_frontmatter, epic_body);
+
+    let out = kanban_in(
+        dir.path(),
+        &[
+            "--format",
+            "json",
+            "story",
+            "create",
+            "--title",
+            "Integration test story",
+            "--epic",
+            "EP-F1-06",
+            "--story-points",
+            "M",
+            &repo_root,
+        ],
+    );
+
+    let json = parse_stdout(&out);
+    assert!(
+        out.status.success(),
+        "story create should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["kind"], "story.create");
+    assert_eq!(json["data"]["story_id"], "US-F1-001");
+    assert_eq!(json["data"]["epic_id"], "EP-F1-06");
+    assert!(json["data"]["sprint_name"].is_null());
+    assert_eq!(
+        json["data"]["story_path"],
+        "delivery/backlog/phase-1/06.tooling/US-F1-001-integration-test-story.md"
+    );
+
+    let created_story = dir
+        .path()
+        .join("delivery/backlog/phase-1/06.tooling/US-F1-001-integration-test-story.md");
+    let markdown = fs::read_to_string(&created_story).expect("created story should be readable");
+    assert!(markdown.contains("id: US-F1-001"));
+    assert!(markdown.contains("epic: EP-F1-06"));
+    assert!(markdown.contains("story_points: 5"));
+    assert!(markdown.contains("# User Story: Integration test story"));
+    assert!(markdown.contains("## Definition of Done"));
 }
 
 #[test]

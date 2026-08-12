@@ -3,8 +3,9 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::{
-    CreateSprintResult, DeleteStoryResult, EpicUpdateResult, MoveStoryResult, PlanStoryResult,
-    RolloverResult, StoryUpdateResult, TaskListResult, TaskMutationResult, TaskSummary,
+    CreateSprintResult, CreateStoryResult, DeleteStoryResult, EpicUpdateResult, MoveStoryResult,
+    PlanStoryResult, RolloverResult, StoryUpdateResult, TaskListResult, TaskMutationResult,
+    TaskSummary,
 };
 
 use super::{TaskDto, rel_to_root, slugify_status};
@@ -20,6 +21,26 @@ pub struct MoveStoryDto {
     pub to_status_normalized: String,
     pub story_path: String,
     pub task_path: Option<String>,
+}
+
+/// DTO for `story create` responses.
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateStoryDto {
+    pub story_id: String,
+    pub epic_id: String,
+    pub sprint_name: Option<String>,
+    pub story_path: String,
+}
+
+impl CreateStoryDto {
+    pub fn from_result(r: &CreateStoryResult, repo_root: &Path) -> Self {
+        Self {
+            story_id: r.story_id.clone(),
+            epic_id: r.epic_id.clone(),
+            sprint_name: r.sprint_name.clone(),
+            story_path: rel_to_root(repo_root, &r.story_path),
+        }
+    }
 }
 
 impl MoveStoryDto {

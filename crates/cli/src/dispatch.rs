@@ -24,10 +24,11 @@ use crate::web::{
 };
 use chrono::NaiveDate;
 use kanban_core::{
-    CompletionDto, FeaturesConfig, KanbanError, KanbanErrorBody, KanbanErrorCode, ListIdItemDto,
-    ReportForecastDto, ReportWbsDto, WorkingCalendar, add_task_to_story, config_show_value,
-    create_sprint, delete_story, delete_task_from_story, doctor_repository, find_epic_with_source,
-    find_story, find_story_with_source, get_config_json, get_config_value,
+    CompletionDto, CreateStoryInput, FeaturesConfig, KanbanError, KanbanErrorBody, KanbanErrorCode,
+    ListIdItemDto, ReportForecastDto, ReportWbsDto, WorkingCalendar, add_task_to_story,
+    config_show_value, create_sprint, create_story, delete_story, delete_task_from_story,
+    doctor_repository, find_epic_with_source, find_story, find_story_with_source, get_config_json,
+    get_config_value,
     init_config_with_features, list_all_epic_overviews, list_all_stories, list_epic_ids,
     list_sprint_names, list_story_completion_items, list_story_ids, list_tasks_for_story,
     load_kanban_config, move_story_to_status_with_assignee, plan_story_into_sprint,
@@ -416,6 +417,45 @@ pub(crate) fn execute_command(
             }
         },
         Command::Story { command } => match command {
+            StoryCommand::Create {
+                title,
+                epic,
+                id,
+                status,
+                sprint,
+                story_points,
+                assignee,
+                priority,
+                task_file,
+                activated,
+                work_started,
+                work_done,
+                created,
+                updated,
+                repo_root,
+            } => {
+                let input = CreateStoryInput {
+                    id: id.clone(),
+                    title: title.clone(),
+                    epic_id: epic.clone(),
+                    status: status.clone(),
+                    sprint: sprint.clone(),
+                    story_points: story_points.clone(),
+                    assignee: assignee.clone(),
+                    priority: priority.clone(),
+                    task_file: task_file.clone(),
+                    activated: activated.clone(),
+                    work_started: work_started.clone(),
+                    work_done: work_done.clone(),
+                    created: created.clone(),
+                    updated: updated.clone(),
+                };
+                let root = load_kanban_config(repo_root)?.repo_root;
+                CommandOutcome::StoryCreate {
+                    result: create_story(&root, &input)?,
+                    repo_root: root,
+                }
+            }
             StoryCommand::Show { id, repo_root } => CommandOutcome::StoryShow {
                 id: id.clone(),
                 result: Box::new(find_story_with_source(repo_root, id)?),

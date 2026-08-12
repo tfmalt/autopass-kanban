@@ -237,6 +237,7 @@ Implemented commands:
 - `kanban sprint rollover <name> [repo_root]`
 - `kanban sprint sync [repo_root]`
 - `kanban phase show <phase> [repo_root]`
+- `kanban story create --title <title> --epic <epic_id> [--id <story_id>] [--status <status>] [--sprint <sprint>] [--story-points <points>] [--assignee "Name <email>"] [--priority <rank>] [--task-file <path>] [repo_root]`
 - `kanban story show <id> [repo_root]`
 - `kanban story list [--current|--all|--next|--sprint <id>] [repo_root]`
 - `kanban story move <id> <status> [-a|--assignee "Name <email>"] [repo_root]`

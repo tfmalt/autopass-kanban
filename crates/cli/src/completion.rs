@@ -76,6 +76,10 @@ pub(crate) fn enhance_zsh_completion(script: &str) -> String {
             "':id -- Story id to inspect, for example US-F1-053.:_kanban_story_ids'",
         )
         .replace(
+            "'--epic=[Parent epic id, for example EP-F1-06.]:EPIC:_default'",
+            "'--epic=[Parent epic id, for example EP-F1-06.]:EPIC:_kanban_epic_ids'",
+        )
+        .replace(
             "':id -- Epic id to inspect, for example EP-F1-06.:_default'",
             "':id -- Epic id to inspect, for example EP-F1-06.:_kanban_epic_ids'",
         )
@@ -122,6 +126,10 @@ pub(crate) fn enhance_zsh_completion(script: &str) -> String {
         .replace(
             "'--story-points=[Update frontmatter story_points. Omit VALUE to prompt with the current value.]::POINTS:_default'",
             "'--story-points=[Update frontmatter story_points. Omit VALUE to prompt with the current value.]::POINTS:_kanban_story_point_values'",
+        )
+        .replace(
+            "'--story-points=[Initial story_points value. Defaults to 5.]:POINTS:_default'",
+            "'--story-points=[Initial story_points value. Defaults to 5.]:POINTS:_kanban_story_point_values'",
         )
         .replace(
             "'--planned-start=[Update frontmatter planned_start. Omit VALUE to prompt with the current value.]::DATE:_default'",

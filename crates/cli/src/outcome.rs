@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
 use kanban_core::{
-    CompletionDto, ConfigInitResult, ConfigSetResult, CreateSprintResult, DeleteStoryResult,
-    DoctorFinding, Epic, EpicDetails, EpicUpdateResult, KanbanErrorBody, ListIdItemDto,
-    MoveStoryResult, PhaseOverview, PlanStoryResult, ReportForecastDto, ReportWbsDto,
-    RolloverResult, SprintOverview, Story, StoryDetails, StoryOverview, StoryUpdateResult,
-    TaskListResult, TaskMutationResult, ValidationReport,
+    CompletionDto, ConfigInitResult, ConfigSetResult, CreateSprintResult, CreateStoryResult,
+    DeleteStoryResult, DoctorFinding, Epic, EpicDetails, EpicUpdateResult, KanbanErrorBody,
+    ListIdItemDto, MoveStoryResult, PhaseOverview, PlanStoryResult, ReportForecastDto,
+    ReportWbsDto, RolloverResult, SprintOverview, Story, StoryDetails, StoryOverview,
+    StoryUpdateResult, TaskListResult, TaskMutationResult, ValidationReport,
 };
 
 use crate::layout::OutputLayout;
@@ -68,6 +68,10 @@ pub(crate) enum CommandOutcome {
     StoryShow {
         id: String,
         result: Box<Option<(StoryDetails, Story)>>,
+    },
+    StoryCreate {
+        result: CreateStoryResult,
+        repo_root: PathBuf,
     },
     StoryList {
         scope: StoryListScope,
@@ -152,6 +156,7 @@ impl CommandOutcome {
             CommandOutcome::PhaseShow(_) => "phase.show",
             CommandOutcome::EpicShow { .. } => "epic.show",
             CommandOutcome::StoryShow { .. } => "story.show",
+            CommandOutcome::StoryCreate { .. } => "story.create",
             CommandOutcome::StoryList { .. } => "story.list",
             CommandOutcome::TaskShow { .. } => "task.show",
             CommandOutcome::Validate(_) => "validate",
@@ -304,6 +309,22 @@ pub(crate) fn print_human_outcome(theme: &Theme, outcome: CommandOutcome) {
             }
             None => println!("{} story not found: {id}", theme.warning_label()),
         },
+        CommandOutcome::StoryCreate { result, .. } => {
+            println!(
+                "{} created {}",
+                theme.ok_label(),
+                theme.id(&result.story_id)
+            );
+            println!("{} epic: {}", theme.info_label(), theme.id(&result.epic_id));
+            if let Some(sprint_name) = result.sprint_name {
+                println!("{} sprint: {}", theme.info_label(), sprint_name);
+            }
+            println!(
+                "{} story: {}",
+                theme.info_label(),
+                theme.path(result.story_path.display())
+            );
+        }
         CommandOutcome::StoryList { scope, stories } => {
             print_story_list(theme, &scope.human_label(), &stories);
         }

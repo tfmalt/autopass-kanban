@@ -1,6 +1,6 @@
 use crate::config::*;
 use crate::constants::*;
-use crate::epic::read_epic_sources;
+use crate::epic::{read_epic_sources, select_epic_source};
 use crate::error::KanbanError;
 use crate::lock::RepoLock;
 use crate::markdown::*;
@@ -11,10 +11,292 @@ use crate::repository::*;
 use crate::sprint::*;
 use crate::status::StoryStatus;
 use crate::util::*;
+use crate::validate::validate_local_timestamp_frontmatter;
 
 pub fn list_all_stories(repo_root: impl AsRef<Path>) -> Result<Vec<StoryOverview>> {
     let repository = read_repository(repo_root)?;
     Ok(unique_story_overviews(&repository))
+}
+
+pub fn create_story(
+    repo_root: impl AsRef<Path>,
+    input: &CreateStoryInput,
+) -> Result<CreateStoryResult> {
+    let config = load_kanban_config(repo_root)?;
+    let _lock = RepoLock::acquire(&config.repo_root)?;
+    let repository = read_repository_with_config(&config)?;
+
+    if !config.features().epics {
+        return Err(KanbanError::feature_disabled("epics").into());
+    }
+
+    let title = input.title.trim();
+    if title.is_empty() {
+        return Err(KanbanError::invalid_argument("Story title must not be empty.").into());
+    }
+
+    let epic_id = input.epic_id.trim().to_ascii_uppercase();
+    if epic_id.is_empty() {
+        return Err(KanbanError::invalid_argument("Story epic id must not be empty.").into());
+    }
+
+    let epic_sources = read_epic_sources(&config)?;
+    if select_epic_source(&epic_sources, &epic_id).is_none() {
+        return Err(KanbanError::epic_not_found(epic_id).into());
+    }
+
+    let epic = epic_sources
+        .into_iter()
+        .find(|candidate| {
+            candidate
+                .frontmatter
+                .get("id")
+                .map(|value| value.eq_ignore_ascii_case(&epic_id))
+                .unwrap_or(false)
+        })
+        .ok_or_else(|| KanbanError::epic_not_found(&epic_id))?;
+
+    let accepted_story_points = config.story_points.accepted_values();
+    let story_points_input = input.story_points.trim().to_string();
+    if !accepted_story_points.contains(&story_points_input) {
+        return Err(KanbanError::invalid_argument(format!(
+            "story_points must be one of {}.",
+            accepted_story_points
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+        .into());
+    }
+    let story_points = config
+        .story_points
+        .aliases
+        .get(&story_points_input)
+        .cloned()
+        .unwrap_or(story_points_input);
+
+    let status = normalize_story_status_input(&input.status)?;
+    let sprint = input.sprint.trim().to_string();
+    validate_story_sprint_frontmatter(&sprint)?;
+    let assignee = input
+        .assignee
+        .as_deref()
+        .map(normalize_story_assignee_value)
+        .transpose()?;
+
+    let priority = input
+        .priority
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(priority) = priority {
+        validate_non_negative_integer_frontmatter("priority", priority)?;
+    }
+
+    let task_file = input
+        .task_file
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(task_file) = task_file {
+        validate_task_file_frontmatter_value(task_file)?;
+    }
+
+    for (field, value) in [
+        ("activated", input.activated.as_deref()),
+        ("work_started", input.work_started.as_deref()),
+        ("work_done", input.work_done.as_deref()),
+        ("created", input.created.as_deref()),
+        ("updated", input.updated.as_deref()),
+    ] {
+        if let Some(value) = value {
+            validate_local_timestamp_frontmatter(field, value)?;
+        }
+    }
+
+    let story_id = match input
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(id) => id.to_ascii_uppercase(),
+        None => next_story_id_for_epic(&repository, &epic_id),
+    };
+
+    if !story_id.starts_with("US-") {
+        return Err(KanbanError::invalid_argument(format!(
+            "Story id must start with US-; got {story_id}."
+        ))
+        .into());
+    }
+
+    if repository
+        .stories
+        .iter()
+        .any(|story| story.fields.id.eq_ignore_ascii_case(&story_id))
+    {
+        return Err(
+            KanbanError::invalid_argument(format!("Story already exists: {story_id}")).into(),
+        );
+    }
+
+    let story_dir = epic.file_path.parent().ok_or_else(|| {
+        anyhow!(
+            "Epic file has no parent directory: {}",
+            epic.file_path.display()
+        )
+    })?;
+    let safe_headline = slugify_headline(title);
+    if safe_headline.is_empty() {
+        return Err(KanbanError::invalid_argument(
+            "Story title must contain at least one ASCII letter or number.",
+        )
+        .into());
+    }
+    let story_file = story_dir.join(format!("{story_id}-{safe_headline}.md"));
+    let story_file = ensure_path_inside(&config.backlog_path(), &story_file)?;
+    if story_file.exists() {
+        return Err(KanbanError::invalid_argument(format!(
+            "Story file already exists: {}",
+            story_file.display()
+        ))
+        .into());
+    }
+
+    let template_path = config
+        .repo_root
+        .join("templates")
+        .join("TEMPLATE-user-story-en.md");
+    let template = fs::read_to_string(&template_path)
+        .with_context(|| format!("read story template {}", template_path.display()))?;
+    let parsed = parse_frontmatter(&template);
+    let now = current_timestamp_string();
+    let created = input
+        .created
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| now.clone());
+    let updated = input
+        .updated
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| now.clone());
+
+    let mut updates = vec![
+        ("id", Some(story_id.clone())),
+        ("type", Some("user-story".to_string())),
+        ("status", Some(status.clone())),
+        ("epic", Some(epic_id.clone())),
+        ("sprint", Some(sprint.clone())),
+        ("story_points", Some(story_points.clone())),
+        ("created", Some(created)),
+        ("updated", Some(updated)),
+    ];
+    if parsed.frontmatter_keys.contains("assignee") {
+        updates.push(("assignee", assignee.clone()));
+    }
+    if parsed.frontmatter_keys.contains("priority") {
+        updates.push(("priority", priority.map(|value| value.to_string())));
+    }
+    if parsed.frontmatter_keys.contains("task_file") {
+        updates.push(("task_file", task_file.map(|value| value.to_string())));
+    }
+    if parsed.frontmatter_keys.contains("activated") {
+        updates.push((
+            "activated",
+            input
+                .activated
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+        ));
+    }
+    updates.push((
+        "work_started",
+        input
+            .work_started
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+    ));
+    updates.push((
+        "work_done",
+        input
+            .work_done
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+    ));
+
+    let markdown = upsert_frontmatter_markdown(&template, &updates)?;
+    let body = replace_story_title(&markdown, title);
+    atomic_write(&story_file, &body)
+        .with_context(|| format!("write story file {}", story_file.display()))?;
+
+    let sprint_name = if sprint.is_empty() || sprint == "~" {
+        None
+    } else {
+        Some(sprint.clone())
+    };
+    if let Some(sprint_name) = sprint_name.as_deref() {
+        regenerate_sprint_roster(&config, sprint_name)?;
+    }
+
+    Ok(CreateStoryResult {
+        story_id,
+        epic_id,
+        sprint_name,
+        story_path: relative_path(&config.repo_root, &story_file),
+    })
+}
+
+fn next_story_id_for_epic(repository: &Repository, epic_id: &str) -> String {
+    let phase = phase_from_id(epic_id, "EP").unwrap_or_else(|| "F1".to_string());
+    let max_number = repository
+        .stories
+        .iter()
+        .filter_map(|story| parse_story_number_for_phase(&story.fields.id, &phase))
+        .max()
+        .unwrap_or(0);
+    format!("US-{phase}-{:03}", max_number + 1)
+}
+
+fn parse_story_number_for_phase(id: &str, phase: &str) -> Option<u32> {
+    let normalized = id.trim().to_ascii_uppercase();
+    let prefix = format!("US-{phase}-");
+    let rest = normalized.strip_prefix(&prefix)?;
+    rest.parse::<u32>().ok()
+}
+
+fn replace_story_title(markdown: &str, title: &str) -> String {
+    let mut lines = markdown.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
+    if let Some(index) = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("# User Story:"))
+    {
+        lines[index] = format!("# User Story: {title}");
+        return format!("{}\n", lines.join("\n"));
+    }
+    if let Some(index) = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("# "))
+    {
+        lines[index] = format!("# User Story: {title}");
+        return format!("{}\n", lines.join("\n"));
+    }
+    let mut out = markdown.trim_end().to_string();
+    out.push_str("\n\n# User Story: ");
+    out.push_str(title);
+    out.push('\n');
+    out
 }
 
 /// Non-reloading variant of [`list_all_stories`].
@@ -877,6 +1159,16 @@ mod tests {
     use crate::testutil::*;
     use tempfile::tempdir;
 
+    fn write_story_template(temp_root: &Path) {
+        let template_path = temp_root.join("templates/TEMPLATE-user-story-en.md");
+        fs::create_dir_all(template_path.parent().unwrap()).unwrap();
+        fs::write(
+            template_path,
+            include_str!("../../../templates/TEMPLATE-user-story-en.md"),
+        )
+        .unwrap();
+    }
+
     fn write_epic(temp_root: &Path, status: &str) -> PathBuf {
         let path = temp_root.join(
             "delivery/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/EP-F1-06-git-driven-kanban-and-backlog-tooling.md",
@@ -1074,6 +1366,85 @@ mod tests {
                 .contains("Scenario 1")
         );
         assert_eq!(story.tasks.len(), 4);
+    }
+
+    #[test]
+    fn create_story_uses_template_and_places_story_next_to_epic() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_story_template(temp_root.path());
+        let epic_path = write_epic(temp_root.path(), "draft");
+
+        let result = create_story(
+            temp_root.path(),
+            &CreateStoryInput {
+                id: None,
+                title: "CLI creates stories from template".to_string(),
+                epic_id: "EP-F1-06".to_string(),
+                status: "draft".to_string(),
+                sprint: "~".to_string(),
+                story_points: "M".to_string(),
+                assignee: None,
+                priority: None,
+                task_file: None,
+                activated: None,
+                work_started: None,
+                work_done: None,
+                created: None,
+                updated: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.story_id, "US-F1-001");
+        assert_eq!(result.epic_id, "EP-F1-06");
+        assert_eq!(result.sprint_name, None);
+        let story_path = temp_root.path().join(&result.story_path);
+        assert_eq!(story_path.parent().unwrap(), epic_path.parent().unwrap());
+        let markdown = fs::read_to_string(story_path).unwrap();
+        assert!(markdown.contains("# User Story: CLI creates stories from template"));
+        assert!(markdown.contains("story_points: 5"));
+        assert!(markdown.contains("## Definition of Done"));
+    }
+
+    #[test]
+    fn create_story_rejects_duplicate_story_id() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        write_story_template(temp_root.path());
+        write_epic(temp_root.path(), "draft");
+        write_story(
+            temp_root.path(),
+            "delivery/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-053-existing.md",
+            "id: US-F1-053\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let error = create_story(
+            temp_root.path(),
+            &CreateStoryInput {
+                id: Some("US-F1-053".to_string()),
+                title: "Duplicate id".to_string(),
+                epic_id: "EP-F1-06".to_string(),
+                status: "draft".to_string(),
+                sprint: "~".to_string(),
+                story_points: "5".to_string(),
+                assignee: None,
+                priority: None,
+                task_file: None,
+                activated: None,
+                work_started: None,
+                work_done: None,
+                created: None,
+                updated: None,
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Story already exists: US-F1-053")
+        );
     }
 
     #[test]
