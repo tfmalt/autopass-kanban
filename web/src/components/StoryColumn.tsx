@@ -16,12 +16,14 @@ export function StoryColumn({
   status,
   stories,
   onOpen,
+  onUnplan,
   activeDragId,
   assigneeMap,
 }: {
   status: StoryStatus;
   stories: Story[];
   onOpen?: (s: Story) => void;
+  onUnplan?: (s: Story) => void;
   activeDragId?: string | null;
   assigneeMap?: ReadonlyMap<string, TeamMember>;
 }) {
@@ -37,7 +39,7 @@ export function StoryColumn({
       </h4>
       <SortableContext items={stories.map((story) => story.id)} strategy={verticalListSortingStrategy}>
         {stories.map((story) => (
-          <StoryCard key={story.id} story={story} status={status} onOpen={onOpen} assigneeMap={assigneeMap} />
+          <StoryCard key={story.id} story={story} status={status} onOpen={onOpen} onUnplan={onUnplan} assigneeMap={assigneeMap} />
         ))}
       </SortableContext>
       {showPlaceholder && <div className="card-placeholder" />}

@@ -12,7 +12,7 @@ import {
 import { arrayMove, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import type { Story } from "@shared/generated/api.js";
 import { isBoardStatus, STORY_STATUSES } from "@shared/domain.js";
-import { useAssigneeMap, useMoveStory, useReorderStories, useRepository } from "../api/hooks.js";
+import { useAssigneeMap, useMoveStory, useReorderStories, useRepository, useUnplanStory } from "../api/hooks.js";
 import { BoardSkeleton } from "../components/Skeletons.js";
 import { StoryCardOverlay } from "../components/StoryCard.js";
 import { StoryColumn } from "../components/StoryColumn.js";
@@ -34,6 +34,7 @@ export function BoardView() {
   const assigneeMap = useAssigneeMap();
   const move = useMoveStory();
   const reorderStories = useReorderStories();
+  const unplan = useUnplanStory();
   const [open, setOpen] = useState<Story | null>(null);
   const [selectedSprint, setSelectedSprint] = useState("");
   const [activeStory, setActiveStory] = useState<Story | null>(null);
@@ -148,6 +149,7 @@ export function BoardView() {
               status={status}
               stories={visibleSprint.storiesByStatus[status]}
               onOpen={handleOpen}
+              onUnplan={(story) => unplan.mutate({ id: story.id })}
               activeDragId={activeStory?.id ?? null}
               assigneeMap={assigneeMap}
             />

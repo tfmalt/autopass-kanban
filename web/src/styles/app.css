@@ -46,6 +46,9 @@ html, body, #root { height: 100%; }
 .card-placeholder { height: 70px; border: 2px dashed var(--accent); border-radius: 8px; background: var(--accent-soft); margin-bottom: 8px; opacity: 0.7; }
 .card .tid { font-size: 9.5px; color: var(--text-faint); }
 .card .ttl { font-size: 12px; margin: 2px 0 8px; }
+.card-unplan-btn { position: absolute; top: 5px; right: 6px; width: 18px; height: 18px; padding: 0; border: none; border-radius: 4px; background: transparent; color: var(--text-faint); font-size: 14px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.12s, background 0.12s, color 0.12s; }
+.card:hover .card-unplan-btn { opacity: 1; }
+.card-unplan-btn:hover { background: var(--red-soft); color: var(--red); }
 .backlog-story-card { display: flex; gap: 10px; align-items: center; }
 .card-chip-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .pts, .story-chip { font-size: 9.5px; font-weight: 650; border-radius: 10px; padding: 1px 7px; border: 1px solid transparent; white-space: nowrap; }

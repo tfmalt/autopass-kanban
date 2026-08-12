@@ -88,11 +88,13 @@ export function StoryCard({
   story,
   status,
   onOpen,
+  onUnplan,
   assigneeMap,
 }: {
   story: Story;
   status: StoryStatus;
   onOpen?: (story: Story) => void;
+  onUnplan?: (story: Story) => void;
   assigneeMap?: AssigneeMap;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -113,6 +115,17 @@ export function StoryCard({
       {...attributes}
       onClick={() => onOpen?.(story)}
     >
+      {status === "todo" && onUnplan && (
+        <button
+          className="card-unplan-btn"
+          title="Remove from sprint"
+          aria-label="Remove from sprint"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onUnplan(story); }}
+        >
+          ×
+        </button>
+      )}
       <CardContent story={story} assigneeMap={assigneeMap} />
     </div>
   );
