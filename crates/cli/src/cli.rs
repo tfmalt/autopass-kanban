@@ -158,7 +158,7 @@ pub(crate) enum SprintCommand {
         repo_root: PathBuf,
     },
     #[command(
-        about = "Regenerate linked user-story tables in all sprint files. Effect: rewrites only generated ## User Stories selected for sprint blocks."
+        about = "Regenerate linked user-story tables in all sprint files. Effect: rewrites everything after ## User Stories selected for sprint in each sprint file. Useful for fixing merge conflicts or aligning manual edits in that generated section."
     )]
     Sync {
         #[arg(help = "Repository root to update. Defaults to the current directory.")]

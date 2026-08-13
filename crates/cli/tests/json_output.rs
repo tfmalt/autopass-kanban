@@ -849,6 +849,52 @@ fn sprint_sync_emits_changed_list() {
 }
 
 #[test]
+fn sprint_sync_rebuilds_conflicted_roster_block() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_backlog_and_sprints(root);
+
+    let sprint_file = root.join("delivery/sprints/S004.back-to-school.md");
+    fs::write(
+        &sprint_file,
+        "---\nsprint: S004\nheadline: back-to-school\nstart_date: 2026-08-03\nend_date: 2026-08-14\nstatus: active\nwip_limit: null\n---\n\n# S004: back-to-school\n\n## Sprint Goal\n\nKeep delivery aligned.\n\n<<<<<<< HEAD\n## User Stories selected for sprint\n\n| Metric | Stories | Points |\n|--------|--------:|------:|\n| Total stories | 1 | 5 |\n| Todo | 1 | 5 |\n\n### todo\n\n| Story | Points | Assignee | Tasks |\n|-------|-------:|----------|-------|\n| [**US-F1-080** Story A](../backlog/phase-1/06.tooling/US-F1-080-story-a.md) | 5 | - | - |\n=======\n## User Stories selected for sprint\n\n| Metric | Stories | Points |\n|--------|--------:|------:|\n| Total stories | 2 | 13 |\n| Todo | 1 | 5 |\n| In progress | 1 | 8 |\n\n### in-progress\n\n| Story | Points | Assignee | Tasks |\n|-------|-------:|----------|-------|\n| [**US-F1-081** Story B](../backlog/phase-1/06.tooling/US-F1-081-story-b.md) | 8 | - | - |\n>>>>>>> feature/rebase\n",
+    )
+    .expect("write sprint file");
+
+    write_story(
+        root,
+        "delivery/backlog/phase-1/06.tooling/US-F1-080-story-a.md",
+        "id: US-F1-080\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S004.back-to-school\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        "# User Story: Story A\n",
+    );
+    write_story(
+        root,
+        "delivery/backlog/phase-1/06.tooling/US-F1-081-story-b.md",
+        "id: US-F1-081\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S004.back-to-school\nassignee: Test User <test@example.com>\nstory_points: 3\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        "# User Story: Story B\n",
+    );
+
+    let out = kanban_in(root, &["--format", "json", "sprint", "sync", &repo_root]);
+    let json = parse_stdout(&out);
+
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["kind"], "sprint.sync");
+    assert_eq!(json["data"]["count"], 1);
+    assert_eq!(json["data"]["changed_sprints"][0], "S004.back-to-school");
+
+    let updated = fs::read_to_string(&sprint_file).expect("updated sprint should be readable");
+    assert!(!updated.contains("<<<<<<<"));
+    assert!(!updated.contains("======="));
+    assert!(!updated.contains(">>>>>>>"));
+    assert!(updated.contains("## User Stories selected for sprint"));
+    assert!(updated.contains("| Total stories | 2 | 8 |"));
+    assert!(updated.contains("| Todo | 1 | 5 |"));
+    assert!(updated.contains("| In progress | 1 | 3 |"));
+}
+
+#[test]
 fn task_add_emits_result_with_task_body() {
     let dir = tempdir().expect("temp dir should be created");
     let root = dir.path();

@@ -10,7 +10,6 @@ resolver = "2"
 edition = "2024"
 license = "UNLICENSED"
 version = "26.8.1302"
-
 [workspace.dependencies]
 anyhow = "1.0.100"
 axum = { version = "0.8.7", features = ["macros"] }

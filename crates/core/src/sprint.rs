@@ -900,6 +900,46 @@ mod tests {
     }
 
     #[test]
+    fn regenerate_sprint_roster_replaces_merge_conflict_around_roster_block() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let sprint_file = temp_root
+            .path()
+            .join("delivery/sprints/S004.back-to-school.md");
+        fs::create_dir_all(sprint_file.parent().unwrap()).unwrap();
+        fs::write(
+            &sprint_file,
+            "---\nsprint: S004\nheadline: back-to-school\nstart_date: 2026-08-03\nend_date: 2026-08-14\nstatus: active\nwip_limit: null\n---\n\n# S004: back-to-school\n\n## Sprint Goal\n\nKeep delivery aligned.\n\n<<<<<<< HEAD\n## User Stories selected for sprint\n\n| Metric | Stories | Points |\n|--------|--------:|------:|\n| Total stories | 2 | 8 |\n| Todo | 1 | 5 |\n| In progress | 1 | 3 |\n\n### todo\n\n| Story | Points | Assignee | Tasks |\n|-------|-------:|----------|-------|\n| [**US-F1-080** Story A](../backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-080-story-a.md) | 5 | - | - |\n=======\n## User Stories selected for sprint\n\n| Metric | Stories | Points |\n|--------|--------:|------:|\n| Total stories | 2 | 10 |\n| Todo | 2 | 10 |\n\n### todo\n\n| Story | Points | Assignee | Tasks |\n|-------|-------:|----------|-------|\n| [**US-F1-081** Story B](../backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-081-story-b.md) | 5 | - | - |\n>>>>>>> feature/rebase\n",
+        )
+        .unwrap();
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-080-story-a.md",
+            "id: US-F1-080\ntype: user-story\nstatus: todo\nepic: EP-F1-06\nsprint: S004.back-to-school\nassignee: TBD\nstory_points: 5\nwork_started:\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+        write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-081-story-b.md",
+            "id: US-F1-081\ntype: user-story\nstatus: in-progress\nepic: EP-F1-06\nsprint: S004.back-to-school\nassignee: Test User <test@example.com>\nstory_points: 3\nwork_started: 2026-05-28T14:05:54+0200\nwork_done:\ncreated: 2026-05-28T14:05:54+0200\nupdated: 2026-05-28T14:05:54+0200\n",
+        );
+
+        let config = load_kanban_config(temp_root.path()).unwrap();
+        let changed = regenerate_sprint_roster(&config, "S004.back-to-school").unwrap();
+        let markdown = fs::read_to_string(&sprint_file).unwrap();
+
+        assert!(changed);
+        assert!(markdown.contains(ROSTER_HEADING));
+        assert!(!markdown.contains("<<<<<<<"));
+        assert!(!markdown.contains("======="));
+        assert!(!markdown.contains(">>>>>>>"));
+        assert!(markdown.contains("| Total stories | 2 | 8 |"));
+        assert!(markdown.contains("| Todo | 1 | 5 |"));
+        assert!(markdown.contains("| In progress | 1 | 3 |"));
+        assert!(markdown.contains("### todo"));
+        assert!(markdown.contains("### in-progress"));
+    }
+
+    #[test]
     fn create_sprint_uses_configured_sprints_path() {
         let temp_root = tempdir().unwrap();
         init_temp_repo(temp_root.path());

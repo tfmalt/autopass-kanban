@@ -11,6 +11,7 @@ pub(crate) struct SprintRosterEntry {
 }
 
 const LEGACY_ROSTER_HEADING: &str = "## Stories (generated — do not edit)";
+const ROSTER_SUMMARY_TABLE_HEADER: &str = "| Metric | Stories | Points |";
 
 pub(crate) fn render_sprint_roster(rows: &[SprintRosterEntry]) -> String {
     let mut out = String::new();
@@ -53,14 +54,39 @@ pub(crate) fn sprint_story_link_path(
 }
 
 pub(crate) fn replace_roster_in_body(body: &str, roster: &str) -> String {
-    let trimmed = match body
-        .find(ROSTER_HEADING)
-        .or_else(|| body.find(LEGACY_ROSTER_HEADING))
-    {
+    let trimmed = match roster_replace_start(body) {
         Some(idx) => body[..idx].trim_end().to_string(),
         None => body.trim_end().to_string(),
     };
     format!("{trimmed}\n\n{roster}")
+}
+
+fn roster_replace_start(body: &str) -> Option<usize> {
+    let anchor = [
+        body.find(ROSTER_HEADING),
+        body.find(LEGACY_ROSTER_HEADING),
+        body.find(ROSTER_SUMMARY_TABLE_HEADER),
+    ]
+    .into_iter()
+    .flatten()
+    .min()?;
+
+    let mut search_from = 0;
+    let mut containing_conflict_start = None;
+    while let Some(rel_start) = body[search_from..].find("<<<<<<<") {
+        let start = search_from + rel_start;
+        let Some(rel_end) = body[start..].find(">>>>>>>") else {
+            break;
+        };
+        let end = start + rel_end;
+        if start <= anchor && anchor <= end {
+            containing_conflict_start = Some(start);
+            break;
+        }
+        search_from = end + 7;
+    }
+
+    Some(containing_conflict_start.unwrap_or(anchor))
 }
 
 fn push_line(output: &mut String, line: &str) {
@@ -227,7 +253,8 @@ fn status_summary_label(status: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::render_assignee_cell;
+    use super::{render_assignee_cell, replace_roster_in_body};
+    use crate::constants::ROSTER_HEADING;
 
     #[test]
     fn render_assignee_cell_links_comma_separated_assignees_without_leading_comma() {
@@ -239,5 +266,19 @@ mod tests {
             rendered,
             "[Thomas Malt](mailto:thomas.malt@vegvesen.no) and [Sondre Bjerkerud](mailto:sondre.bjerkerud@soprasteria.com)"
         );
+    }
+
+    #[test]
+    fn replace_roster_in_body_drops_conflict_hunk_containing_roster() {
+        let body = "# S004: back-to-school\n\n## Sprint Goal\n\nAlign scope.\n\n<<<<<<< HEAD\n## User Stories selected for sprint\n\n| Metric | Stories | Points |\n|--------|--------:|------:|\n| Total stories | 2 | 13 |\n=======\n## User Stories selected for sprint\n\n| Metric | Stories | Points |\n|--------|--------:|------:|\n| Total stories | 3 | 16 |\n>>>>>>> feature/rebase\n";
+        let roster = "## User Stories selected for sprint\n\n| Metric | Stories | Points |\n|--------|--------:|------:|\n| Total stories | 1 | 5 |\n";
+
+        let replaced = replace_roster_in_body(body, roster);
+        assert!(replaced.contains("## Sprint Goal"));
+        assert!(replaced.contains(ROSTER_HEADING));
+        assert!(!replaced.contains("<<<<<<<"));
+        assert!(!replaced.contains("======="));
+        assert!(!replaced.contains(">>>>>>>"));
+        assert!(replaced.contains("| Total stories | 1 | 5 |"));
     }
 }
