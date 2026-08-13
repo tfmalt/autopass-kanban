@@ -261,7 +261,8 @@ fn metrics_and_report_match_the_separately_loaded_inputs() {
 
         let stories = list_all_stories(fixture.root()).unwrap();
         let sprints = summarize_sprints(fixture.root()).unwrap();
-        let expected_metrics = crate::metrics::compute_metrics(&model.snapshot, &stories, &sprints);
+        let expected_metrics =
+            crate::metrics::compute_metrics(&model.snapshot, &stories, &sprints, &model.calendar);
         assert_eq!(
             without_generated_at(serde_json::to_value(&expected_metrics).unwrap()),
             without_generated_at(serde_json::to_value(model.metrics()).unwrap()),
@@ -271,11 +272,13 @@ fn metrics_and_report_match_the_separately_loaded_inputs() {
             .iter()
             .find(|sprint| sprint.readme_status.as_deref() == Some("active"))
             .map(|sprint| sprint.sprint_name.as_str());
-        let expected_report = crate::dto::WebReportDashboard::from(ReportDashboardDto::build(
-            &stories,
-            &sprints,
-            current_sprint_name,
-        ));
+        let expected_report =
+            crate::dto::WebReportDashboard::from(ReportDashboardDto::build_with_calendar(
+                &stories,
+                &sprints,
+                current_sprint_name,
+                model.calendar.clone(),
+            ));
         assert_eq!(
             without_generated_at(serde_json::to_value(&expected_report).unwrap()),
             without_generated_at(serde_json::to_value(model.report()).unwrap()),

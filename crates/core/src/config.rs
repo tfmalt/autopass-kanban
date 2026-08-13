@@ -14,6 +14,7 @@ const CONFIG_DIR_NAME: &str = ".kanban";
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const DEFAULT_BACKLOG_PATH: &str = "delivery/backlog";
 const DEFAULT_SPRINTS_PATH: &str = "delivery/sprints";
+const DEFAULT_AVAILABILITY_PATH: &str = "delivery/availability.md";
 const DEFAULT_WEB_PORT: u16 = 3000;
 const DEFAULT_WEB_HOST: &str = "127.0.0.1";
 const DEFAULT_WEB_STYLE: &str = "calm-light";
@@ -41,6 +42,8 @@ pub enum ColorMode {
 pub struct PathsConfig {
     pub backlog: String,
     pub sprints: String,
+    #[serde(default = "default_availability_path")]
+    pub availability: String,
     #[serde(default)]
     pub features: Option<FeaturesConfig>,
 }
@@ -50,6 +53,7 @@ impl Default for PathsConfig {
         Self {
             backlog: DEFAULT_BACKLOG_PATH.to_string(),
             sprints: DEFAULT_SPRINTS_PATH.to_string(),
+            availability: DEFAULT_AVAILABILITY_PATH.to_string(),
             features: None,
         }
     }
@@ -77,6 +81,10 @@ impl Default for FeaturesConfig {
 
 fn default_feature_on() -> bool {
     true
+}
+
+fn default_availability_path() -> String {
+    DEFAULT_AVAILABILITY_PATH.to_string()
 }
 
 impl FeaturesConfig {
@@ -225,6 +233,7 @@ pub struct Settings {
 
 impl Settings {
     fn normalize_and_validate(mut self) -> Result<Self> {
+        validate_paths(&self.paths)?;
         self.team = self
             .team
             .into_iter()
@@ -263,6 +272,10 @@ impl KanbanConfig {
 
     pub fn sprints_path(&self) -> PathBuf {
         self.repo_root.join(&self.paths.sprints)
+    }
+
+    pub fn availability_path(&self) -> PathBuf {
+        self.repo_root.join(&self.paths.availability)
     }
 
     pub fn backlog_marker(&self) -> String {
@@ -359,6 +372,7 @@ pub fn get_config_value(repo_root: impl AsRef<Path>, key: &str) -> Result<String
     match key {
         "paths.backlog" => Ok(config.paths.backlog),
         "paths.sprints" => Ok(config.paths.sprints),
+        "paths.availability" => Ok(config.paths.availability),
         "theme.color_mode" => Ok(match config.theme.color_mode {
             ColorMode::Auto => "auto".to_string(),
             ColorMode::Always => "always".to_string(),
@@ -426,6 +440,10 @@ pub fn set_config_value(
             } else {
                 normalize_relative_repo_path(trimmed_value)?
             };
+            validate_paths(&settings.paths)?;
+        }
+        "paths.availability" => {
+            settings.paths.availability = normalize_relative_repo_path(trimmed_value)?;
             validate_paths(&settings.paths)?;
         }
         "features.sprints" | "features.epics" | "features.phases" => {
@@ -580,7 +598,8 @@ where
 
 fn validate_paths(paths: &PathsConfig) -> Result<()> {
     let backlog = normalize_relative_repo_path(&paths.backlog)?;
-    if backlog.is_empty() {
+    let availability = normalize_relative_repo_path(&paths.availability)?;
+    if backlog.is_empty() || availability.is_empty() {
         bail!("Configured paths must not be empty.");
     }
     let sprints_enabled = paths.features.map(|f| f.sprints).unwrap_or(true);
@@ -765,6 +784,26 @@ mod tests {
         assert_eq!(
             get_config_value(temp_root.path(), "web.port").unwrap(),
             "4000"
+        );
+    }
+
+    #[test]
+    fn availability_path_defaults_and_round_trips() {
+        let temp_root = tempdir().unwrap();
+        init_config(temp_root.path()).unwrap();
+
+        let config = load_kanban_config(temp_root.path()).unwrap();
+        assert_eq!(config.paths.availability, "delivery/availability.md");
+
+        set_config_value(
+            temp_root.path(),
+            "paths.availability",
+            "planning/team-availability.md",
+        )
+        .unwrap();
+        assert_eq!(
+            get_config_value(temp_root.path(), "paths.availability").unwrap(),
+            "planning/team-availability.md"
         );
     }
 

@@ -1,7 +1,6 @@
-use chrono::Datelike;
 use serde::Serialize;
 
-use crate::{SprintOverview, StoryOverview, StoryStatus};
+use crate::{SprintOverview, StoryOverview, StoryStatus, WorkingCalendar};
 
 use super::parse_points;
 
@@ -43,6 +42,7 @@ pub(crate) struct ForecastInputs {
     pub(crate) sprint_duration_weeks: u32,
     pub(crate) projection_start_date: chrono::NaiveDate,
     pub(crate) throughput_samples: Vec<i64>,
+    pub(crate) calendar: WorkingCalendar,
 }
 
 fn average(values: &[i64]) -> f64 {
@@ -85,20 +85,17 @@ fn percentile(sorted_values: &[u32], percentile: f64) -> Option<u32> {
     sorted_values.get(index).copied()
 }
 
-fn is_weekday(date: chrono::NaiveDate) -> bool {
-    date.weekday().number_from_monday() <= 5
-}
-
-fn completion_date(start: chrono::NaiveDate, days: Option<u32>) -> Option<String> {
-    let mut remaining_days = days?;
-    let mut date = start;
-    while remaining_days > 0 {
-        date += chrono::Duration::days(1);
-        if is_weekday(date) {
-            remaining_days -= 1;
-        }
-    }
-    Some(date.format("%Y-%m-%d").to_string())
+fn completion_date(
+    start: chrono::NaiveDate,
+    days: Option<u32>,
+    calendar: &WorkingCalendar,
+) -> Option<String> {
+    Some(
+        calendar
+            .add_capacity_days(start, f64::from(days?))
+            .format("%Y-%m-%d")
+            .to_string(),
+    )
 }
 
 fn parse_frontmatter_date(value: &str) -> Option<chrono::NaiveDate> {
@@ -109,6 +106,7 @@ fn parse_frontmatter_date(value: &str) -> Option<chrono::NaiveDate> {
 pub(crate) fn daily_throughput_samples(
     stories: &[StoryOverview],
     today: chrono::NaiveDate,
+    calendar: &WorkingCalendar,
 ) -> Vec<i64> {
     let mut points_by_day: std::collections::BTreeMap<chrono::NaiveDate, i64> =
         std::collections::BTreeMap::new();
@@ -140,8 +138,15 @@ pub(crate) fn daily_throughput_samples(
     let mut samples = Vec::new();
     let mut day = first_day;
     while day <= end_day {
-        if is_weekday(day) || points_by_day.contains_key(&day) {
-            samples.push(*points_by_day.get(&day).unwrap_or(&0));
+        let completed = *points_by_day.get(&day).unwrap_or(&0);
+        let capacity = calendar.day_capacity(day);
+        if capacity > 0.0 || completed > 0 {
+            let normalized = if capacity > 0.0 {
+                (completed as f64 / capacity).round() as i64
+            } else {
+                completed
+            };
+            samples.push(normalized);
         }
         day += chrono::Duration::days(1);
     }
@@ -211,9 +216,9 @@ impl ReportForecastDto {
                 p50_days: p50,
                 p80_days: p80,
                 p90_days: p90,
-                p50_date: completion_date(inputs.projection_start_date, p50),
-                p80_date: completion_date(inputs.projection_start_date, p80),
-                p90_date: completion_date(inputs.projection_start_date, p90),
+                p50_date: completion_date(inputs.projection_start_date, p50, &inputs.calendar),
+                p80_date: completion_date(inputs.projection_start_date, p80, &inputs.calendar),
+                p90_date: completion_date(inputs.projection_start_date, p90, &inputs.calendar),
             },
             confidence: confidence.to_string(),
         }
@@ -223,6 +228,20 @@ impl ReportForecastDto {
         stories: &[StoryOverview],
         sprints: &[SprintOverview],
         _current_sprint_name: Option<&str>,
+    ) -> Self {
+        Self::build_with_calendar(
+            stories,
+            sprints,
+            _current_sprint_name,
+            WorkingCalendar::empty(),
+        )
+    }
+
+    pub fn build_with_calendar(
+        stories: &[StoryOverview],
+        sprints: &[SprintOverview],
+        _current_sprint_name: Option<&str>,
+        calendar: WorkingCalendar,
     ) -> Self {
         let generated_at = chrono::Local::now().to_rfc3339();
         let today = chrono::Local::now().date_naive();
@@ -249,7 +268,8 @@ impl ReportForecastDto {
             remaining_points,
             sprint_duration_weeks,
             projection_start_date: today,
-            throughput_samples: daily_throughput_samples(stories, today),
+            throughput_samples: daily_throughput_samples(stories, today, &calendar),
+            calendar,
         })
     }
 }
@@ -267,6 +287,7 @@ mod tests {
             sprint_duration_weeks: 2,
             projection_start_date: chrono::NaiveDate::from_ymd_opt(2026, 6, 9).unwrap(),
             throughput_samples: vec![5, 10, 15],
+            calendar: WorkingCalendar::empty(),
         });
 
         let json = serde_json::to_value(&forecast).expect("serialization should succeed");
@@ -286,6 +307,7 @@ mod tests {
             sprint_duration_weeks: 2,
             projection_start_date: chrono::NaiveDate::from_ymd_opt(2026, 6, 9).unwrap(),
             throughput_samples: vec![],
+            calendar: WorkingCalendar::empty(),
         });
 
         assert_eq!(forecast.confidence, "none");
@@ -324,6 +346,7 @@ mod tests {
                 story("US-F1-004", "done", "2", Some("2026-06-10T09:00:00+0200")),
             ],
             today,
+            &WorkingCalendar::empty(),
         );
 
         assert_eq!(samples, vec![8, 0, 2]);
@@ -337,6 +360,7 @@ mod tests {
             sprint_duration_weeks: 2,
             projection_start_date: chrono::NaiveDate::from_ymd_opt(2026, 6, 17).unwrap(),
             throughput_samples: vec![23, 6, 3, 0, 0, 5, 0, 5, 5, 17, 0, 20, 0, 0, 0, 0],
+            calendar: WorkingCalendar::empty(),
         });
 
         assert!(forecast.completion.p50_days.is_some());
@@ -349,5 +373,54 @@ mod tests {
 
         assert!(p50 < p80, "expected P50 < P80, got {p50} and {p80}");
         assert!(p80 <= p90, "expected P80 <= P90, got {p80} and {p90}");
+    }
+
+    #[test]
+    fn throughput_excludes_hiatus_and_normalizes_partial_capacity() {
+        let team = vec![
+            crate::TeamMemberConfig {
+                name: "Ada".to_string(),
+                email: "ada@example.com".to_string(),
+                avatar_url: None,
+                avatar_path: None,
+            },
+            crate::TeamMemberConfig {
+                name: "Grace".to_string(),
+                email: "grace@example.com".to_string(),
+                avatar_url: None,
+                avatar_path: None,
+            },
+        ];
+        let calendar = crate::parse_availability_markdown(
+            "| ID | Type | Who | Start | End | Availability | Note |\n|---|---|---|---|---|---:|---|\n| AV-001 | hiatus | * | 2026-06-09 | 2026-06-09 | 0% | Pause |\n| AV-002 | vacation | ada@example.com | 2026-06-10 | 2026-06-10 | 0% | Away |",
+            &team,
+        )
+        .unwrap();
+        let stories = vec![StoryOverview {
+            id: "US-001".to_string(),
+            title: "Done".to_string(),
+            status: "done".to_string(),
+            epic_id: None,
+            epic_title: None,
+            assignee: String::new(),
+            story_points: "2".to_string(),
+            sprint: None,
+            relative_path: PathBuf::from("US-001.md"),
+            task_summary: None,
+            task_count: 0,
+            work_started: None,
+            work_done: Some("2026-06-10T12:00:00+02:00".to_string()),
+            planned_start: None,
+            planned_end: None,
+        }];
+
+        assert_eq!(
+            daily_throughput_samples(
+                &stories,
+                chrono::NaiveDate::from_ymd_opt(2026, 6, 10).unwrap(),
+                &calendar,
+            ),
+            vec![4]
+        );
     }
 }

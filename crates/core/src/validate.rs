@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::availability::WorkingCalendar;
 use crate::config::*;
 use crate::constants::*;
 use crate::markdown::*;
@@ -232,6 +233,16 @@ pub fn validate_parsed_repository(
     config: &KanbanConfig,
 ) -> Result<ValidationReport> {
     let mut issues = Vec::new();
+
+    if config.availability_path().exists()
+        && let Err(error) = WorkingCalendar::load(config)
+    {
+        issues.push(ValidationIssue {
+            file_path: config.paths.availability.clone().into(),
+            rule: "invalid-availability-calendar".to_string(),
+            message: format!("Invalid availability calendar: {error:#}"),
+        });
+    }
 
     let features = config.features();
     if features.sprints {
@@ -1070,6 +1081,27 @@ mod tests {
                 .any(|rule| rule.starts_with("missing-sprint-readme-field")
                     || *rule == "invalid-sprint-readme-status"),
             "sprint readme validation must be skipped when sprints are disabled"
+        );
+    }
+
+    #[test]
+    fn validate_repository_reports_invalid_availability_calendar() {
+        let temp_root = tempfile::tempdir().unwrap();
+        crate::testutil::init_temp_repo(temp_root.path());
+        fs::create_dir_all(temp_root.path().join("delivery")).unwrap();
+        fs::write(
+            temp_root.path().join("delivery/availability.md"),
+            "| ID | Type | Who | Start | End | Availability | Note |\n|---|---|---|---|---|---:|---|\n| AV-001 | hiatus | * | bad-date | 2026-07-28 | 0% | Pause |\n",
+        )
+        .unwrap();
+
+        let report = validate_repository(temp_root.path()).unwrap();
+
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.rule == "invalid-availability-calendar")
         );
     }
 

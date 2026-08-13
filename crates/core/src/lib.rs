@@ -1,3 +1,4 @@
+mod availability;
 mod config;
 mod constants;
 mod doctor;
@@ -53,6 +54,7 @@ pub(crate) mod prelude {
     pub(crate) use walkdir::WalkDir;
 }
 
+pub use availability::*;
 pub use config::{
     ColorMode, ConfigInitResult, ConfigSetResult, FeaturesConfig, KanbanConfig, TeamMemberConfig,
     get_config_json, get_config_value, init_config, init_config_with_features, load_kanban_config,

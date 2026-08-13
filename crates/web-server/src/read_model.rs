@@ -29,6 +29,7 @@ pub(crate) struct WebReadModel {
     pub(crate) story_overviews: Vec<StoryOverview>,
     /// Core sprint overviews (`summarize_sprints` equivalent).
     pub(crate) sprint_overviews: Vec<SprintOverview>,
+    pub(crate) calendar: WorkingCalendar,
     /// Epic body markdown keyed by uppercased epic id, for `/api/epics/{id}`.
     epic_bodies: BTreeMap<String, String>,
 }
@@ -37,6 +38,7 @@ impl WebReadModel {
     /// Build every projection from a single repository read.
     pub(crate) fn build(repo_root: &Path) -> Result<Self> {
         let config = load_kanban_config(repo_root)?;
+        let calendar = WorkingCalendar::load(&config)?;
         let repository = read_repository_with_config(&config)?;
 
         let mut stories = repository
@@ -64,6 +66,7 @@ impl WebReadModel {
             },
             story_overviews,
             sprint_overviews,
+            calendar,
             epic_bodies,
         })
     }
@@ -77,6 +80,7 @@ impl WebReadModel {
             &self.snapshot,
             &self.story_overviews,
             &self.sprint_overviews,
+            &self.calendar,
         )
     }
 
@@ -86,10 +90,11 @@ impl WebReadModel {
             .iter()
             .find(|sprint| sprint.readme_status.as_deref() == Some("active"))
             .map(|sprint| sprint.sprint_name.as_str());
-        WebReportDashboard::from(ReportDashboardDto::build(
+        WebReportDashboard::from(ReportDashboardDto::build_with_calendar(
             &self.story_overviews,
             &self.sprint_overviews,
             current_sprint_name,
+            self.calendar.clone(),
         ))
     }
 

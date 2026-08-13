@@ -208,7 +208,10 @@ fn build_burndown_uses_active_sprint_story_progress() {
         Some("2026-06-01T09:00:00+0200"),
         None,
     );
-    let rows = build_burndown(&[test_sprint("active", vec![done, todo])]);
+    let rows = build_burndown(
+        &[test_sprint("active", vec![done, todo])],
+        &WorkingCalendar::empty(),
+    );
     assert_eq!(
         rows.first(),
         Some(&BurndownPoint {
@@ -254,6 +257,53 @@ fn build_burndown_excludes_dropped_points_from_scope() {
         None,
     );
 
-    let rows = build_burndown(&[test_sprint("active", vec![dropped, todo])]);
+    let rows = build_burndown(
+        &[test_sprint("active", vec![dropped, todo])],
+        &WorkingCalendar::empty(),
+    );
     assert_eq!(rows.first().map(|row| row.remaining), Some(8));
+}
+
+#[test]
+fn build_burndown_flattens_ideal_line_during_hiatus() {
+    let todo = test_story(
+        "US-F1-005",
+        "todo",
+        8,
+        Some("2026-06-01T09:00:00+0200"),
+        None,
+    );
+    let calendar = parse_availability_markdown(
+        "| ID | Type | Who | Start | End | Availability | Note |\n|---|---|---|---|---|---:|---|\n| AV-001 | hiatus | * | 2026-06-02 | 2026-06-03 | 0% | Pause |",
+        &[],
+    )
+    .unwrap();
+
+    let rows = build_burndown(&[test_sprint("active", vec![todo])], &calendar);
+    let ideal = |date: &str| rows.iter().find(|row| row.date == date).unwrap().ideal;
+
+    assert_eq!(ideal("2026-06-01"), 8);
+    assert_eq!(ideal("2026-06-02"), 8);
+    assert_eq!(ideal("2026-06-03"), 8);
+    assert_eq!(ideal("2026-06-05"), 0);
+}
+
+#[test]
+fn build_burndown_keeps_scope_flat_when_sprint_has_no_capacity() {
+    let todo = test_story(
+        "US-F1-006",
+        "todo",
+        8,
+        Some("2026-06-01T09:00:00+0200"),
+        None,
+    );
+    let calendar = parse_availability_markdown(
+        "| ID | Type | Who | Start | End | Availability | Note |\n|---|---|---|---|---|---:|---|\n| AV-001 | hiatus | * | 2026-06-01 | 2026-06-05 | 0% | Pause |",
+        &[],
+    )
+    .unwrap();
+
+    let rows = build_burndown(&[test_sprint("closed", vec![todo])], &calendar);
+
+    assert!(rows.iter().all(|row| row.ideal == 8));
 }

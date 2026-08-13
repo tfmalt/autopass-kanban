@@ -2,6 +2,7 @@
   "paths": {
     "backlog": "delivery/backlog",
     "sprints": "delivery/sprints",
+    "availability": "delivery/availability.md",
     "features": {
       "phases": false,
       "sprints": false,

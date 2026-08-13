@@ -2,7 +2,7 @@ use chrono::{Datelike, Days};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{EpicOverview, SprintOverview, StoryOverview, StoryStatus};
+use crate::{EpicOverview, SprintOverview, StoryOverview, StoryStatus, WorkingCalendar};
 
 use super::{ForecastInputs, ReportForecastDto, parse_points, path_string};
 
@@ -111,34 +111,6 @@ fn period_label(
     }
 }
 
-fn is_weekday(date: chrono::NaiveDate) -> bool {
-    date.weekday().number_from_monday() <= 5
-}
-
-fn add_working_days(date: chrono::NaiveDate, days: f64) -> chrono::NaiveDate {
-    let mut current = date;
-    let mut remaining = days;
-    while remaining > 0.0 {
-        current += chrono::Duration::days(1);
-        if is_weekday(current) {
-            remaining -= 1.0;
-        }
-    }
-    current
-}
-
-fn work_days_inclusive(start: chrono::NaiveDate, end: chrono::NaiveDate) -> i64 {
-    let mut days = 0;
-    let mut cursor = start;
-    while cursor <= end {
-        if is_weekday(cursor) {
-            days += 1;
-        }
-        cursor += chrono::Duration::days(1);
-    }
-    days
-}
-
 fn story_points(story: &StoryOverview) -> i64 {
     parse_points(&story.story_points).unwrap_or(0)
 }
@@ -215,6 +187,7 @@ pub struct ReportSprintDto {
     pub is_past: bool,
     pub planned_points: i64,
     pub delivered_points: i64,
+    pub capacity_factor: f64,
     pub story_ids: Vec<String>,
 }
 
@@ -406,6 +379,7 @@ impl PreparedReport {
         current_sprint_name: Option<&str>,
         generated_at: String,
         today: chrono::NaiveDate,
+        calendar: &WorkingCalendar,
     ) -> Self {
         let mut sprint_stats: std::collections::BTreeMap<String, (i64, i64, Vec<String>)> =
             std::collections::BTreeMap::new();
@@ -432,6 +406,13 @@ impl PreparedReport {
                     .get(&s.sprint_name)
                     .cloned()
                     .unwrap_or_default();
+                let start = parse_date_prefix(&s.start_date);
+                let capacity = start
+                    .map(|start| calendar.capacity_sum(start, end))
+                    .unwrap_or(0.0);
+                let nominal_capacity = start
+                    .map(|start| WorkingCalendar::empty().capacity_sum(start, end))
+                    .unwrap_or(0.0);
                 ReportSprintDto {
                     sprint_name: s.sprint_name.clone(),
                     start_date: s.start_date.clone(),
@@ -440,6 +421,11 @@ impl PreparedReport {
                     is_past,
                     planned_points: planned,
                     delivered_points: done,
+                    capacity_factor: if nominal_capacity > 0.0 {
+                        capacity / nominal_capacity
+                    } else {
+                        0.0
+                    },
                     story_ids: ids,
                 }
             })
@@ -476,11 +462,11 @@ impl PreparedReport {
 
         let past_with_stories: Vec<&ReportSprintDto> = sprint_dtos
             .iter()
-            .filter(|s| s.is_past && s.planned_points > 0)
+            .filter(|s| s.is_past && s.planned_points > 0 && s.capacity_factor > 0.0)
             .collect();
         let velocity_samples: Vec<i64> = past_with_stories
             .iter()
-            .map(|s| s.delivered_points)
+            .map(|s| (s.delivered_points as f64 / s.capacity_factor).round() as i64)
             .collect();
         let completed_count = velocity_samples.len();
         let avg_velocity = average(&velocity_samples);
@@ -522,7 +508,8 @@ impl PreparedReport {
             remaining_points: remaining,
             sprint_duration_weeks,
             projection_start_date: today,
-            throughput_samples: super::daily_throughput_samples(stories, today),
+            throughput_samples: super::daily_throughput_samples(stories, today, calendar),
+            calendar: calendar.clone(),
         };
 
         Self {
@@ -550,6 +537,22 @@ impl ReportWbsDto {
         epics: &[EpicOverview],
         current_sprint_name: Option<&str>,
     ) -> Self {
+        Self::build_with_epics_and_calendar(
+            stories,
+            sprints,
+            epics,
+            current_sprint_name,
+            WorkingCalendar::empty(),
+        )
+    }
+
+    pub fn build_with_epics_and_calendar(
+        stories: &[StoryOverview],
+        sprints: &[SprintOverview],
+        epics: &[EpicOverview],
+        current_sprint_name: Option<&str>,
+        calendar: WorkingCalendar,
+    ) -> Self {
         use chrono::Local;
 
         let today = Local::now().date_naive();
@@ -560,9 +563,10 @@ impl ReportWbsDto {
             current_sprint_name,
             generated_at.clone(),
             today,
+            &calendar,
         );
         let forecast = ReportForecastDto::from_inputs(prepared.forecast_inputs);
-        let derived = derive_report_rows(stories, sprints, Some(epics), &forecast);
+        let derived = derive_report_rows(stories, sprints, Some(epics), &forecast, &calendar);
 
         ReportWbsDto {
             generated_at,
@@ -587,11 +591,32 @@ impl ReportDashboardDto {
         sprints: &[SprintOverview],
         current_sprint_name: Option<&str>,
     ) -> Self {
+        Self::build_with_calendar(
+            stories,
+            sprints,
+            current_sprint_name,
+            WorkingCalendar::empty(),
+        )
+    }
+
+    pub fn build_with_calendar(
+        stories: &[StoryOverview],
+        sprints: &[SprintOverview],
+        current_sprint_name: Option<&str>,
+        calendar: WorkingCalendar,
+    ) -> Self {
         use chrono::Local;
 
         let today = Local::now().date_naive();
         let generated_at = Local::now().to_rfc3339();
-        Self::build_with_context(stories, sprints, current_sprint_name, generated_at, today)
+        Self::build_with_context(
+            stories,
+            sprints,
+            current_sprint_name,
+            generated_at,
+            today,
+            &calendar,
+        )
     }
 
     fn build_with_context(
@@ -600,6 +625,7 @@ impl ReportDashboardDto {
         current_sprint_name: Option<&str>,
         generated_at: String,
         today: chrono::NaiveDate,
+        calendar: &WorkingCalendar,
     ) -> Self {
         let prepared = PreparedReport::build(
             stories,
@@ -607,9 +633,10 @@ impl ReportDashboardDto {
             current_sprint_name,
             generated_at.clone(),
             today,
+            calendar,
         );
         let forecast = ReportForecastDto::from_inputs(prepared.forecast_inputs);
-        let derived = derive_report_rows(stories, sprints, None, &forecast);
+        let derived = derive_report_rows(stories, sprints, None, &forecast, calendar);
 
         Self {
             generated_at,
@@ -637,11 +664,12 @@ fn derive_report_rows(
     sprints: &[SprintOverview],
     epics: Option<&[EpicOverview]>,
     forecast: &ReportForecastDto,
+    calendar: &WorkingCalendar,
 ) -> DerivedReportRows {
-    let estimate_context = build_estimates(stories, sprints, forecast);
+    let estimate_context = build_estimates(stories, sprints, forecast, calendar);
     let (web_wbs_rows, workbook_rows) = build_wbs_rows(stories, sprints, epics, &estimate_context);
     let phase_rows = build_phase_rows(stories);
-    let sprint_rows = build_sprint_rows(sprints, forecast, &estimate_context);
+    let sprint_rows = build_sprint_rows(sprints, forecast, &estimate_context, calendar);
     let progress = build_progress(stories);
     DerivedReportRows {
         estimate_context,
@@ -653,7 +681,11 @@ fn derive_report_rows(
     }
 }
 
-fn throughput_source(sprints: &[SprintOverview], forecast: &ReportForecastDto) -> (f64, String) {
+fn throughput_source(
+    sprints: &[SprintOverview],
+    forecast: &ReportForecastDto,
+    calendar: &WorkingCalendar,
+) -> (f64, String) {
     let daily_avg = forecast.throughput.average;
     let observed = forecast.throughput.observed_day_count;
     if daily_avg > 0.0 {
@@ -664,17 +696,35 @@ fn throughput_source(sprints: &[SprintOverview], forecast: &ReportForecastDto) -
     }
 
     let projection_start = parse_date_prefix(&forecast.projection_start_date);
-    let delivered = sprints
+    let delivered_and_capacity = sprints
         .iter()
         .filter(|sprint| {
             projection_start.is_some_and(|start| {
                 parse_date_prefix(&sprint.end_date).is_some_and(|end| end < start)
             })
         })
-        .map(done_points_in_sprint)
+        .filter_map(|sprint| {
+            let start = parse_date_prefix(&sprint.start_date)?;
+            let end = parse_date_prefix(&sprint.end_date)?;
+            Some((
+                done_points_in_sprint(sprint),
+                calendar.capacity_sum(start, end),
+            ))
+        })
         .collect::<Vec<_>>();
-    let avg_sprint = average(&delivered);
-    let daily_fallback = avg_sprint / (forecast.sprint_duration_weeks * 5).max(1) as f64;
+    let delivered = delivered_and_capacity
+        .iter()
+        .map(|(points, _)| *points)
+        .sum::<i64>();
+    let capacity = delivered_and_capacity
+        .iter()
+        .map(|(_, capacity)| *capacity)
+        .sum::<f64>();
+    let daily_fallback = if capacity > 0.0 {
+        delivered as f64 / capacity
+    } else {
+        0.0
+    };
     if daily_fallback > 0.0 {
         (daily_fallback, "sprint velocity fallback".to_string())
     } else {
@@ -686,8 +736,9 @@ fn build_estimates(
     stories: &[StoryOverview],
     sprints: &[SprintOverview],
     forecast: &ReportForecastDto,
+    calendar: &WorkingCalendar,
 ) -> EstimateContext {
-    let (daily_avg, throughput_source) = throughput_source(sprints, forecast);
+    let (daily_avg, throughput_source) = throughput_source(sprints, forecast, calendar);
     let mut estimates = BTreeMap::new();
     if daily_avg <= 0.0 {
         for story in stories {
@@ -744,7 +795,7 @@ fn build_estimates(
                     story_id: story.id.clone(),
                     est_hours,
                     est_start: Some(date_string(work_started)),
-                    est_end: Some(date_string(add_working_days(today, duration))),
+                    est_end: Some(date_string(calendar.add_capacity_days(today, duration))),
                 },
             );
         } else {
@@ -753,11 +804,12 @@ fn build_estimates(
                 ReportEstimateDto {
                     story_id: story.id.clone(),
                     est_hours,
-                    est_start: Some(date_string(add_working_days(today, cumulative_days))),
-                    est_end: Some(date_string(add_working_days(
-                        today,
-                        cumulative_days + duration,
-                    ))),
+                    est_start: Some(date_string(
+                        calendar.add_capacity_days(today, cumulative_days),
+                    )),
+                    est_end: Some(date_string(
+                        calendar.add_capacity_days(today, cumulative_days + duration),
+                    )),
                 },
             );
             cumulative_days += duration;
@@ -1382,6 +1434,7 @@ fn build_sprint_rows(
     sprints: &[SprintOverview],
     forecast: &ReportForecastDto,
     estimates: &EstimateContext,
+    calendar: &WorkingCalendar,
 ) -> Vec<ReportSprintProjectionDto> {
     let mut rows = Vec::new();
     let total_delivered: i64 = sprints.iter().map(done_points_in_sprint).sum();
@@ -1424,8 +1477,7 @@ fn build_sprint_rows(
     while projected_remaining > 0.0 && projected_index <= 40 {
         let start_date = last_end + Days::new(1 + (projected_index - 1) * sprint_days);
         let end_date = start_date + Days::new(sprint_days.saturating_sub(1));
-        let projected_capacity =
-            estimates.daily_avg * work_days_inclusive(start_date, end_date) as f64;
+        let projected_capacity = estimates.daily_avg * calendar.capacity_sum(start_date, end_date);
         let delivered = projected_capacity.min(projected_remaining);
         projected_remaining = (projected_remaining - delivered).max(0.0);
         rows.push(ReportSprintProjectionDto {
@@ -1560,6 +1612,7 @@ mod tests {
             None,
             "2026-06-10T10:00:00+02:00".to_string(),
             chrono::NaiveDate::from_ymd_opt(2026, 6, 10).unwrap(),
+            &WorkingCalendar::empty(),
         );
 
         assert_eq!(report.progress.done_points, 5);
@@ -1738,5 +1791,66 @@ mod tests {
                 .notes
                 .contains("Unable to resolve completion sprint")
         );
+    }
+
+    #[test]
+    fn zero_capacity_sprint_is_excluded_from_velocity() {
+        let done = story("US-F1-001", "Done", "done", "5", Some("S001.work"));
+        let missed = story("US-F1-002", "Missed", "todo", "8", Some("S002.pause"));
+        let stories = vec![done.clone(), missed.clone()];
+        let mut sprints = vec![
+            sprint("S001.work", "closed", vec![done]),
+            sprint("S002.pause", "closed", vec![missed]),
+        ];
+        sprints[1].start_date = "2026-07-01".to_string();
+        sprints[1].end_date = "2026-07-14".to_string();
+        let second_start = sprints[1].start_date.clone();
+        let second_end = sprints[1].end_date.clone();
+        let calendar = crate::parse_availability_markdown(
+            &format!(
+                "| ID | Type | Who | Start | End | Availability | Note |\n|---|---|---|---|---|---:|---|\n| AV-001 | hiatus | * | {second_start} | {second_end} | 0% | Pause |"
+            ),
+            &[],
+        )
+        .unwrap();
+
+        let report =
+            ReportWbsDto::build_with_epics_and_calendar(&stories, &sprints, &[], None, calendar);
+
+        assert_eq!(report.velocity.completed_sprint_count, 1);
+        assert_eq!(report.velocity.avg_points_per_sprint, 5.0);
+        assert_eq!(report.sprints[1].capacity_factor, 0.0);
+    }
+
+    #[test]
+    fn partial_capacity_sprint_velocity_is_normalized() {
+        let mut done = story("US-F1-001", "Done", "done", "5", Some("S001.partial"));
+        done.work_done = Some("2026-06-03T12:00:00+02:00".to_string());
+        let stories = vec![done.clone()];
+        let sprints = vec![sprint("S001.partial", "closed", vec![done])];
+        let calendar = crate::parse_availability_markdown(
+            "| ID | Type | Who | Start | End | Availability | Note |\n|---|---|---|---|---|---:|---|\n| AV-001 | absence | ada@example.com | 2026-06-01 | 2026-06-14 | 0% | Away |",
+            &[
+                crate::TeamMemberConfig {
+                    name: "Ada".to_string(),
+                    email: "ada@example.com".to_string(),
+                    avatar_url: None,
+                    avatar_path: None,
+                },
+                crate::TeamMemberConfig {
+                    name: "Grace".to_string(),
+                    email: "grace@example.com".to_string(),
+                    avatar_url: None,
+                    avatar_path: None,
+                },
+            ],
+        )
+        .unwrap();
+
+        let report =
+            ReportWbsDto::build_with_epics_and_calendar(&stories, &sprints, &[], None, calendar);
+
+        assert_eq!(report.sprints[0].capacity_factor, 0.5);
+        assert_eq!(report.velocity.avg_points_per_sprint, 10.0);
     }
 }

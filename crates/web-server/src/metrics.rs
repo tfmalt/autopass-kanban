@@ -95,13 +95,14 @@ pub(crate) fn compute_metrics(
     repo: &RepositorySnapshot,
     core_stories: &[StoryOverview],
     core_sprints: &[SprintOverview],
+    calendar: &WorkingCalendar,
 ) -> DashboardMetrics {
     DashboardMetrics {
-        burndown: build_burndown(&repo.sprints),
+        burndown: build_burndown(&repo.sprints, calendar),
         burnup: build_burnup(&repo.stories, &repo.sprints),
         lead_time: build_lead_time(&repo.stories),
         velocity: build_velocity(&repo.sprints),
-        forecast: build_forecast(core_stories, core_sprints),
+        forecast: build_forecast(core_stories, core_sprints, calendar),
         // `RepositorySnapshot::progress` is already `compute_progress(stories)`
         // from the same source read; recomputing it here would derive the same
         // value twice and allow the two to drift.
@@ -200,7 +201,10 @@ pub(crate) fn build_burnup(stories: &[WebStory], sprints: &[WebSprint]) -> Vec<B
     rows
 }
 
-pub(crate) fn build_burndown(sprints: &[WebSprint]) -> Vec<BurndownPoint> {
+pub(crate) fn build_burndown(
+    sprints: &[WebSprint],
+    calendar: &WorkingCalendar,
+) -> Vec<BurndownPoint> {
     let Some(sprint) = select_burndown_sprint(sprints) else {
         return Vec::new();
     };
@@ -238,7 +242,11 @@ pub(crate) fn build_burndown(sprints: &[WebSprint]) -> Vec<BurndownPoint> {
             .or_default() += story.story_points.unwrap_or(0);
     }
 
-    let total_days = (end_date - start_date).num_days();
+    let total_capacity = if end_date > start_date {
+        calendar.capacity_sum(start_date + Days::new(1), end_date)
+    } else {
+        0.0
+    };
     let visible_days = (last_date - start_date).num_days();
     let mut rows = Vec::new();
     let mut completed = 0;
@@ -246,11 +254,15 @@ pub(crate) fn build_burndown(sprints: &[WebSprint]) -> Vec<BurndownPoint> {
         let date = start_date + Days::new(offset as u64);
         completed += completed_by_date.get(&date).copied().unwrap_or(0);
         let remaining = (planned_points - completed).max(0);
-        let ideal = if total_days <= 0 {
-            0
+        let consumed_capacity = if date > start_date {
+            calendar.capacity_sum(start_date + Days::new(1), date)
         } else {
-            (((planned_points as f64) * (1.0 - (offset as f64 / total_days as f64))).round() as i64)
-                .max(0)
+            0.0
+        };
+        let ideal = if total_capacity <= 0.0 {
+            planned_points
+        } else {
+            ((planned_points as f64) * (1.0 - consumed_capacity / total_capacity)).round() as i64
         };
         rows.push(BurndownPoint {
             date: date.to_string(),
@@ -354,12 +366,21 @@ pub(crate) fn build_velocity(sprints: &[WebSprint]) -> Vec<VelocityPoint> {
         .collect()
 }
 
-pub(crate) fn build_forecast(stories: &[StoryOverview], sprints: &[SprintOverview]) -> Forecast {
+pub(crate) fn build_forecast(
+    stories: &[StoryOverview],
+    sprints: &[SprintOverview],
+    calendar: &WorkingCalendar,
+) -> Forecast {
     let current_sprint_name = sprints
         .iter()
         .find(|sprint| sprint.readme_status.as_deref() == Some("active"))
         .map(|sprint| sprint.sprint_name.as_str());
-    let dto = ReportForecastDto::build(stories, sprints, current_sprint_name);
+    let dto = ReportForecastDto::build_with_calendar(
+        stories,
+        sprints,
+        current_sprint_name,
+        calendar.clone(),
+    );
     Forecast::from(dto)
 }
 
