@@ -224,9 +224,13 @@ fn parse_entry(cells: &[String], team: &[TeamMemberConfig]) -> Result<Availabili
     let who = if who_value == "*" {
         None
     } else {
+        let member_value = who_value
+            .strip_prefix('<')
+            .and_then(|value| value.strip_suffix('>'))
+            .unwrap_or(who_value);
         let member = team.iter().find(|member| {
-            member.email.eq_ignore_ascii_case(who_value)
-                || member.name.eq_ignore_ascii_case(who_value)
+            member.email.eq_ignore_ascii_case(member_value)
+                || member.name.eq_ignore_ascii_case(member_value)
         });
         Some(
             member
@@ -340,6 +344,18 @@ mod tests {
         assert_eq!(
             calendar.day_capacity(NaiveDate::from_ymd_opt(2026, 8, 3).unwrap()),
             0.5
+        );
+    }
+
+    #[test]
+    fn individual_entries_accept_markdown_autolink_emails() {
+        let calendar = calendar(
+            "| AV-001 | vacation | <ada@example.com> | 2026-08-03 | 2026-08-03 | 0% | Vacation |",
+        );
+
+        assert_eq!(
+            calendar.entries()[0].who.as_deref(),
+            Some("ada@example.com")
         );
     }
 
