@@ -6,12 +6,12 @@
  * have shipped: making SSE the sole freshness mechanism, so that any lost
  * stream left the UI permanently and silently stale.
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock("./client.js", () => ({
+vi.mock('./client.js', () => ({
   fetchRepository: vi.fn(),
   fetchMetrics: vi.fn(),
   fetchReport: vi.fn(),
@@ -30,8 +30,8 @@ vi.mock("./client.js", () => ({
   gitPull: vi.fn(),
 }));
 
-import { fetchRepository, gitPull } from "./client.js";
-import { useGitPull, useLiveReload, useRepository } from "./hooks.js";
+import { fetchRepository, gitPull } from './client.js';
+import { useGitPull, useLiveReload, useRepository } from './hooks.js';
 
 // ---------------------------------------------------------------------------
 // EventSource stub — the jsdom environment provides none.
@@ -94,22 +94,15 @@ function productionLikeClient() {
 beforeEach(() => {
   vi.clearAllMocks();
   EventSourceStub.instances = [];
-  vi.stubGlobal("EventSource", EventSourceStub);
-  // `requestAnimationFrame` batches invalidation; run callbacks synchronously so
-  // the tests do not depend on frame timing.
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    callback(0);
-    return 1;
-  });
-  vi.stubGlobal("cancelAnimationFrame", () => {});
+  vi.stubGlobal('EventSource', EventSourceStub);
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("query freshness policy", () => {
-  it("serves a remount from cache inside the stale window", async () => {
+describe('query freshness policy', () => {
+  it('serves a remount from cache inside the stale window', async () => {
     const qc = productionLikeClient();
     vi.mocked(fetchRepository).mockResolvedValue({ stories: [] } as never);
 
@@ -122,11 +115,11 @@ describe("query freshness policy", () => {
     await waitFor(() => expect(second.result.current.isSuccess).toBe(true));
     expect(
       fetchRepository,
-      "a remount within staleTime must not refetch",
+      'a remount within staleTime must not refetch',
     ).toHaveBeenCalledTimes(1);
   });
 
-  it("refetches once the data is stale", async () => {
+  it('refetches once the data is stale', async () => {
     const qc = productionLikeClient();
     vi.mocked(fetchRepository).mockResolvedValue({ stories: [] } as never);
 
@@ -134,7 +127,7 @@ describe("query freshness policy", () => {
     await waitFor(() => expect(view.result.current.isSuccess).toBe(true));
 
     // Simulate the stale window elapsing.
-    qc.getQueryCache().find({ queryKey: ["repository"] })!.state.dataUpdatedAt =
+    qc.getQueryCache().find({ queryKey: ['repository'] })!.state.dataUpdatedAt =
       Date.now() - 120_000;
     await act(async () => {
       await view.result.current.refetch();
@@ -143,44 +136,58 @@ describe("query freshness policy", () => {
   });
 });
 
-describe("useLiveReload", () => {
-  it("invalidates each aggregate key once per change event", async () => {
-    const qc = productionLikeClient();
-    const invalidate = vi.spyOn(qc, "invalidateQueries");
-
-    renderHook(() => useLiveReload(), { wrapper: wrapper(qc) });
-    const source = EventSourceStub.instances.at(-1)!;
-
-    await act(async () => {
-      source.emit("change");
-    });
-
-    const keys = invalidate.mock.calls.map(([filters]) =>
-      JSON.stringify((filters as { queryKey: unknown }).queryKey),
-    );
-    expect(keys).toEqual([
-      '["repository"]',
-      '["metrics"]',
-      '["report"]',
-      '["team"]',
-    ]);
-  });
-
-  it("reports the degraded state and starts polling when the stream errors", async () => {
+describe('useLiveReload', () => {
+  it('debounces a sustained one-second event burst into one aggregate invalidation', () => {
     vi.useFakeTimers();
     try {
       const qc = productionLikeClient();
-      const invalidate = vi.spyOn(qc, "invalidateQueries");
-      const { result } = renderHook(() => useLiveReload(), { wrapper: wrapper(qc) });
+      const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+      renderHook(() => useLiveReload(), { wrapper: wrapper(qc) });
+      const source = EventSourceStub.instances.at(-1)!;
+      act(() => {
+        source.emit('change');
+        vi.advanceTimersByTime(1_000);
+        source.emit('change');
+        vi.advanceTimersByTime(1_000);
+        source.emit('change');
+      });
+      expect(invalidate).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(1_250);
+      });
+      const keys = invalidate.mock.calls.map(([filters]) =>
+        JSON.stringify((filters as { queryKey: unknown }).queryKey),
+      );
+      expect(keys).toEqual([
+        '["repository"]',
+        '["metrics"]',
+        '["report"]',
+        '["team"]',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports the degraded state and starts polling when the stream errors', async () => {
+    vi.useFakeTimers();
+    try {
+      const qc = productionLikeClient();
+      const invalidate = vi.spyOn(qc, 'invalidateQueries');
+      const { result } = renderHook(() => useLiveReload(), {
+        wrapper: wrapper(qc),
+      });
       expect(result.current.connected).toBe(true);
 
       const source = EventSourceStub.instances.at(-1)!;
       act(() => {
-        source.emit("error");
+        source.emit('error');
       });
       expect(
         result.current.connected,
-        "losing the stream must be visible, not silent",
+        'losing the stream must be visible, not silent',
       ).toBe(false);
 
       invalidate.mockClear();
@@ -189,13 +196,13 @@ describe("useLiveReload", () => {
       });
       expect(
         invalidate.mock.calls.length,
-        "the polling fallback must keep the aggregates fresh while SSE is down",
+        'the polling fallback must keep the aggregates fresh while SSE is down',
       ).toBeGreaterThan(0);
 
       // Recovery clears both the indicator and the fallback poll.
       invalidate.mockClear();
       act(() => {
-        source.emit("open");
+        source.emit('open');
       });
       expect(result.current.connected).toBe(true);
       act(() => {
@@ -203,28 +210,30 @@ describe("useLiveReload", () => {
       });
       expect(
         invalidate,
-        "polling must stop once the stream recovers",
+        'polling must stop once the stream recovers',
       ).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("closes the stream on unmount", () => {
+  it('closes the stream on unmount', () => {
     const qc = productionLikeClient();
-    const { unmount } = renderHook(() => useLiveReload(), { wrapper: wrapper(qc) });
+    const { unmount } = renderHook(() => useLiveReload(), {
+      wrapper: wrapper(qc),
+    });
     const source = EventSourceStub.instances.at(-1)!;
     unmount();
     expect(source.closed).toBe(true);
   });
 });
 
-describe("useGitPull", () => {
-  it("invalidates aggregates and the git sync status", async () => {
+describe('useGitPull', () => {
+  it('invalidates aggregates and the git sync status', async () => {
     const qc = productionLikeClient();
-    qc.setQueryData(["config"], { version: "test" });
-    qc.setQueryData(["story", "US-001"], { id: "US-001" });
-    const invalidate = vi.spyOn(qc, "invalidateQueries");
+    qc.setQueryData(['config'], { version: 'test' });
+    qc.setQueryData(['story', 'US-001'], { id: 'US-001' });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
     vi.mocked(gitPull).mockResolvedValue({ ok: true } as never);
 
     const { result } = renderHook(() => useGitPull(), { wrapper: wrapper(qc) });
@@ -244,7 +253,7 @@ describe("useGitPull", () => {
     ]);
     expect(
       keys,
-      "an unfiltered invalidateQueries() would also discard config and story detail",
+      'an unfiltered invalidateQueries() would also discard config and story detail',
     ).not.toContain(undefined);
   });
 });
