@@ -695,6 +695,14 @@ pub(crate) async fn api_git_push(
     let result = run_blocking(move || {
         let changes = pending_store.load()?;
         let upstream = git::upstream_state(&git_context.repo_root);
+        if let Some(message) = git::push_preflight_error(&upstream) {
+            return Ok(GitPushResponse {
+                ok: false,
+                status: "error",
+                message: message.to_string(),
+                commit_sha: None,
+            });
+        }
         if changes.is_empty() && upstream.ahead == 0 {
             return Ok(GitPushResponse {
                 ok: true,

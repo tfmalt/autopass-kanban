@@ -117,6 +117,11 @@ pub(crate) fn upstream_state(repo_root: &Path) -> UpstreamState {
     }
 }
 
+pub(crate) fn push_preflight_error(upstream: &UpstreamState) -> Option<&'static str> {
+    (upstream.behind > 0)
+        .then_some("Push unavailable: the remote has changes. Pull latest data before pushing.")
+}
+
 pub(crate) fn classify_pull_error(output: &str) -> String {
     let lower = output.to_lowercase();
     if lower.contains("conflict") {
@@ -174,5 +179,23 @@ pub(crate) fn classify_push_error(output: &str) -> String {
             "git push failed: {}",
             output.chars().take(200).collect::<String>()
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn push_preflight_requires_pull_when_remote_is_ahead() {
+        assert_eq!(
+            push_preflight_error(&UpstreamState {
+                upstream: Some("origin/main".to_string()),
+                ahead: 0,
+                behind: 1,
+            }),
+            Some("Push unavailable: the remote has changes. Pull latest data before pushing.")
+        );
+        assert_eq!(push_preflight_error(&UpstreamState::default()), None);
     }
 }
