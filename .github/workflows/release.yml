@@ -128,7 +128,7 @@ jobs:
           mv "$archive" release-assets/
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: kanban-${{ matrix.target }}
           path: release-assets/*.tar.gz
@@ -144,7 +144,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Download release archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: release-assets
           pattern: kanban-*
@@ -183,7 +183,7 @@ jobs:
           sh scripts/release/checksums.sh release-assets/kanban-*.tar.gz > "release-assets/kanban-${version}-checksums.txt"
 
       - name: Publish release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           fail_on_unmatched_files: true
           generate_release_notes: true
