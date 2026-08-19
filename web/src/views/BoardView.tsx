@@ -26,7 +26,12 @@ const StoryModal = lazy(async () => {
   return { default: module.StoryModal };
 });
 
-const BOARD_STATUSES = STORY_STATUSES.filter((status) => status !== "planned");
+const BOARD_COLUMNS = [
+  ["todo"],
+  ["in-progress"],
+  ["ready-for-qa", "blocked"],
+  ["done"],
+] as const;
 
 export function BoardView() {
   const repo = useRepository();
@@ -143,16 +148,20 @@ export function BoardView() {
       {reorderStories.error && <div style={{ color: "var(--red)", marginBottom: 8 }}>Story reorder failed: {String(reorderStories.error)}</div>}
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={onDragCancel}>
         <div className="columns">
-          {BOARD_STATUSES.map((status) => (
-            <StoryColumn
-              key={status}
-              status={status}
-              stories={visibleSprint.storiesByStatus[status]}
-              onOpen={handleOpen}
-              onUnplan={(story) => unplan.mutate({ id: story.id })}
-              activeDragId={activeStory?.id ?? null}
-              assigneeMap={assigneeMap}
-            />
+          {BOARD_COLUMNS.map((statuses, index) => (
+            <div className={statuses.length > 1 ? "column-stack" : undefined} key={index}>
+              {statuses.map((status) => (
+                <StoryColumn
+                  key={status}
+                  status={status}
+                  stories={visibleSprint.storiesByStatus[status]}
+                  onOpen={handleOpen}
+                  onUnplan={(story) => unplan.mutate({ id: story.id })}
+                  activeDragId={activeStory?.id ?? null}
+                  assigneeMap={assigneeMap}
+                />
+              ))}
+            </div>
           ))}
         </div>
         <DragOverlay dropAnimation={null}>

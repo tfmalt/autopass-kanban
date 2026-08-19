@@ -80,6 +80,16 @@ describe("BoardView", () => {
     expect(screen.queryByText("Planned")).not.toBeInTheDocument();
   });
 
+  it("stacks Blocked below Ready for QA in the third board column", async () => {
+    const { container } = renderWithClient(<BoardView />);
+    await screen.findByText("US-F1-061");
+
+    const columns = container.querySelector(".columns");
+    const thirdColumn = columns?.children[2];
+    expect(thirdColumn).toHaveClass("column-stack");
+    expect(thirdColumn?.textContent).toMatch(/Ready for QA[\s\S]*Blocked/);
+  });
+
   /**
    * B12: the cold-load placeholder must occupy the layout the board will
    * occupy, and announce itself, rather than collapsing to a one-line string.

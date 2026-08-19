@@ -10,7 +10,7 @@
  * announces that content is loading rather than reading an empty region.
  */
 
-const BOARD_COLUMN_COUNT = 5;
+const BOARD_COLUMN_COUNT = 4;
 const BOARD_CARDS_PER_COLUMN = 4;
 
 export function BoardSkeleton({ label = "Loading board" }: { label?: string }) {
@@ -23,12 +23,16 @@ export function BoardSkeleton({ label = "Loading board" }: { label?: string }) {
       </div>
       <div className="columns" aria-hidden="true">
         {Array.from({ length: BOARD_COLUMN_COUNT }, (_, column) => (
-          <div className="column" key={column}>
-            <h4>
-              <span className="skeleton-block skeleton-block--label" />
-            </h4>
-            {Array.from({ length: BOARD_CARDS_PER_COLUMN }, (_, card) => (
-              <div className="card skeleton-card" key={card} />
+          <div className={column === 2 ? "column-stack" : undefined} key={column}>
+            {Array.from({ length: column === 2 ? 2 : 1 }, (_, row) => (
+              <div className="column" key={row}>
+                <h4>
+                  <span className="skeleton-block skeleton-block--label" />
+                </h4>
+                {Array.from({ length: BOARD_CARDS_PER_COLUMN }, (_, card) => (
+                  <div className="card skeleton-card" key={card} />
+                ))}
+              </div>
             ))}
           </div>
         ))}
