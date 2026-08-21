@@ -84,6 +84,7 @@ describe("BoardView", () => {
     const { container } = renderWithClient(<BoardView />);
     await screen.findByText("US-F1-061");
 
+    expect(container.querySelector(".board-view")).toBeInTheDocument();
     const columns = container.querySelector(".columns");
     const thirdColumn = columns?.children[2];
     expect(thirdColumn).toHaveClass("column-stack");

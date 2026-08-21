@@ -130,7 +130,7 @@ export function BoardView() {
   };
 
   return (
-    <div className="view">
+    <div className="view board-view">
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
         <h2 style={{ margin: 0, paddingBottom: 10 }}>
           {visibleSprint.name} <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{visibleSprint.startDate} → {visibleSprint.endDate}</span>

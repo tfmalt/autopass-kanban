@@ -38,8 +38,10 @@ html, body, #root { height: 100%; }
 .phase-breakdown-epic-row { grid-template-columns: minmax(160px, 240px) 1fr 90px; font-size: 12px; color: var(--text-muted); }
 .phase-breakdown-epic-row > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .phase-breakdown-empty { font-size: 12px; color: var(--text-faint); }
+.board-view { box-sizing: border-box; display: flex; flex-direction: column; height: 100%; }
+.board-view .columns { flex: 1; min-height: 0; }
 .columns { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.column-stack { display: grid; grid-template-rows: repeat(2, minmax(200px, 1fr)); gap: 10px; }
+.column-stack { display: grid; grid-template-rows: repeat(2, minmax(100px, 1fr)); gap: 10px; min-height: 0; }
 .column { background: var(--surface-2); border-radius: var(--radius); padding: 10px; min-height: 200px; }
 .column.blocked { background: var(--red-soft); }
 .column.is-over { outline: 2px solid var(--accent); }
