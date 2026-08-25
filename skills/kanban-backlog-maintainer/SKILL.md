@@ -77,6 +77,11 @@ only when the JSON output is insufficient.
 - Treat Markdown as the source of truth, but prefer `kanban` write commands
   over hand edits because they keep paths, frontmatter, and timestamps
   consistent.
+- Prefer `kanban story create` for new stories so IDs, paths, and base
+  frontmatter are generated consistently.
+- When merge conflicts include generated sprint files, run `kanban sprint sync`
+  before manually resolving them; merge only metadata or prose conflicts that
+  remain.
 - Run `kanban` from the repo root. Use `--format json` for all read commands
   (`show`, `list`, `current`, `validate`, `doctor`, status queries).
 - Read existing files before manual edits. After structural or lifecycle edits,
