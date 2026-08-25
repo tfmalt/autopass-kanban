@@ -234,6 +234,7 @@ Implemented commands:
 - `kanban sprint list [repo_root]`
 - `kanban sprint show <name> [repo_root]`
 - `kanban sprint create [--number <n>] [--headline <slug>] [--start <yyyy-mm-dd>] [--end <yyyy-mm-dd>] [--non-interactive] [repo_root]`
+- `kanban sprint edit <name> [--headline <slug>] [--start <yyyy-mm-dd>] [--end <yyyy-mm-dd>] [--status <status>] [--wip-limit <n>] [repo_root]`
 - `kanban sprint rollover <name> [repo_root]`
 - `kanban sprint sync [repo_root]`
 - `kanban phase show <phase> [repo_root]`
@@ -332,7 +333,7 @@ Pass `--format json` (before the subcommand) to switch any command to
 machine-readable mode. The flag is supported on all read commands (`story show`,
 `story list`, `sprint current`, `sprint list`, `sprint show`, `phase show`,
 `config show`, `config get`), on the write commands (`story move`, `story plan`,
-`task add`, `task update`, `sprint create`, `sprint rollover`, `sprint sync`),
+`task add`, `task update`, `sprint create`, `sprint edit`, `sprint rollover`, `sprint sync`),
 and on `validate` and `doctor`.
 
 Every invocation in JSON mode emits a single envelope on stdout:
@@ -357,4 +358,3 @@ output remains the default when `--format` is omitted.
 
 Full per-command schema documentation:
 `docs/superpowers/specs/2026-06-03-kanban-json-output-design.md` in the served project repository.
-

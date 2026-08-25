@@ -1541,6 +1541,93 @@ fn story_update_without_fields_json_emits_specific_error() {
 }
 
 #[test]
+fn sprint_edit_json_updates_metadata_and_renames_assigned_stories() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+
+    init_backlog_and_sprints(root);
+    write_sprint(root, "S001", "foundation");
+    let story_rel = "delivery/backlog/phase-1/01.infra/US-F1-001-cluster.md";
+    write_story_in_sprint(root, story_rel, "US-F1-001", "S001.foundation", "todo");
+
+    let out = kanban_in(
+        root,
+        &[
+            "--format",
+            "json",
+            "sprint",
+            "edit",
+            "S001.foundation",
+            "--headline",
+            "platform-foundation",
+            "--status",
+            "active",
+            "--wip-limit",
+            "3",
+            &repo_root,
+        ],
+    );
+
+    let json = parse_stdout(&out);
+    assert!(
+        out.status.success(),
+        "sprint edit should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["kind"], "sprint.update");
+    assert_eq!(json["data"]["sprint_name"], "S001.platform-foundation");
+    assert_eq!(
+        json["data"]["path"],
+        "delivery/sprints/S001.platform-foundation.md"
+    );
+
+    let sprint_path = root.join("delivery/sprints/S001.platform-foundation.md");
+    let sprint_markdown = fs::read_to_string(&sprint_path).expect("renamed sprint should exist");
+    assert!(sprint_markdown.contains("headline: platform-foundation"));
+    assert!(sprint_markdown.contains("# S001: platform-foundation"));
+    assert!(sprint_markdown.contains("status: active"));
+    assert!(sprint_markdown.contains("wip_limit: 3"));
+    assert!(!root.join("delivery/sprints/S001.foundation.md").exists());
+
+    let story_markdown = fs::read_to_string(root.join(story_rel)).expect("story should exist");
+    assert!(story_markdown.contains("sprint: S001.platform-foundation"));
+}
+
+#[test]
+fn sprint_edit_without_fields_json_explains_editor_mode_is_unavailable() {
+    let dir = tempdir().expect("temp dir should be created");
+    let root = dir.path();
+    let repo_root = root.to_string_lossy().into_owned();
+    init_backlog_and_sprints(root);
+    write_sprint(root, "S001", "foundation");
+
+    let out = kanban_in(
+        root,
+        &[
+            "--format",
+            "json",
+            "sprint",
+            "edit",
+            "S001.foundation",
+            &repo_root,
+        ],
+    );
+
+    let json = parse_stdout(&out);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(json["status"], "error");
+    assert_eq!(json["kind"], "sprint.update");
+    assert_eq!(json["error"]["code"], "invalid_argument");
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("editor mode is unavailable"))
+    );
+}
+
+#[test]
 fn story_update_with_field_emits_updated_fields() {
     let dir = tempdir().expect("temp dir should be created");
     let root = dir.path();

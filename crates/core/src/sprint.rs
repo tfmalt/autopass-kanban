@@ -2,6 +2,7 @@ use crate::config::*;
 use crate::constants::*;
 use crate::doctor::*;
 use crate::error::KanbanError;
+use crate::lock::RepoLock;
 use crate::markdown::*;
 use crate::model::*;
 #[allow(unused_imports)]
@@ -197,6 +198,167 @@ pub fn create_sprint(
     Ok(CreateSprintResult {
         sprint_name,
         sprint_path: relative_path(&repo_root, &sprint_file),
+    })
+}
+
+pub fn update_sprint_frontmatter(
+    repo_root: impl AsRef<Path>,
+    sprint_name: &str,
+    updates: &[(String, String)],
+) -> Result<SprintUpdateResult> {
+    let config = load_kanban_config(repo_root)?;
+    let _lock = RepoLock::acquire(&config.repo_root)?;
+    if updates.is_empty() {
+        return Err(
+            KanbanError::invalid_argument("No sprint frontmatter fields were provided.").into(),
+        );
+    }
+
+    let specs = discover_sprint_folder_specs(&config)?;
+    let spec = specs
+        .iter()
+        .find(|spec| spec.sprint_name == sprint_name)
+        .ok_or_else(|| KanbanError::sprint_not_found(sprint_name))?;
+    let markdown = fs::read_to_string(&spec.readme_path)
+        .with_context(|| format!("read sprint file {}", spec.readme_path.display()))?;
+    let parsed = parse_frontmatter(&markdown);
+
+    let mut normalized_updates = Vec::with_capacity(updates.len());
+    for (field, value) in updates {
+        let value = match field.as_str() {
+            "headline" => {
+                let headline = slugify_headline(value);
+                if headline.is_empty() {
+                    bail!("Sprint headline must contain at least one ASCII letter or number.");
+                }
+                headline
+            }
+            "start_date" | "end_date" => {
+                if parse_markdown_date(value).is_none() {
+                    bail!("Sprint field `{field}` must use YYYY-MM-DD.");
+                }
+                value.trim().to_string()
+            }
+            "status" => {
+                let status = value.trim().to_ascii_lowercase();
+                if !SPRINT_STATUSES.contains(&status.as_str()) {
+                    bail!(
+                        "Sprint status must be planned, active, closed, or cancelled; got {value}."
+                    );
+                }
+                status
+            }
+            "wip_limit" => {
+                let value = value.trim();
+                if !matches!(value, "~" | "null")
+                    && parse_non_negative_i64_frontmatter(value).is_none()
+                {
+                    bail!("Sprint field `wip_limit` must be a non-negative integer or null.");
+                }
+                value.to_string()
+            }
+            _ => bail!("Unsupported sprint frontmatter field: {field}."),
+        };
+        normalized_updates.push((field.clone(), value));
+    }
+
+    let start_date = normalized_updates
+        .iter()
+        .find(|(field, _)| field == "start_date")
+        .map(|(_, value)| parse_markdown_date(value).expect("validated sprint start date"))
+        .unwrap_or(spec.start_date);
+    let end_date = normalized_updates
+        .iter()
+        .find(|(field, _)| field == "end_date")
+        .map(|(_, value)| parse_markdown_date(value).expect("validated sprint end date"))
+        .unwrap_or(spec.end_date);
+    if end_date <= start_date {
+        bail!(
+            "Sprint end date {} must be after start date {}.",
+            end_date.format("%Y-%m-%d"),
+            start_date.format("%Y-%m-%d")
+        );
+    }
+
+    let current_headline = parsed
+        .frontmatter
+        .get("headline")
+        .cloned()
+        .unwrap_or_else(|| spec.headline.clone());
+    let headline = normalized_updates
+        .iter()
+        .find(|(field, _)| field == "headline")
+        .map(|(_, value)| value.clone())
+        .unwrap_or(current_headline);
+    let sprint_id = parsed
+        .frontmatter
+        .get("sprint")
+        .cloned()
+        .ok_or_else(|| anyhow!("Sprint file is missing the `sprint` frontmatter field."))?;
+    let next_sprint_name = format!("{sprint_id}.{headline}");
+    let next_path = config.sprints_path().join(format!("{next_sprint_name}.md"));
+    let next_path = ensure_path_inside(&config.sprints_path(), &next_path)?;
+    if next_path != spec.readme_path && next_path.exists() {
+        bail!("Sprint already exists: {next_sprint_name}");
+    }
+
+    let frontmatter_updates = normalized_updates
+        .iter()
+        .map(|(field, value)| (field.as_str(), Some(value.clone())))
+        .collect::<Vec<_>>();
+    let mut updated_markdown = upsert_frontmatter_markdown(&markdown, &frontmatter_updates)?;
+    if normalized_updates
+        .iter()
+        .any(|(field, _)| field == "headline")
+    {
+        let title = format!("# {sprint_id}: {headline}");
+        let mut lines = updated_markdown
+            .lines()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        if let Some(index) = lines
+            .iter()
+            .position(|line| line.trim_start().starts_with('#'))
+        {
+            lines[index] = title;
+            updated_markdown = format!("{}\n", lines.join("\n"));
+        }
+    }
+    atomic_write(&spec.readme_path, &updated_markdown)
+        .with_context(|| format!("write sprint file {}", spec.readme_path.display()))?;
+
+    if next_sprint_name != spec.sprint_name {
+        let repository = read_repository_with_config(&config)?;
+        for story in repository
+            .stories
+            .iter()
+            .filter(|story| story.fields.sprint.as_deref() == Some(spec.sprint_name.as_str()))
+        {
+            let story_markdown = update_story_frontmatter_markdown(
+                &story.markdown,
+                &[("sprint", Some(next_sprint_name.clone()))],
+            )?;
+            atomic_write(&story.file_path, &story_markdown)
+                .with_context(|| format!("rewrite sprint story {}", story.file_path.display()))?;
+        }
+        fs::rename(&spec.readme_path, &next_path).with_context(|| {
+            format!(
+                "rename sprint file {} to {}",
+                spec.readme_path.display(),
+                next_path.display()
+            )
+        })?;
+    }
+
+    regenerate_sprint_roster(&config, &next_sprint_name)?;
+
+    Ok(SprintUpdateResult {
+        sprint_name: next_sprint_name,
+        sprint_path: relative_path(&config.repo_root, &next_path),
+        updated_fields: normalized_updates
+            .iter()
+            .map(|(field, _)| field.clone())
+            .collect(),
     })
 }
 

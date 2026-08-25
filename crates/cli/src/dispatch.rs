@@ -14,7 +14,7 @@ use crate::ops::{build_create_sprint_input_from_flags, resolve_story_list_scope}
 use crate::outcome::{CommandOutcome, FeatureToggleAction};
 use crate::prompt::{
     open_markdown_in_editor, open_story_markdown_in_editor, prompt_create_sprint,
-    prompt_with_default, story_frontmatter_update_value,
+    prompt_with_default, sprint_frontmatter_update_value, story_frontmatter_update_value,
 };
 use crate::self_manage::{UninstallOptions, UpgradeOptions, run_uninstall, run_upgrade};
 use crate::theme::Theme;
@@ -34,7 +34,7 @@ use kanban_core::{
     plan_story_into_sprint, read_story_file, rollover_sprint, set_config_value,
     story_markdown_file, suggested_sprint_dates, summarize_current_sprint, summarize_phase,
     summarize_sprint, summarize_sprints, sync_sprint_rosters, update_epic_frontmatter,
-    update_story_frontmatter, update_task_in_story, validate_repository,
+    update_sprint_frontmatter, update_story_frontmatter, update_task_in_story, validate_repository,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -269,6 +269,81 @@ pub(crate) fn execute_command(
                 let root = load_kanban_config(repo_root)?.repo_root;
                 CommandOutcome::SprintCreate {
                     result: create_sprint(&root, &input)?,
+                    repo_root: root,
+                }
+            }
+            SprintCommand::Update {
+                name,
+                headline,
+                start,
+                end,
+                status,
+                wip_limit,
+                repo_root,
+            } => {
+                if mode == DispatchMode::Human {
+                    ensure_sprints_enabled(mode, repo_root)?;
+                }
+                let sprint = summarize_sprint(repo_root, name)?;
+                let root = load_kanban_config(repo_root)?.repo_root;
+                let sprint_path = root.join(&sprint.readme_path);
+                let updates = if mode == DispatchMode::Json {
+                    let updates = match json_story_frontmatter_updates(&[
+                        ("headline", headline),
+                        ("start_date", start),
+                        ("end_date", end),
+                        ("status", status),
+                        ("wip_limit", wip_limit),
+                    ]) {
+                        Ok(updates) => updates,
+                        Err(error) => {
+                            return Ok(CommandOutcome::Error {
+                                kind: "sprint.update",
+                                body: KanbanErrorBody::new(
+                                    KanbanErrorCode::InvalidArgument,
+                                    error.to_string(),
+                                ),
+                            });
+                        }
+                    };
+                    if updates.is_empty() {
+                        return Ok(CommandOutcome::Error {
+                            kind: "sprint.update",
+                            body: KanbanErrorBody::new(
+                                KanbanErrorCode::InvalidArgument,
+                                "sprint update in --format json requires at least one frontmatter field; editor mode is unavailable.",
+                            ),
+                        });
+                    }
+                    updates
+                } else {
+                    let markdown = std::fs::read_to_string(&sprint_path)?;
+                    let parsed = kanban_core::parse_frontmatter(&markdown);
+                    let mut updates = Vec::new();
+                    for (field_name, option) in [
+                        ("headline", headline),
+                        ("start_date", start),
+                        ("end_date", end),
+                        ("status", status),
+                        ("wip_limit", wip_limit),
+                    ] {
+                        if let Some(update) =
+                            sprint_frontmatter_update_value(&parsed, field_name, option)?
+                        {
+                            updates.push(update);
+                        }
+                    }
+                    if updates.is_empty() {
+                        open_markdown_in_editor(&sprint_path, "sprint markdown")?;
+                        return Ok(CommandOutcome::Edited {
+                            kind: "sprint.update",
+                            path: sprint.readme_path,
+                        });
+                    }
+                    updates
+                };
+                CommandOutcome::SprintUpdate {
+                    result: update_sprint_frontmatter(&root, name, &updates)?,
                     repo_root: root,
                 }
             }

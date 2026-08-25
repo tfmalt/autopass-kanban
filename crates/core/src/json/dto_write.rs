@@ -4,8 +4,8 @@ use serde::Serialize;
 
 use crate::{
     CreateSprintResult, CreateStoryResult, DeleteStoryResult, EpicUpdateResult, MoveStoryResult,
-    PlanStoryResult, RolloverResult, StoryUpdateResult, TaskListResult, TaskMutationResult,
-    TaskSummary,
+    PlanStoryResult, RolloverResult, SprintUpdateResult, StoryUpdateResult, TaskListResult,
+    TaskMutationResult, TaskSummary,
 };
 
 use super::{TaskDto, rel_to_root, slugify_status};
@@ -190,6 +190,24 @@ impl SprintCreateDto {
         Self {
             sprint_name: r.sprint_name.clone(),
             path: rel_to_root(repo_root, &r.sprint_path),
+        }
+    }
+}
+
+/// DTO for `sprint update` responses.
+#[derive(Debug, Clone, Serialize)]
+pub struct SprintUpdateDto {
+    pub sprint_name: String,
+    pub path: String,
+    pub updated_fields: Vec<String>,
+}
+
+impl SprintUpdateDto {
+    pub fn from_result(r: &SprintUpdateResult, repo_root: &Path) -> Self {
+        Self {
+            sprint_name: r.sprint_name.clone(),
+            path: rel_to_root(repo_root, &r.sprint_path),
+            updated_fields: r.updated_fields.clone(),
         }
     }
 }

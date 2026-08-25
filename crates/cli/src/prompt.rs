@@ -67,6 +67,26 @@ pub(crate) fn story_frontmatter_update_value(
     }
 }
 
+pub(crate) fn sprint_frontmatter_update_value(
+    sprint: &kanban_core::ParsedFrontmatter,
+    field_name: &str,
+    option: &Option<Option<String>>,
+) -> Result<Option<(String, String)>> {
+    match option {
+        None => Ok(None),
+        Some(Some(value)) => Ok(Some((field_name.to_string(), value.clone()))),
+        Some(None) => {
+            let default = sprint
+                .frontmatter
+                .get(field_name)
+                .cloned()
+                .unwrap_or_default();
+            let value = prompt_with_default(field_name, &default)?;
+            Ok(Some((field_name.to_string(), value)))
+        }
+    }
+}
+
 pub(crate) fn open_markdown_in_editor(path: &Path, label: &str) -> Result<()> {
     let editor =
         std::env::var("EDITOR").with_context(|| format!("$EDITOR must be set to edit {label}."))?;

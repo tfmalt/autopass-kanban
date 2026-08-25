@@ -148,6 +148,26 @@ pub(crate) enum SprintCommand {
         repo_root: PathBuf,
     },
     #[command(
+        visible_aliases = ["edit"],
+        about = "Update a sprint. With no field options, opens $EDITOR for the sprint markdown. Field options update frontmatter; omit an option value to be prompted with the current value as default."
+    )]
+    Update {
+        #[arg(help = "Sprint name to update, for example S001.foundation.")]
+        name: String,
+        #[arg(long, num_args = 0..=1, value_name = "SLUG", help = "Update the sprint headline and filename. Omit VALUE to prompt with the current value.")]
+        headline: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "DATE", help = "Update start_date. Omit VALUE to prompt with the current value.")]
+        start: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "DATE", help = "Update end_date. Omit VALUE to prompt with the current value.")]
+        end: Option<Option<String>>,
+        #[arg(long, num_args = 0..=1, value_name = "STATUS", help = "Update sprint status. Omit VALUE to prompt with the current value.")]
+        status: Option<Option<String>>,
+        #[arg(long = "wip-limit", num_args = 0..=1, value_name = "N", help = "Update WIP limit as a non-negative integer or null. Omit VALUE to prompt with the current value.")]
+        wip_limit: Option<Option<String>>,
+        #[arg(default_value = ".", help = "Repository root to update.")]
+        repo_root: PathBuf,
+    },
+    #[command(
         about = "Roll unfinished work into the next sprint. Effect: updates story sprint frontmatter and the closed sprint file. Side effects: may create the next sprint file."
     )]
     Rollover {
@@ -1036,6 +1056,7 @@ pub(crate) fn command_repo_root(command: &Command) -> Option<&PathBuf> {
             | SprintCommand::List { repo_root }
             | SprintCommand::Show { repo_root, .. }
             | SprintCommand::Create { repo_root, .. }
+            | SprintCommand::Update { repo_root, .. }
             | SprintCommand::Rollover { repo_root, .. }
             | SprintCommand::Sync { repo_root } => Some(repo_root),
         },
@@ -1710,5 +1731,40 @@ mod tests {
         };
 
         assert_eq!(command_repo_root(&command), Some(&repo_root));
+    }
+
+    #[test]
+    fn sprint_edit_alias_parses_update_fields() {
+        let args = Args::try_parse_from([
+            "kanban",
+            "sprint",
+            "edit",
+            "S001.foundation",
+            "--headline",
+            "platform",
+            "--wip-limit",
+            "3",
+            "/tmp/repo",
+        ])
+        .unwrap();
+
+        match args.command {
+            Command::Sprint {
+                command:
+                    SprintCommand::Update {
+                        name,
+                        headline,
+                        wip_limit,
+                        repo_root,
+                        ..
+                    },
+            } => {
+                assert_eq!(name, "S001.foundation");
+                assert_eq!(headline, Some(Some("platform".to_string())));
+                assert_eq!(wip_limit, Some(Some("3".to_string())));
+                assert_eq!(repo_root, PathBuf::from("/tmp/repo"));
+            }
+            _ => panic!("unexpected command"),
+        }
     }
 }

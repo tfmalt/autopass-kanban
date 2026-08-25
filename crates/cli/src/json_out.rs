@@ -13,8 +13,8 @@ use kanban_core::{
     ColorMode, ConfigGetDto, ConfigInitDto, ConfigSetDto, CreateStoryDto, DeleteStoryDto,
     DoctorDto, EpicShowDto, EpicUpdateDto, JsonEnvelope, KanbanErrorBody, KanbanErrorCode,
     ListIdsDto, MoveStoryDto, NoData, PhaseShowDto, PlanStoryDto, SprintCreateDto, SprintListDto,
-    SprintOverviewDto, SprintRolloverDto, SprintSyncDto, StoryListDto, StoryShowDto,
-    StoryUpdateDto, TaskMutationDto, TaskShowDto, ValidateDto,
+    SprintOverviewDto, SprintRolloverDto, SprintSyncDto, SprintUpdateDto, StoryListDto,
+    StoryShowDto, StoryUpdateDto, TaskMutationDto, TaskShowDto, ValidateDto,
 };
 
 /// Serialize a `JsonEnvelope` to stdout and return its exit code.
@@ -63,6 +63,7 @@ fn json_kind(command: &Command) -> &'static str {
             SprintCommand::List { .. } => "sprint.list",
             SprintCommand::Show { .. } => "sprint.show",
             SprintCommand::Create { .. } => "sprint.create",
+            SprintCommand::Update { .. } => "sprint.update",
             SprintCommand::Rollover { .. } => "sprint.rollover",
             SprintCommand::Sync { .. } => "sprint.sync",
         },
@@ -177,6 +178,10 @@ fn emit_shared_outcome(outcome: CommandOutcome) -> i32 {
         CommandOutcome::SprintCreate { result, repo_root } => print_envelope(&JsonEnvelope::ok(
             kind,
             SprintCreateDto::from_result(&result, &repo_root),
+        )),
+        CommandOutcome::SprintUpdate { result, repo_root } => print_envelope(&JsonEnvelope::ok(
+            kind,
+            SprintUpdateDto::from_result(&result, &repo_root),
         )),
         CommandOutcome::SprintRollover(result) => print_envelope(&JsonEnvelope::ok(
             kind,

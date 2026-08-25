@@ -52,6 +52,10 @@ pub(crate) fn enhance_zsh_completion(script: &str) -> String {
             "':name -- Sprint name to close and roll over.:_default'",
             "':name -- Sprint name to close and roll over.:_kanban_sprint_names'",
         )
+        .replace(
+            "':name -- Sprint name to update, for example S001.foundation.:_default'",
+            "':name -- Sprint name to update, for example S001.foundation.:_kanban_sprint_names'",
+        )
         // Story plan sprint argument
         .replace(
             "':sprint -- Target sprint name or Snnn prefix, for example S001.planning or S001.:_default'",
@@ -517,6 +521,13 @@ pub(crate) fn enhance_bash_completion(script: &str) -> String {
         &script,
         "kanban__subcmd__sprint__subcmd__rollover",
         "-h --format --help <NAME> [REPO_ROOT]",
+        "sprints",
+        3,
+    );
+    let script = inject_bash_dynamic(
+        &script,
+        "kanban__subcmd__sprint__subcmd__update",
+        "-h --headline --start --end --status --wip-limit --format --help <NAME> [REPO_ROOT]",
         "sprints",
         3,
     );

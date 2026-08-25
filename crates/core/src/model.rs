@@ -312,6 +312,13 @@ pub struct CreateSprintResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SprintUpdateResult {
+    pub sprint_name: String,
+    pub sprint_path: PathBuf,
+    pub updated_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateStoryInput {
     pub id: Option<String>,
     pub title: String,

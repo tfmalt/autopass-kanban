@@ -4,8 +4,8 @@ use kanban_core::{
     CompletionDto, ConfigInitResult, ConfigSetResult, CreateSprintResult, CreateStoryResult,
     DeleteStoryResult, DoctorFinding, Epic, EpicDetails, EpicUpdateResult, KanbanErrorBody,
     ListIdItemDto, MoveStoryResult, PhaseOverview, PlanStoryResult, ReportForecastDto,
-    ReportWbsDto, RolloverResult, SprintOverview, Story, StoryDetails, StoryOverview,
-    StoryUpdateResult, TaskListResult, TaskMutationResult, ValidationReport,
+    ReportWbsDto, RolloverResult, SprintOverview, SprintUpdateResult, Story, StoryDetails,
+    StoryOverview, StoryUpdateResult, TaskListResult, TaskMutationResult, ValidationReport,
 };
 
 use crate::layout::OutputLayout;
@@ -57,6 +57,10 @@ pub(crate) enum CommandOutcome {
     },
     SprintCreate {
         result: CreateSprintResult,
+        repo_root: PathBuf,
+    },
+    SprintUpdate {
+        result: SprintUpdateResult,
         repo_root: PathBuf,
     },
     SprintRollover(RolloverResult),
@@ -152,6 +156,7 @@ impl CommandOutcome {
             CommandOutcome::SprintOverview { kind, .. } => kind,
             CommandOutcome::SprintList { .. } => "sprint.list",
             CommandOutcome::SprintCreate { .. } => "sprint.create",
+            CommandOutcome::SprintUpdate { .. } => "sprint.update",
             CommandOutcome::SprintRollover(_) => "sprint.rollover",
             CommandOutcome::PhaseShow(_) => "phase.show",
             CommandOutcome::EpicShow { .. } => "epic.show",
@@ -284,6 +289,19 @@ pub(crate) fn print_human_outcome(theme: &Theme, outcome: CommandOutcome) {
                 "{} created sprint: {}",
                 theme.ok_label(),
                 result.sprint_name
+            );
+            println!(
+                "{} path: {}",
+                theme.info_label(),
+                theme.path(result.sprint_path.display())
+            );
+        }
+        CommandOutcome::SprintUpdate { result, .. } => {
+            println!(
+                "{} updated {} ({})",
+                theme.ok_label(),
+                theme.id(&result.sprint_name),
+                result.updated_fields.join(", ")
             );
             println!(
                 "{} path: {}",
