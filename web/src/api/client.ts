@@ -6,7 +6,7 @@ async function getJson<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-async function sendJson<T = void>(method: "POST" | "PUT" | "PATCH", url: string, body: unknown): Promise<T> {
+async function sendJson<T = void>(method: "POST" | "PUT" | "PATCH" | "DELETE", url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method,
     headers: { "content-type": "application/json" },
@@ -59,6 +59,14 @@ export const updateEpicFields = (id: string, fields: { priority: number }) =>
 
 export const updateTaskStatus = (storyId: string, taskId: string, status: string) =>
   sendJson("PATCH", `/api/stories/${encodeURIComponent(storyId)}/tasks/${encodeURIComponent(taskId)}`, { status });
+export const createTask = (storyId: string, input: { title: string; status: string; description: string; tags: string }) =>
+  sendJson("POST", `/api/stories/${encodeURIComponent(storyId)}/tasks`, input);
+export const updateTask = (storyId: string, taskId: string, input: { title: string; status: string; description: string; tags: string }) =>
+  sendJson("PATCH", `/api/stories/${encodeURIComponent(storyId)}/tasks/${encodeURIComponent(taskId)}`, input);
+export const deleteTask = (storyId: string, taskId: string) =>
+  sendJson("DELETE", `/api/stories/${encodeURIComponent(storyId)}/tasks/${encodeURIComponent(taskId)}`, {});
+export const reorderTasks = (storyId: string, taskIds: string[]) =>
+  sendJson("PUT", `/api/stories/${encodeURIComponent(storyId)}/tasks`, { taskIds });
 
 export const gitPull = () => sendJson<GitPullResponse>("POST", "/api/git-pull", {});
 export const gitPush = () => sendJson<GitPushResponse>("POST", "/api/git-push", {});

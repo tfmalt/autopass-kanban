@@ -4,7 +4,7 @@ import DOMPurify from "dompurify";
 import type { Story, TaskStatus } from "@shared/generated/api.js";
 import { STORY_STATUSES, TASK_STATUSES, parseAssignees } from "@shared/domain.js";
 import { useConfig, useRepository, useTeam } from "../api/hooks.js";
-import { useStory, useUpdateStory, useUpdateStoryFields, useUpdateTaskStatus } from "../api/hooks.js";
+import { useCreateTask, useDeleteTask, useReorderTasks, useStory, useUpdateStory, useUpdateStoryFields, useUpdateTask } from "../api/hooks.js";
 
 // Configure marked: GitHub-flavoured markdown, no mangling of email links.
 marked.use({ gfm: true, breaks: false });
@@ -80,7 +80,10 @@ export function StoryModal({ story, onClose, statusOptions = DEFAULT_STATUS_OPTI
   const team = useTeam();
   const updateBody = useUpdateStory();
   const updateFields = useUpdateStoryFields();
-  const updateTaskStatus = useUpdateTaskStatus();
+  const createTask = useCreateTask();
+  const updateTask = useUpdateTask();
+  const deleteTask = useDeleteTask();
+  const reorderTasks = useReorderTasks();
   const assigneeInputRef = useRef<HTMLInputElement | null>(null);
 
   const [editing, setEditing] = useState(false);
@@ -92,6 +95,11 @@ export function StoryModal({ story, onClose, statusOptions = DEFAULT_STATUS_OPTI
   const [saveError, setSaveError] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskSaveError, setTaskSaveError] = useState<string | null>(null);
+  const [addingTask, setAddingTask] = useState(false);
+  const [draftTaskTitle, setDraftTaskTitle] = useState("");
+  const [draftTaskDescription, setDraftTaskDescription] = useState("");
+  const [draftTaskTags, setDraftTaskTags] = useState("");
+  const [draftTaskStatus, setDraftTaskStatus] = useState<TaskStatus>("todo");
 
   const currentStatus = detail?.status ?? story.status;
   const currentStoryPoints = detail?.storyPoints ?? story.storyPoints;
@@ -230,15 +238,78 @@ export function StoryModal({ story, onClose, statusOptions = DEFAULT_STATUS_OPTI
     });
   }, [assigneeOptions]);
 
-  const handleTaskStatusChange = useCallback((taskId: string, status: TaskStatus) => {
+  const selectTask = useCallback((task: typeof currentTasks[number]) => {
     setTaskSaveError(null);
-    updateTaskStatus.mutate(
-      { storyId: story.id, taskId, status },
+    if (selectedTaskId === task.id) {
+      setSelectedTaskId(null);
+      return;
+    }
+    setSelectedTaskId(task.id);
+    setDraftTaskTitle(task.title);
+    setDraftTaskDescription(task.description);
+    setDraftTaskTags(task.tags.join(", "));
+    setDraftTaskStatus(normalizeTaskStatus(task.status) || "todo");
+  }, [currentTasks, selectedTaskId]);
+
+  const handleTaskSave = useCallback((taskId: string) => {
+    setTaskSaveError(null);
+    updateTask.mutate(
       {
+        storyId: story.id,
+        taskId,
+        title: draftTaskTitle,
+        description: draftTaskDescription,
+        tags: draftTaskTags,
+        status: draftTaskStatus,
+      },
+      {
+        onSuccess: () => setSelectedTaskId(null),
         onError: (err) => setTaskSaveError(err instanceof Error ? err.message : "Task update failed"),
       },
     );
-  }, [story.id, updateTaskStatus]);
+  }, [draftTaskDescription, draftTaskStatus, draftTaskTags, draftTaskTitle, story.id, updateTask]);
+
+  const handleTaskCreate = useCallback(() => {
+    setTaskSaveError(null);
+    createTask.mutate(
+      { storyId: story.id, title: draftTaskTitle, description: draftTaskDescription, tags: draftTaskTags, status: draftTaskStatus },
+      {
+        onSuccess: () => {
+          setAddingTask(false);
+          setDraftTaskTitle("");
+          setDraftTaskDescription("");
+          setDraftTaskTags("");
+          setDraftTaskStatus("todo");
+        },
+        onError: (err) => setTaskSaveError(err instanceof Error ? err.message : "Task creation failed"),
+      },
+    );
+  }, [createTask, draftTaskDescription, draftTaskStatus, draftTaskTags, draftTaskTitle, story.id]);
+
+  const handleTaskReorder = useCallback((taskId: string, direction: -1 | 1) => {
+    const index = currentTasks.findIndex((task) => task.id === taskId);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= currentTasks.length) return;
+    const taskIds = currentTasks.map((task) => task.id);
+    [taskIds[index], taskIds[target]] = [taskIds[target]!, taskIds[index]!];
+    setTaskSaveError(null);
+    reorderTasks.mutate(
+      { storyId: story.id, taskIds },
+      { onError: (err) => setTaskSaveError(err instanceof Error ? err.message : "Task reorder failed") },
+    );
+  }, [currentTasks, reorderTasks, story.id]);
+
+  const handleTaskDelete = useCallback((taskId: string) => {
+    if (!window.confirm(`Delete ${taskId}? This cannot be undone.`)) return;
+    setTaskSaveError(null);
+    deleteTask.mutate(
+      { storyId: story.id, taskId },
+      {
+        onSuccess: () => setSelectedTaskId(null),
+        onError: (err) => setTaskSaveError(err instanceof Error ? err.message : "Task deletion failed"),
+      },
+    );
+  }, [deleteTask, story.id]);
 
   // Close on Escape (only when not editing)
   useEffect(() => {
@@ -250,7 +321,7 @@ export function StoryModal({ story, onClose, statusOptions = DEFAULT_STATUS_OPTI
   }, [onClose, editing]);
 
   const isSaving = updateBody.isPending || updateFields.isPending;
-  const isTaskSaving = updateTaskStatus.isPending;
+  const isTaskSaving = createTask.isPending || updateTask.isPending || deleteTask.isPending || reorderTasks.isPending;
 
   return (
     <div className="overlay" onClick={editing ? undefined : onClose}>
@@ -430,52 +501,132 @@ export function StoryModal({ story, onClose, statusOptions = DEFAULT_STATUS_OPTI
         </div>
 
         {/* ── Tasks ── */}
-        {currentTasks.length > 0 && (
-          <div className="story-panel-tasks">
+        <div className="story-panel-tasks">
+          <div className="task-section-heading">
             <h3 style={{ fontSize: 12, margin: "14px 0 8px", color: "var(--text-muted)" }}>
               Tasks ({currentTaskSummary.done}/{currentTaskSummary.total})
             </h3>
-            {taskSaveError && <div className="story-panel-save-error">{taskSaveError}</div>}
-            {currentTasks.map((task) => {
-              const normalizedTaskStatus = normalizeTaskStatus(task.status);
-              const isSelected = selectedTaskId === task.id;
-              return (
-              <div
-                key={task.id}
-                className={`task-card task-card--${normalizedTaskStatus || "unknown"}`}
+            {!addingTask && (
+              <button
+                type="button"
+                className="button-add"
+                onClick={() => {
+                  setSelectedTaskId(null);
+                  setDraftTaskTitle("");
+                  setDraftTaskDescription("");
+                  setDraftTaskTags("");
+                  setDraftTaskStatus("todo");
+                  setAddingTask(true);
+                }}
+                disabled={isTaskSaving}
               >
-                <button
-                  type="button"
-                  className="task-card-button"
-                  onClick={() => setSelectedTaskId(isSelected ? null : task.id)}
-                  aria-expanded={isSelected}
-                >
-                  <span className="task-card-meta">{task.id} · {task.status}</span>
-                  <span className="task-card-title">{task.title}</span>
+                Add task
+              </button>
+            )}
+          </div>
+          {taskSaveError && <div className="story-panel-save-error">{taskSaveError}</div>}
+          {addingTask && (
+            <div className="task-card task-card--editor">
+              <TaskEditor
+                taskId="new task"
+                title={draftTaskTitle}
+                description={draftTaskDescription}
+                tags={draftTaskTags}
+                status={draftTaskStatus}
+                saving={isTaskSaving}
+                onTitleChange={setDraftTaskTitle}
+                onDescriptionChange={setDraftTaskDescription}
+                onTagsChange={setDraftTaskTags}
+                onStatusChange={setDraftTaskStatus}
+              />
+              <div className="task-editor-actions">
+                <button type="button" className="button-primary" onClick={handleTaskCreate} disabled={isTaskSaving || draftTaskTitle.trim() === ""}>
+                  {isTaskSaving ? "Saving…" : "Create task"}
                 </button>
+                <button type="button" className="button-add" onClick={() => setAddingTask(false)} disabled={isTaskSaving}>Cancel</button>
+              </div>
+            </div>
+          )}
+          {currentTasks.map((task, index) => {
+            const normalizedTaskStatus = normalizeTaskStatus(task.status);
+            const isSelected = selectedTaskId === task.id;
+            return (
+              <div key={task.id} className={`task-card task-card--${normalizedTaskStatus || "unknown"}`}>
+                <div className="task-card-heading">
+                  <button
+                    type="button"
+                    className="task-card-button"
+                    onClick={() => selectTask(task)}
+                    aria-expanded={isSelected}
+                  >
+                    <span className="task-card-meta">{task.id} · {task.status}</span>
+                    <span className="task-card-title">{task.title}</span>
+                  </button>
+                  <div className="task-order-controls">
+                    <button type="button" className="button-add" onClick={() => handleTaskReorder(task.id, -1)} disabled={isTaskSaving || index === 0} aria-label={`Move ${task.id} up`}>↑</button>
+                    <button type="button" className="button-add" onClick={() => handleTaskReorder(task.id, 1)} disabled={isTaskSaving || index === currentTasks.length - 1} aria-label={`Move ${task.id} down`}>↓</button>
+                  </div>
+                </div>
                 {isSelected && (
-                  <label className="task-status-field">
-                    <span>Update status</span>
-                    <select
-                      className="field"
-                      value={normalizedTaskStatus}
-                      onChange={(e) => handleTaskStatusChange(task.id, e.target.value as TaskStatus)}
-                      disabled={isTaskSaving}
-                      aria-label={`Update status for ${task.id}`}
-                    >
-                      {normalizedTaskStatus === "" && <option value="">{task.status}</option>}
-                      {TASK_STATUSES.map((status) => (
-                        <option key={status} value={status}>{status}</option>
-                      ))}
-                    </select>
-                  </label>
+                  <>
+                    <TaskEditor
+                      taskId={task.id}
+                      title={draftTaskTitle}
+                      description={draftTaskDescription}
+                      tags={draftTaskTags}
+                      status={draftTaskStatus}
+                      saving={isTaskSaving}
+                      onTitleChange={setDraftTaskTitle}
+                      onDescriptionChange={setDraftTaskDescription}
+                      onTagsChange={setDraftTaskTags}
+                      onStatusChange={setDraftTaskStatus}
+                    />
+                    <div className="task-editor-actions">
+                      <button type="button" className="button-primary" onClick={() => handleTaskSave(task.id)} disabled={isTaskSaving || draftTaskTitle.trim() === ""}>
+                        {isTaskSaving ? "Saving…" : "Save task"}
+                      </button>
+                      <button type="button" className="button-danger" onClick={() => handleTaskDelete(task.id)} disabled={isTaskSaving}>Delete task</button>
+                    </div>
+                  </>
                 )}
               </div>
-              );
-            })}
-          </div>
-        )}
+            );
+          })}
+        </div>
       </div>
+    </div>
+  );
+}
+
+function TaskEditor({
+  taskId,
+  title,
+  description,
+  tags,
+  status,
+  saving,
+  onTitleChange,
+  onDescriptionChange,
+  onTagsChange,
+  onStatusChange,
+}: {
+  taskId: string;
+  title: string;
+  description: string;
+  tags: string;
+  status: TaskStatus;
+  saving: boolean;
+  onTitleChange: (value: string) => void;
+  onDescriptionChange: (value: string) => void;
+  onTagsChange: (value: string) => void;
+  onStatusChange: (value: TaskStatus) => void;
+}) {
+  return (
+    <div className="task-editor-fields">
+      <label className="task-status-field"><span>Title</span><input className="field" value={title} onChange={(event) => onTitleChange(event.target.value)} disabled={saving} aria-label={`Title for ${taskId}`} /></label>
+      <label className="task-status-field"><span>Status</span><select className="field" value={status} onChange={(event) => onStatusChange(event.target.value as TaskStatus)} disabled={saving} aria-label={`Status for ${taskId}`}>{TASK_STATUSES.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
+      <label className="task-status-field"><span>Tags</span><input className="field" value={tags} onChange={(event) => onTagsChange(event.target.value)} disabled={saving} aria-label={`Tags for ${taskId}`} placeholder="frontend, test" /></label>
+      <label className="task-status-field"><span>Description</span><textarea className="field" value={description} onChange={(event) => onDescriptionChange(event.target.value)} disabled={saving} aria-label={`Description for ${taskId}`} /></label>
     </div>
   );
 }

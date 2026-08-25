@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchEpic, fetchRepository, gitPull, moveStory, updateEpicFields, updateStoryFields } from "./client.js";
+import { createTask, fetchEpic, fetchRepository, gitPull, moveStory, updateEpicFields, updateStoryFields } from "./client.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -66,6 +66,18 @@ describe("api client", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ priority: 10 }),
       }),
+    );
+  });
+
+  it("createTask POSTs the task fields", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createTask("US-F1-001", { title: "Plan tests", status: "todo", description: "Add coverage", tags: "test" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/stories/US-F1-001/tasks",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ title: "Plan tests", status: "todo", description: "Add coverage", tags: "test" }) }),
     );
   });
 

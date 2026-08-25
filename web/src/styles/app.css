@@ -159,11 +159,18 @@ html, body, #root { height: 100%; }
 .task-card--done { background: color-mix(in srgb, var(--green) 18%, var(--surface)); }
 .task-card--done .task-card-meta { color: color-mix(in srgb, var(--green) 30%, var(--text-muted)); }
 .task-card--blocked { background: var(--red-soft); }
+.task-section-heading, .task-card-heading, .task-editor-actions, .task-order-controls { display: flex; align-items: center; gap: 6px; }
+.task-section-heading { justify-content: space-between; }
+.task-section-heading .button-add, .task-order-controls .button-add, .task-editor-actions .button-add, .task-editor-actions .button-primary, .task-editor-actions .button-danger { font-size: 11px; padding: 4px 7px; }
+.task-card-heading { align-items: flex-start; }
 .task-card-button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.task-order-controls { flex-shrink: 0; }
 .task-card-meta { font-size: 10px; color: var(--text-faint); }
 .task-card-title { font-size: 12.5px; }
 .task-status-field { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 8px; font-size: 11px; color: var(--text-muted); }
 .task-status-field .field { font-size: 12px; padding: 5px 8px; }
+.task-status-field textarea.field { min-height: 58px; resize: vertical; }
+.task-editor-actions { justify-content: flex-end; margin-top: 8px; }
 .modal-wrap { align-items: center; justify-content: center; }
 .modal { background: var(--surface); padding: 20px; border-radius: 12px; width: 360px; max-width: calc(100vw - 32px); }
 
