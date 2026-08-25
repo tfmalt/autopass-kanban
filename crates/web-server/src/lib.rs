@@ -35,10 +35,11 @@ mod typegen;
 use changes::ChangeBroadcaster;
 use dto::ApiError;
 use handlers::{
-    api_config, api_create_sprint, api_epic, api_events, api_git_pull, api_git_push,
-    api_git_status, api_metrics, api_move_story, api_plan_story, api_report, api_repository,
-    api_story, api_team, api_team_avatar, api_update_epic_fields, api_update_sprint,
-    api_update_story_body, api_update_story_fields, api_update_task, static_asset,
+    api_config, api_create_sprint, api_create_task, api_delete_task, api_epic, api_events,
+    api_git_pull, api_git_push, api_git_status, api_metrics, api_move_story, api_plan_story,
+    api_reorder_tasks, api_report, api_repository, api_story, api_team, api_team_avatar,
+    api_update_epic_fields, api_update_sprint, api_update_story_body, api_update_story_fields,
+    api_update_task, static_asset,
 };
 
 #[derive(Debug, Clone)]
@@ -231,7 +232,14 @@ pub async fn serve(options: WebServeOptions) -> Result<()> {
             get(api_story).put(api_update_story_body),
         )
         .route("/api/stories/{id}/fields", patch(api_update_story_fields))
-        .route("/api/stories/{id}/tasks/{task_id}", patch(api_update_task))
+        .route(
+            "/api/stories/{id}/tasks",
+            post(api_create_task).put(api_reorder_tasks),
+        )
+        .route(
+            "/api/stories/{id}/tasks/{task_id}",
+            patch(api_update_task).delete(api_delete_task),
+        )
         .route("/api/stories/{id}/move", post(api_move_story))
         .route("/api/stories/{id}/plan", post(api_plan_story))
         .route("/api/sprints", post(api_create_sprint))
