@@ -1,15 +1,15 @@
 ---
 id: US-048
 type: user-story
-status: in-progress
+status: done
 epic: EP-006
 sprint: S001.rolling-thunder
 assignee: Thomas Malt <thomas.malt@vegvesen.no>
 story_points: 5
 work_started: 2026-08-25T09:19:43+0200
-work_done: 
+work_done: 2026-08-25T10:22:32+0200
 created: 2026-08-25T09:18:12+0200
-updated: 2026-08-25T09:19:43+0200
+updated: 2026-08-25T10:22:32+0200
 activated: 2026-08-25T09:19:42+0200
 ---
 

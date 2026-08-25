@@ -19,6 +19,14 @@ Tags: web, react
 Description:
 Added accessible task creation, full-field editing, up/down ordering, and confirmed deletion controls to StoryModal.
 
+## TASK-US-048-006 - Fix task reorder request decoding
+
+Status: done
+Tags: web-server, bug
+
+Description:
+Aligned the reorder request DTO with the web client's camelCase taskIds payload and added a deserialization regression test. Full Rust and web verification passed.
+
 ## TASK-US-048-003 - Verify task management workflow
 
 Status: done

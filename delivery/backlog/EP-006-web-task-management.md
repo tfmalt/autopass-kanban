@@ -1,13 +1,14 @@
 ---
 id: EP-006
 type: epic
-status: in-progress
+status: done
 phase: 1
 owner: Thomas Malt / Tooling Lead
 milestone: MP2
 created: 2026-08-25T09:18:12+0200
-updated: 2026-08-25T09:19:43+0200
+updated: 2026-08-25T10:22:32+0200
 work_started: 2026-08-25T09:19:43+0200
+work_done: 2026-08-25T10:22:32+0200
 ---
 
 # Epic: Web task management
