@@ -10,7 +10,10 @@ const hooks = vi.hoisted(() => ({
   useStory: vi.fn(),
   useUpdateStory: vi.fn(),
   useUpdateStoryFields: vi.fn(),
-  useUpdateTaskStatus: vi.fn(),
+  useCreateTask: vi.fn(),
+  useUpdateTask: vi.fn(),
+  useDeleteTask: vi.fn(),
+  useReorderTasks: vi.fn(),
 }));
 
 vi.mock("../api/hooks.js", () => hooks);
@@ -87,7 +90,19 @@ describe("StoryModal", () => {
       isPending: false,
       mutate: vi.fn((_vars, options) => options?.onSuccess?.()),
     });
-    hooks.useUpdateTaskStatus.mockReturnValue({
+    hooks.useCreateTask.mockReturnValue({
+      isPending: false,
+      mutate: vi.fn((_vars, options) => options?.onSuccess?.()),
+    });
+    hooks.useUpdateTask.mockReturnValue({
+      isPending: false,
+      mutate: vi.fn((_vars, options) => options?.onSuccess?.()),
+    });
+    hooks.useDeleteTask.mockReturnValue({
+      isPending: false,
+      mutate: vi.fn((_vars, options) => options?.onSuccess?.()),
+    });
+    hooks.useReorderTasks.mockReturnValue({
       isPending: false,
       mutate: vi.fn((_vars, options) => options?.onSuccess?.()),
     });
@@ -207,8 +222,8 @@ describe("StoryModal", () => {
     expect(Array.from(status.options).map((option) => option.value)).toEqual(["todo", "draft", "ready", "planned"]);
   });
 
-  it("opens a task status picker and updates the selected task", async () => {
-    const updateTaskStatus = vi.fn((_vars, options) => options?.onSuccess?.());
+  it("edits all task fields from the selected task", async () => {
+    const updateTask = vi.fn((_vars, options) => options?.onSuccess?.());
     const story = baseStory();
     story.tasks = [
       { id: "TASK-US-F1-061-001", title: "Wire status picker", status: "todo", tags: [], description: "" },
@@ -219,20 +234,67 @@ describe("StoryModal", () => {
       isLoading: false,
       isError: false,
     });
-    hooks.useUpdateTaskStatus.mockReturnValue({ isPending: false, mutate: updateTaskStatus });
+    hooks.useUpdateTask.mockReturnValue({ isPending: false, mutate: updateTask });
 
     render(<StoryModal story={story} onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /TASK-US-F1-061-001/ }));
-    fireEvent.change(screen.getByLabelText("Update status for TASK-US-F1-061-001"), {
+    fireEvent.click(screen.getByRole("button", { name: /Wire status picker/ }));
+    fireEvent.change(screen.getByLabelText("Title for TASK-US-F1-061-001"), { target: { value: "Update task form" } });
+    fireEvent.change(screen.getByLabelText("Status for TASK-US-F1-061-001"), {
       target: { value: "done" },
     });
+    fireEvent.change(screen.getByLabelText("Tags for TASK-US-F1-061-001"), { target: { value: "web, test" } });
+    fireEvent.change(screen.getByLabelText("Description for TASK-US-F1-061-001"), { target: { value: "Updated details" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save task" }));
 
     await waitFor(() => {
-      expect(updateTaskStatus).toHaveBeenCalledWith(
-        { storyId: "US-F1-061", taskId: "TASK-US-F1-061-001", status: "done" },
+      expect(updateTask).toHaveBeenCalledWith(
+        { storyId: "US-F1-061", taskId: "TASK-US-F1-061-001", title: "Update task form", status: "done", tags: "web, test", description: "Updated details" },
         expect.any(Object),
       );
+    });
+  });
+
+  it("creates and reorders tasks", async () => {
+    const createTask = vi.fn((_vars, options) => options?.onSuccess?.());
+    const reorderTasks = vi.fn((_vars, options) => options?.onSuccess?.());
+    const story = baseStory();
+    story.tasks = [
+      { id: "TASK-US-F1-061-001", title: "First", status: "todo", tags: [], description: "" },
+      { id: "TASK-US-F1-061-002", title: "Second", status: "todo", tags: [], description: "" },
+    ];
+    story.taskSummary = { todo: 2, inProgress: 0, readyForQa: 0, done: 0, blocked: 0, total: 2 };
+    hooks.useStory.mockReturnValue({ data: baseDetail({ tasks: story.tasks, taskSummary: story.taskSummary }), isLoading: false, isError: false });
+    hooks.useCreateTask.mockReturnValue({ isPending: false, mutate: createTask });
+    hooks.useReorderTasks.mockReturnValue({ isPending: false, mutate: reorderTasks });
+
+    render(<StoryModal story={story} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+    fireEvent.change(screen.getByLabelText("Title for new task"), { target: { value: "Third" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Move TASK-US-F1-061-002 up" }));
+
+    await waitFor(() => {
+      expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ storyId: "US-F1-061", title: "Third", status: "todo" }), expect.any(Object));
+      expect(reorderTasks).toHaveBeenCalledWith({ storyId: "US-F1-061", taskIds: ["TASK-US-F1-061-002", "TASK-US-F1-061-001"] }, expect.any(Object));
+    });
+  });
+
+  it("confirms before deleting a task", async () => {
+    const deleteTask = vi.fn((_vars, options) => options?.onSuccess?.());
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const story = baseStory();
+    story.tasks = [{ id: "TASK-US-F1-061-001", title: "Delete me", status: "todo", tags: [], description: "" }];
+    story.taskSummary = { todo: 1, inProgress: 0, readyForQa: 0, done: 0, blocked: 0, total: 1 };
+    hooks.useStory.mockReturnValue({ data: baseDetail({ tasks: story.tasks, taskSummary: story.taskSummary }), isLoading: false, isError: false });
+    hooks.useDeleteTask.mockReturnValue({ isPending: false, mutate: deleteTask });
+
+    render(<StoryModal story={story} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /Delete me/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete task" }));
+
+    await waitFor(() => {
+      expect(deleteTask).toHaveBeenCalledWith({ storyId: "US-F1-061", taskId: "TASK-US-F1-061-001" }, expect.any(Object));
     });
   });
 });

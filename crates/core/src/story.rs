@@ -662,8 +662,9 @@ pub fn add_task_to_story(
     tags: &[String],
     description: &str,
 ) -> Result<TaskMutationResult> {
-    let repository = read_repository(repo_root)?;
-    let _lock = RepoLock::acquire(&repository.repo_root)?;
+    let config = load_kanban_config(repo_root)?;
+    let _lock = RepoLock::acquire(&config.repo_root)?;
+    let repository = read_repository_with_config(&config)?;
     let story = find_story_for_write(&repository, story_id)?;
     let empty_task_file;
     let task_file = if let Some(task_file) = story.task_file.as_ref() {
@@ -741,8 +742,9 @@ pub fn update_task_in_story(
     tags: Option<&[String]>,
     description: Option<&str>,
 ) -> Result<TaskMutationResult> {
-    let repository = read_repository(repo_root)?;
-    let _lock = RepoLock::acquire(&repository.repo_root)?;
+    let config = load_kanban_config(repo_root)?;
+    let _lock = RepoLock::acquire(&config.repo_root)?;
+    let repository = read_repository_with_config(&config)?;
     let story = find_story_for_write(&repository, story_id)?;
     let task_file = story
         .task_file
@@ -786,8 +788,9 @@ pub fn delete_task_from_story(
     story_id: &str,
     task_id: &str,
 ) -> Result<TaskMutationResult> {
-    let repository = read_repository(repo_root)?;
-    let _lock = RepoLock::acquire(&repository.repo_root)?;
+    let config = load_kanban_config(repo_root)?;
+    let _lock = RepoLock::acquire(&config.repo_root)?;
+    let repository = read_repository_with_config(&config)?;
     let story = find_story_for_write(&repository, story_id)?;
     let task_file = story
         .task_file
@@ -825,6 +828,68 @@ pub fn delete_task_from_story(
         task_id: normalized_task_id,
         task_file_path: relative_path(&repository.repo_root, &task_file_path),
         task: removed,
+    })
+}
+
+pub fn reorder_tasks_in_story(
+    repo_root: impl AsRef<Path>,
+    story_id: &str,
+    ordered_task_ids: &[String],
+) -> Result<TaskReorderResult> {
+    let config = load_kanban_config(repo_root)?;
+    let _lock = RepoLock::acquire(&config.repo_root)?;
+    let repository = read_repository_with_config(&config)?;
+    let story = find_story_for_write(&repository, story_id)?;
+    let task_file = story
+        .task_file
+        .as_ref()
+        .ok_or_else(|| anyhow!("Task file does not exist for story {}.", story_id))?;
+    let markdown = task_file
+        .markdown
+        .as_deref()
+        .ok_or_else(|| anyhow!("Task file does not exist for story {}.", story_id))?;
+    let tasks = parse_task_markdown(markdown);
+    let expected_ids = tasks
+        .iter()
+        .map(|task| task.id.to_ascii_uppercase())
+        .collect::<BTreeSet<_>>();
+    let ordered_ids = ordered_task_ids
+        .iter()
+        .map(|task_id| task_id.trim().to_ascii_uppercase())
+        .collect::<Vec<_>>();
+    let supplied_ids = ordered_ids.iter().cloned().collect::<BTreeSet<_>>();
+
+    if ordered_ids.len() != supplied_ids.len() || supplied_ids != expected_ids {
+        bail!("Task order must contain every task ID exactly once.");
+    }
+
+    let tasks_by_id = tasks
+        .into_iter()
+        .map(|task| (task.id.to_ascii_uppercase(), task))
+        .collect::<BTreeMap<_, _>>();
+    let ordered_tasks = ordered_ids
+        .iter()
+        .map(|task_id| {
+            tasks_by_id
+                .get(task_id)
+                .cloned()
+                .ok_or_else(|| anyhow!("Task not found: {task_id}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let sprint_name = story
+        .frontmatter
+        .get("sprint")
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "~".to_string());
+    let task_file_path = task_file.file_path.clone();
+    let updated = render_task_file(&story.fields.id, &sprint_name, &ordered_tasks);
+    atomic_write(&task_file_path, &updated)
+        .with_context(|| format!("write task file {}", task_file_path.display()))?;
+
+    Ok(TaskReorderResult {
+        story_id: story.fields.id.clone(),
+        task_file_path: relative_path(&repository.repo_root, &task_file_path),
     })
 }
 
@@ -2134,6 +2199,53 @@ mod tests {
         assert_eq!(removed.task_id, "TASK-US-F1-057-001");
         assert!(!task_markdown.contains("## TASK-US-F1-057-001 - First task"));
         assert!(task_markdown.contains("## TASK-US-F1-057-002 - Second task"));
+    }
+
+    #[test]
+    fn task_reorder_requires_each_existing_task_once() {
+        let temp_root = tempdir().unwrap();
+        init_temp_repo(temp_root.path());
+        let story_path = write_story(
+            temp_root.path(),
+            "doc/backlog/phase-1-scaffolding/06.git-driven-kanban-and-backlog-tooling/US-F1-057-complete-kanban-cli-task-crud-for-story-task-logs.md",
+            "id: US-F1-057\ntype: user-story\nstatus: draft\nepic: EP-F1-06\nsprint: ~\nassignee: TBD\nstory_points: 1\nwork_started:\nwork_done:\ncreated: 2026-06-09T10:18:05+0200\nupdated: 2026-06-09T10:18:05+0200\n",
+        );
+        for title in ["First task", "Second task", "Third task"] {
+            add_task_to_story(temp_root.path(), "US-F1-057", title, "todo", &[], "").unwrap();
+        }
+
+        reorder_tasks_in_story(
+            temp_root.path(),
+            "US-F1-057",
+            &[
+                "TASK-US-F1-057-003".to_string(),
+                "TASK-US-F1-057-001".to_string(),
+                "TASK-US-F1-057-002".to_string(),
+            ],
+        )
+        .unwrap();
+        let ordered = fs::read_to_string(story_path.with_extension("tasks.md")).unwrap();
+        let third = ordered.find("Third task").unwrap();
+        let first = ordered.find("First task").unwrap();
+        let second = ordered.find("Second task").unwrap();
+        assert!(third < first && first < second);
+
+        let before_invalid_reorder = ordered.clone();
+        let error = reorder_tasks_in_story(
+            temp_root.path(),
+            "US-F1-057",
+            &[
+                "TASK-US-F1-057-001".to_string(),
+                "TASK-US-F1-057-001".to_string(),
+                "TASK-US-F1-057-999".to_string(),
+            ],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("exactly once"));
+        assert_eq!(
+            fs::read_to_string(story_path.with_extension("tasks.md")).unwrap(),
+            before_invalid_reorder
+        );
     }
 
     #[test]

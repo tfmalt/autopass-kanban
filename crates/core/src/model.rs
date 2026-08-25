@@ -379,6 +379,12 @@ pub struct TaskMutationResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskReorderResult {
+    pub story_id: String,
+    pub task_file_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskListResult {
     pub story_id: String,
     pub task_file_path: Option<PathBuf>,

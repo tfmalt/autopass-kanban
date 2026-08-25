@@ -408,6 +408,20 @@ pub(crate) struct UpdateTaskInput {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct CreateTaskInput {
+    pub(crate) title: String,
+    pub(crate) status: Option<String>,
+    pub(crate) description: Option<String>,
+    pub(crate) tags: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReorderTasksInput {
+    pub(crate) task_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct UpdateBodyInput {
     pub(crate) body: String,
 }
@@ -429,4 +443,17 @@ pub(crate) struct UpdateEpicFieldsInput {
     pub(crate) planned_end: Option<String>,
     pub(crate) work_started: Option<String>,
     pub(crate) work_done: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReorderTasksInput;
+
+    #[test]
+    fn reorder_tasks_input_accepts_the_web_client_payload() {
+        let input: ReorderTasksInput =
+            serde_json::from_str(r#"{"taskIds":["TASK-US-048-002","TASK-US-048-001"]}"#).unwrap();
+
+        assert_eq!(input.task_ids, ["TASK-US-048-002", "TASK-US-048-001"]);
+    }
 }

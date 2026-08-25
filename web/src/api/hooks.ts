@@ -15,6 +15,8 @@ import type {
 import { parseAssignees } from '@shared/domain.js';
 import {
   createSprint,
+  createTask,
+  deleteTask,
   fetchConfig,
   fetchEpic,
   fetchGitStatus,
@@ -27,11 +29,13 @@ import {
   gitPush,
   moveStory,
   planStory,
+  reorderTasks,
   updateEpicFields,
   updateSprint,
   updateStory,
   updateStoryFields,
   updateTaskStatus,
+  updateTask,
 } from './client.js';
 import {
   applyMoveStorySnapshot,
@@ -457,6 +461,43 @@ export function useUpdateTaskStatus() {
       qc.invalidateQueries({ queryKey: ['report'] });
     },
   });
+}
+
+function useTaskMutation<T>(mutationFn: (vars: T) => Promise<unknown>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: (_data, vars) => {
+      const storyId = (vars as { storyId: string }).storyId;
+      qc.invalidateQueries({ queryKey: ['story', storyId] });
+      qc.invalidateQueries({ queryKey: ['repository'] });
+      qc.invalidateQueries({ queryKey: ['report'] });
+    },
+  });
+}
+
+export function useCreateTask() {
+  return useTaskMutation((vars: { storyId: string; title: string; status: string; description: string; tags: string }) =>
+    createTask(vars.storyId, vars),
+  );
+}
+
+export function useUpdateTask() {
+  return useTaskMutation((vars: { storyId: string; taskId: string; title: string; status: string; description: string; tags: string }) =>
+    updateTask(vars.storyId, vars.taskId, vars),
+  );
+}
+
+export function useDeleteTask() {
+  return useTaskMutation((vars: { storyId: string; taskId: string }) =>
+    deleteTask(vars.storyId, vars.taskId),
+  );
+}
+
+export function useReorderTasks() {
+  return useTaskMutation((vars: { storyId: string; taskIds: string[] }) =>
+    reorderTasks(vars.storyId, vars.taskIds),
+  );
 }
 
 function parseStoryPoints(value: string | number): number | null {
