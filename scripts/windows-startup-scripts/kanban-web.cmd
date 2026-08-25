@@ -10,10 +10,10 @@ if not exist "%PS_SCRIPT%" (
     exit /b 1
 )
 
-rem No arguments: preserve the double-click behavior from the original wrapper.
+rem No arguments: complete an idempotent background restart before returning.
 if "%~1"=="" (
-    start "Kanban Web ip-2.0" powershell.exe -NoExit -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" start -Foreground -NoOpen
-    exit /b 0
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" restart -NoOpen
+    exit /b %ERRORLEVEL%
 )
 
 rem Arguments provided: run the requested command and return its exit code.
