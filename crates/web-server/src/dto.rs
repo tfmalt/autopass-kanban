@@ -408,6 +408,19 @@ pub(crate) struct UpdateTaskInput {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct CreateTaskInput {
+    pub(crate) title: String,
+    pub(crate) status: Option<String>,
+    pub(crate) description: Option<String>,
+    pub(crate) tags: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ReorderTasksInput {
+    pub(crate) task_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct UpdateBodyInput {
     pub(crate) body: String,
 }

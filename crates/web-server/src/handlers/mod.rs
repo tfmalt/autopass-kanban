@@ -341,6 +341,84 @@ pub(crate) async fn api_update_task(
     ))
 }
 
+pub(crate) async fn api_create_task(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(input): Json<CreateTaskInput>,
+) -> Result<Json<Value>, ApiResponse> {
+    let _write_guard = state.write_lock.lock().await;
+    let tags = input.tags.as_deref().map(parse_tags).unwrap_or_default();
+    let repo_root = state.repo_root.clone();
+    let id_for_create = id.clone();
+    let title = input.title;
+    let status = input.status.unwrap_or_else(|| "todo".to_string());
+    let description = input.description.unwrap_or_default();
+    let result = run_blocking(move || {
+        add_task_to_story(
+            &repo_root,
+            &id_for_create,
+            &title,
+            &status,
+            &tags,
+            &description,
+        )
+    })
+    .await?;
+    record_change(
+        &state,
+        format!("{id}/{} created", result.task_id),
+        vec![result.task_file_path.clone()],
+    )
+    .await;
+    state.changes.notify();
+    Ok(Json(
+        json!({ "ok": true, "data": TaskMutationDto::from_result(&result, &state.repo_root) }),
+    ))
+}
+
+pub(crate) async fn api_delete_task(
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, task_id)): AxumPath<(String, String)>,
+) -> Result<Json<Value>, ApiResponse> {
+    let _write_guard = state.write_lock.lock().await;
+    let repo_root = state.repo_root.clone();
+    let id_for_delete = id.clone();
+    let task_id_for_delete = task_id.clone();
+    let result = run_blocking(move || {
+        delete_task_from_story(&repo_root, &id_for_delete, &task_id_for_delete)
+    })
+    .await?;
+    record_change(
+        &state,
+        format!("{id}/{task_id} deleted"),
+        vec![result.task_file_path.clone()],
+    )
+    .await;
+    state.changes.notify();
+    Ok(Json(json!({ "ok": true })))
+}
+
+pub(crate) async fn api_reorder_tasks(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(input): Json<ReorderTasksInput>,
+) -> Result<Json<Value>, ApiResponse> {
+    let _write_guard = state.write_lock.lock().await;
+    let repo_root = state.repo_root.clone();
+    let id_for_reorder = id.clone();
+    let result =
+        run_blocking(move || reorder_tasks_in_story(&repo_root, &id_for_reorder, &input.task_ids))
+            .await?;
+    record_change(
+        &state,
+        format!("{id} tasks reordered"),
+        vec![result.task_file_path.clone()],
+    )
+    .await;
+    state.changes.notify();
+    Ok(Json(json!({ "ok": true })))
+}
+
 pub(crate) async fn api_update_story_body(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
