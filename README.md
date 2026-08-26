@@ -269,14 +269,35 @@ Developers who keep their backlog in a separate Git repository can configure a
 default that `kanban` uses from unrelated directories:
 
 ```sh
+# Run once inside the repository that owns the backlog.
+cd /path/to/backlog-repository
+kanban init
+
+# Configure that initialized repository as the user default.
 kanban config global set-root /path/to/backlog-repository
+
+# Confirm the configured canonical repository root.
 kanban config global show
+
+# Commands from another repository now use the configured backlog by default.
+cd /path/to/service-repository
+kanban sprint current
+
+# Remove the default when it is no longer needed.
 kanban config global clear-root
 ```
 
 The selected path must resolve to a Git repository containing
 `.kanban/settings.json`. The user preference is stored in
 `${KANBAN_CONFIG_HOME:-${XDG_CONFIG_HOME:-~/.config}/kanban}/config.json`.
+
+Pass a repository root explicitly for a one-off command, or set
+`KANBAN_REPO_ROOT` for scripts, CI, or a project-local environment:
+
+```sh
+kanban story list /path/to/backlog-repository
+KANBAN_REPO_ROOT=/path/to/backlog-repository kanban validate
+```
 
 Repository selection uses this precedence:
 
