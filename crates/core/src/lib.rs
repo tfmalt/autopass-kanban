@@ -19,6 +19,7 @@ mod story;
 pub mod testsupport;
 #[cfg(test)]
 mod testutil;
+mod user_config;
 mod util;
 mod validate;
 
@@ -58,7 +59,7 @@ pub use availability::*;
 pub use config::{
     ColorMode, ConfigInitResult, ConfigSetResult, FeaturesConfig, KanbanConfig, TeamMemberConfig,
     get_config_json, get_config_value, init_config, init_config_with_features, load_kanban_config,
-    resolve_repo_root, set_config_value,
+    require_git_repo_root, resolve_repo_root, set_config_value,
 };
 pub use constants::*;
 pub use doctor::*;
@@ -73,5 +74,10 @@ pub use repository::*;
 pub use sprint::*;
 pub use status::*;
 pub use story::*;
+pub use user_config::{
+    DEFAULT_REPO_ROOT_MARKER, GlobalConfigStatus, KANBAN_CONFIG_HOME, KANBAN_REPO_ROOT,
+    clear_default_repo_root, effective_repo_root, global_config_status, set_default_repo_root,
+    user_config_path,
+};
 pub use util::parse_assignee_list;
 pub use validate::*;

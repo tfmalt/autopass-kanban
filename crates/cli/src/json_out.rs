@@ -3,8 +3,8 @@ use serde::Serialize;
 use std::path::Path;
 
 use crate::cli::{
-    Command, ConfigCommand, DoctorCommand, EpicCommand, FeaturesCommand, PhaseCommand,
-    ReportCommand, SprintCommand, StoryCommand, TaskCommand, WebCommand,
+    Command, ConfigCommand, DoctorCommand, EpicCommand, FeaturesCommand, GlobalConfigCommand,
+    PhaseCommand, ReportCommand, SprintCommand, StoryCommand, TaskCommand, WebCommand,
 };
 use crate::dispatch::{DispatchMode, config_show_json_value, execute_command};
 use crate::outcome::CommandOutcome;
@@ -57,6 +57,11 @@ fn json_kind(command: &Command) -> &'static str {
             ConfigCommand::Show { .. } => "config.show",
             ConfigCommand::Get { .. } => "config.get",
             ConfigCommand::Set { .. } => "config.set",
+            ConfigCommand::Global { command } => match command {
+                GlobalConfigCommand::Show => "config.global.show",
+                GlobalConfigCommand::SetRoot { .. } => "config.global.set-root",
+                GlobalConfigCommand::ClearRoot => "config.global.clear-root",
+            },
         },
         Command::Sprint { command } => match command {
             SprintCommand::Current { .. } => "sprint.current",
@@ -148,6 +153,7 @@ fn emit_shared_outcome(outcome: CommandOutcome) -> i32 {
         CommandOutcome::ConfigSet(result) => {
             print_envelope(&JsonEnvelope::ok(kind, ConfigSetDto::from_result(&result)))
         }
+        CommandOutcome::GlobalConfig(status) => print_envelope(&JsonEnvelope::ok(kind, status)),
         CommandOutcome::FeaturesList {
             phases,
             sprints,

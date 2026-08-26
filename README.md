@@ -263,6 +263,34 @@ Run `kanban init` once per repository. This creates `.kanban/settings.json` in t
 
 If `.kanban/` is missing, operational commands fail with a prompt to run `kanban init`.
 
+### Default backlog repository
+
+Developers who keep their backlog in a separate Git repository can configure a
+default that `kanban` uses from unrelated directories:
+
+```sh
+kanban config global set-root /path/to/backlog-repository
+kanban config global show
+kanban config global clear-root
+```
+
+The selected path must resolve to a Git repository containing
+`.kanban/settings.json`. The user preference is stored in
+`${KANBAN_CONFIG_HOME:-${XDG_CONFIG_HOME:-~/.config}/kanban}/config.json`.
+
+Repository selection uses this precedence:
+
+1. An explicit positional `repo_root`, including `.`.
+2. `KANBAN_REPO_ROOT` for scripts, CI, and per-project environments.
+3. The current Git worktree when its root contains `.kanban/settings.json`.
+4. The configured default repository.
+5. The current directory when no default exists.
+
+`kanban init` always targets the current directory unless it receives an
+explicit repository path. An invalid environment or configured default is an
+error rather than a fallback, preventing mutations against an unintended
+repository.
+
 ### Optional features
 
 The phases, sprints, and epics concepts are all optional. Each can be disabled

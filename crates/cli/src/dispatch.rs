@@ -4,8 +4,9 @@ use std::path::Path;
 
 use crate::cli::{
     Args, COMPLETION_HELP, Command, CompletionTarget, ConfigCommand, DoctorCommand, EpicCommand,
-    FeatureName, FeaturesCommand, ListIdsKind, PhaseCommand, ReportCommand, SprintCommand,
-    StoryCommand, TaskCommand, WebCommand, completion_target_label, list_ids_kind_label,
+    FeatureName, FeaturesCommand, GlobalConfigCommand, ListIdsKind, PhaseCommand, ReportCommand,
+    SprintCommand, StoryCommand, TaskCommand, WebCommand, completion_target_label,
+    list_ids_kind_label,
 };
 use crate::completion::{enhance_bash_completion, enhance_zsh_completion};
 use crate::doctor_cli::{run_doctor_fix_non_interactive, run_doctor_fix_wizard};
@@ -26,15 +27,16 @@ use chrono::NaiveDate;
 use kanban_core::{
     CompletionDto, CreateStoryInput, FeaturesConfig, KanbanError, KanbanErrorBody, KanbanErrorCode,
     ListIdItemDto, ReportForecastDto, ReportWbsDto, WorkingCalendar, add_task_to_story,
-    config_show_value, create_sprint, create_story, delete_story, delete_task_from_story,
-    doctor_repository, find_epic_with_source, find_story, find_story_with_source, get_config_json,
-    get_config_value, init_config_with_features, list_all_epic_overviews, list_all_stories,
-    list_epic_ids, list_sprint_names, list_story_completion_items, list_story_ids,
-    list_tasks_for_story, load_kanban_config, move_story_to_status_with_assignee,
-    plan_story_into_sprint, read_story_file, rollover_sprint, set_config_value,
-    story_markdown_file, suggested_sprint_dates, summarize_current_sprint, summarize_phase,
-    summarize_sprint, summarize_sprints, sync_sprint_rosters, update_epic_frontmatter,
-    update_sprint_frontmatter, update_story_frontmatter, update_task_in_story, validate_repository,
+    clear_default_repo_root, config_show_value, create_sprint, create_story, delete_story,
+    delete_task_from_story, doctor_repository, find_epic_with_source, find_story,
+    find_story_with_source, get_config_json, get_config_value, global_config_status,
+    init_config_with_features, list_all_epic_overviews, list_all_stories, list_epic_ids,
+    list_sprint_names, list_story_completion_items, list_story_ids, list_tasks_for_story,
+    load_kanban_config, move_story_to_status_with_assignee, plan_story_into_sprint,
+    read_story_file, rollover_sprint, set_config_value, set_default_repo_root, story_markdown_file,
+    suggested_sprint_dates, summarize_current_sprint, summarize_phase, summarize_sprint,
+    summarize_sprints, sync_sprint_rosters, update_epic_frontmatter, update_sprint_frontmatter,
+    update_story_frontmatter, update_task_in_story, validate_repository,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -128,6 +130,15 @@ pub(crate) fn execute_command(
             CommandOutcome::Init(init_config_with_features(repo_root, features)?)
         }
         Command::Config { command } => match command {
+            ConfigCommand::Global { command } => match command {
+                GlobalConfigCommand::Show => CommandOutcome::GlobalConfig(global_config_status()?),
+                GlobalConfigCommand::SetRoot { repo_root } => {
+                    CommandOutcome::GlobalConfig(set_default_repo_root(repo_root)?)
+                }
+                GlobalConfigCommand::ClearRoot => {
+                    CommandOutcome::GlobalConfig(clear_default_repo_root()?)
+                }
+            },
             ConfigCommand::Show { repo_root } => {
                 CommandOutcome::ConfigShow(get_config_json(repo_root)?)
             }

@@ -84,7 +84,7 @@ pub(crate) enum SprintCommand {
     )]
     Current {
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -92,7 +92,7 @@ pub(crate) enum SprintCommand {
     )]
     List {
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -106,7 +106,7 @@ pub(crate) enum SprintCommand {
         #[arg(long, help = "Only print the sprint status header.")]
         short: bool,
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -144,7 +144,7 @@ pub(crate) enum SprintCommand {
         )]
         non_interactive: bool,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -164,7 +164,10 @@ pub(crate) enum SprintCommand {
         status: Option<Option<String>>,
         #[arg(long = "wip-limit", num_args = 0..=1, value_name = "N", help = "Update WIP limit as a non-negative integer or null. Omit VALUE to prompt with the current value.")]
         wip_limit: Option<Option<String>>,
-        #[arg(default_value = ".", help = "Repository root to update.")]
+        #[arg(
+            default_value = "__kanban_default_root__",
+            help = "Repository root to update."
+        )]
         repo_root: PathBuf,
     },
     #[command(
@@ -174,7 +177,7 @@ pub(crate) enum SprintCommand {
         #[arg(help = "Sprint name to close and roll over.")]
         name: String,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -182,7 +185,7 @@ pub(crate) enum SprintCommand {
     )]
     Sync {
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
 }
@@ -196,7 +199,7 @@ pub(crate) enum PhaseCommand {
         #[arg(help = "Phase identifier to inspect, for example 1 or F1.")]
         phase: String,
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
 }
@@ -210,7 +213,7 @@ pub(crate) enum EpicCommand {
         #[arg(help = "Epic id to inspect, for example EP-F1-06.")]
         id: String,
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -230,7 +233,10 @@ pub(crate) enum EpicCommand {
         work_started: Option<Option<String>>,
         #[arg(long, num_args = 0..=1, value_name = "TIMESTAMP", help = "Update frontmatter work_done. Omit VALUE to prompt with the current value.")]
         work_done: Option<Option<String>>,
-        #[arg(default_value = ".", help = "Repository root to update.")]
+        #[arg(
+            default_value = "__kanban_default_root__",
+            help = "Repository root to update."
+        )]
         repo_root: PathBuf,
     },
 }
@@ -330,7 +336,7 @@ pub(crate) enum StoryCommand {
         )]
         updated: Option<String>,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -340,7 +346,7 @@ pub(crate) enum StoryCommand {
         #[arg(help = "Story id to inspect, for example US-F1-053.")]
         id: String,
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -368,7 +374,7 @@ pub(crate) enum StoryCommand {
         )]
         sprint: Option<String>,
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -389,7 +395,7 @@ pub(crate) enum StoryCommand {
         )]
         assignee: Option<String>,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -405,7 +411,7 @@ pub(crate) enum StoryCommand {
         )]
         sprint: String,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -416,7 +422,7 @@ pub(crate) enum StoryCommand {
         #[arg(help = "Story id to delete, for example US-F1-053.")]
         id: String,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -455,7 +461,7 @@ pub(crate) enum StoryCommand {
         #[arg(long, num_args = 0..=1, value_name = "PATH", help = "Update frontmatter task_file. Omit VALUE to prompt with the current value.")]
         task_file: Option<Option<String>>,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
 }
@@ -469,7 +475,7 @@ pub(crate) enum TaskCommand {
         #[arg(help = "Story id whose tasks should be shown, for example US-F1-053.")]
         story_id: String,
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -495,7 +501,7 @@ pub(crate) enum TaskCommand {
         #[arg(long, help = "Task description to write in the task log.")]
         description: String,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -528,7 +534,7 @@ pub(crate) enum TaskCommand {
         )]
         description: Option<String>,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -540,7 +546,7 @@ pub(crate) enum TaskCommand {
         #[arg(help = "Task id to delete, for example TASK-US-F1-053-001.")]
         task_id: String,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
 }
@@ -652,11 +658,18 @@ pub(crate) enum OutputFormat {
 #[derive(Subcommand)]
 pub(crate) enum ConfigCommand {
     #[command(
+        about = "Manage the user-level default backlog repository. Effect: reads or writes the user kanban config file; no backlog files are modified."
+    )]
+    Global {
+        #[command(subcommand)]
+        command: GlobalConfigCommand,
+    },
+    #[command(
         about = "Show effective kanban configuration. Effect: read-only inspection of `.kanban/*.json`. Side effects: none."
     )]
     Show {
         #[arg(help = "Repository path to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -666,7 +679,7 @@ pub(crate) enum ConfigCommand {
         #[arg(help = "Configuration key, for example paths.backlog or theme.color_mode.")]
         key: String,
         #[arg(help = "Repository path to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -680,9 +693,28 @@ pub(crate) enum ConfigCommand {
         )]
         value: String,
         #[arg(help = "Repository path to update. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum GlobalConfigCommand {
+    #[command(
+        about = "Show the configured default backlog repository. Effect: read-only. Side effects: none."
+    )]
+    Show,
+    #[command(
+        about = "Set the default backlog repository for commands run outside a local kanban repository. Effect: writes the user kanban config file."
+    )]
+    SetRoot {
+        #[arg(help = "Initialized Git repository containing .kanban/settings.json.")]
+        repo_root: PathBuf,
+    },
+    #[command(
+        about = "Remove the configured default backlog repository. Effect: writes the user kanban config file."
+    )]
+    ClearRoot,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -699,7 +731,7 @@ pub(crate) enum FeaturesCommand {
     )]
     List {
         #[arg(help = "Repository path to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -709,7 +741,7 @@ pub(crate) enum FeaturesCommand {
         #[arg(help = "Feature to enable: sprints, epics, or phases.")]
         feature: FeatureName,
         #[arg(help = "Repository path to update. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -719,7 +751,7 @@ pub(crate) enum FeaturesCommand {
         #[arg(help = "Feature to disable: sprints, epics, or phases.")]
         feature: FeatureName,
         #[arg(help = "Repository path to update. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
 }
@@ -731,7 +763,7 @@ pub(crate) enum DoctorCommand {
     )]
     Show {
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -746,7 +778,7 @@ pub(crate) enum DoctorCommand {
         )]
         non_interactive: bool,
         #[arg(help = "Repository root to update. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
 }
@@ -781,7 +813,7 @@ pub(crate) enum WebCommand {
         #[arg(long, help = "Build `web/` before starting in production mode.")]
         build: bool,
         #[arg(help = "Repository root to serve. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -791,7 +823,7 @@ pub(crate) enum WebCommand {
         #[arg(
             help = "Repository root whose web UI should stop. Defaults to the current directory."
         )]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -811,7 +843,7 @@ pub(crate) enum WebCommand {
         #[arg(long, help = "Build `web/` before starting in production mode.")]
         build: bool,
         #[arg(help = "Repository root to serve. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -819,7 +851,7 @@ pub(crate) enum WebCommand {
     )]
     Status {
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -831,7 +863,7 @@ pub(crate) enum WebCommand {
         #[arg(short, long, help = "Follow appended log output until interrupted.")]
         follow: bool,
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
 }
@@ -844,7 +876,7 @@ pub(crate) enum ReportCommand {
     )]
     Wbs {
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -852,7 +884,7 @@ pub(crate) enum ReportCommand {
     )]
     Forecast {
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
 }
@@ -989,7 +1021,7 @@ pub(crate) enum Command {
     )]
     Validate {
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -1024,7 +1056,7 @@ pub(crate) enum Command {
         #[arg(help = "Kind of IDs to list: sprints, stories, stories-with-titles, or epics.")]
         kind: ListIdsKind,
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
     #[command(
@@ -1035,7 +1067,7 @@ pub(crate) enum Command {
         #[arg(help = "Story id whose task IDs should be listed, for example US-F1-053.")]
         story_id: String,
         #[arg(help = "Repository root to inspect. Defaults to the current directory.")]
-        #[arg(default_value = ".")]
+        #[arg(default_value = "__kanban_default_root__")]
         repo_root: PathBuf,
     },
 }
@@ -1050,6 +1082,7 @@ pub(crate) fn command_repo_root(command: &Command) -> Option<&PathBuf> {
             ConfigCommand::Show { repo_root }
             | ConfigCommand::Get { repo_root, .. }
             | ConfigCommand::Set { repo_root, .. } => Some(repo_root),
+            ConfigCommand::Global { .. } => None,
         },
         Command::Sprint { command } => match command {
             SprintCommand::Current { repo_root }
@@ -1170,7 +1203,7 @@ mod tests {
             } => {
                 assert_eq!(name, None);
                 assert!(!short);
-                assert_eq!(repo_root, PathBuf::from("."));
+                assert_eq!(repo_root, PathBuf::from("__kanban_default_root__"));
             }
             _ => panic!("unexpected command"),
         }
@@ -1191,7 +1224,7 @@ mod tests {
             } => {
                 assert_eq!(name.as_deref(), Some("S001.foundation"));
                 assert!(!short);
-                assert_eq!(repo_root, PathBuf::from("."));
+                assert_eq!(repo_root, PathBuf::from("__kanban_default_root__"));
             }
             _ => panic!("unexpected command"),
         }
@@ -1236,7 +1269,7 @@ mod tests {
                 command: EpicCommand::Show { id, repo_root },
             } => {
                 assert_eq!(id, "EP-F1-06");
-                assert_eq!(repo_root, PathBuf::from("."));
+                assert_eq!(repo_root, PathBuf::from("__kanban_default_root__"));
             }
             _ => panic!("unexpected command"),
         }
@@ -1267,7 +1300,7 @@ mod tests {
                 assert_eq!(planned_end, None);
                 assert_eq!(work_started, None);
                 assert_eq!(work_done, None);
-                assert_eq!(repo_root, PathBuf::from("."));
+                assert_eq!(repo_root, PathBuf::from("__kanban_default_root__"));
             }
             _ => panic!("unexpected command"),
         }
@@ -1353,7 +1386,7 @@ mod tests {
                 command: EpicCommand::Update { id, repo_root, .. },
             } => {
                 assert_eq!(id, "EP-F1-02");
-                assert_eq!(repo_root, PathBuf::from("."));
+                assert_eq!(repo_root, PathBuf::from("__kanban_default_root__"));
             }
             _ => panic!("unexpected command"),
         }
@@ -1389,7 +1422,7 @@ mod tests {
                 assert_eq!(story_points, Some(Some("5".to_string())));
                 assert_eq!(priority, None);
                 assert_eq!(status, Some(Some("ready".to_string())));
-                assert_eq!(repo_root, PathBuf::from("."));
+                assert_eq!(repo_root, PathBuf::from("__kanban_default_root__"));
             }
             _ => panic!("unexpected command"),
         }
@@ -1434,7 +1467,7 @@ mod tests {
                 assert_eq!(status, "draft");
                 assert_eq!(sprint, "~");
                 assert_eq!(story_points, "M");
-                assert_eq!(repo_root, PathBuf::from("."));
+                assert_eq!(repo_root, PathBuf::from("__kanban_default_root__"));
             }
             _ => panic!("unexpected command"),
         }
@@ -1469,7 +1502,7 @@ mod tests {
         match args.command {
             Command::Doctor {
                 command: DoctorCommand::Show { repo_root },
-            } => assert_eq!(repo_root, PathBuf::from(".")),
+            } => assert_eq!(repo_root, PathBuf::from("__kanban_default_root__")),
             _ => panic!("unexpected command"),
         }
     }
@@ -1589,7 +1622,7 @@ mod tests {
             } => {
                 assert_eq!(target.as_deref(), Some("current"));
                 assert!(non_interactive);
-                assert_eq!(repo_root, PathBuf::from("."));
+                assert_eq!(repo_root, PathBuf::from("__kanban_default_root__"));
             }
             _ => panic!("unexpected command"),
         }
@@ -1608,7 +1641,7 @@ mod tests {
                     },
             } => {
                 assert_eq!(story_id, "US-F1-057");
-                assert_eq!(repo_root, PathBuf::from("."));
+                assert_eq!(repo_root, PathBuf::from("__kanban_default_root__"));
             }
             _ => panic!("unexpected command"),
         }
@@ -1636,7 +1669,7 @@ mod tests {
             } => {
                 assert_eq!(story_id, "US-F1-057");
                 assert_eq!(task_id, "TASK-US-F1-057-001");
-                assert_eq!(repo_root, PathBuf::from("."));
+                assert_eq!(repo_root, PathBuf::from("__kanban_default_root__"));
             }
             _ => panic!("unexpected command"),
         }
@@ -1685,7 +1718,7 @@ mod tests {
                 assert!(!open);
                 assert!(!dev);
                 assert!(build);
-                assert_eq!(repo_root, PathBuf::from("."));
+                assert_eq!(repo_root, PathBuf::from("__kanban_default_root__"));
             }
             _ => panic!("unexpected command"),
         }
