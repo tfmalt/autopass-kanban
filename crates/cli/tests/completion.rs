@@ -65,6 +65,28 @@ fn powershell_completion_covers_current_command_tree() {
 }
 
 #[test]
+fn completions_include_global_repository_configuration_commands() {
+    for shell in ["bash", "zsh", "powershell"] {
+        let output = kanban(&["completion", shell]);
+
+        assert!(output.status.success(), "{shell} completion should succeed");
+        let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+        assert!(
+            stdout.contains("global"),
+            "{shell} should complete config global"
+        );
+        assert!(
+            stdout.contains("set-root"),
+            "{shell} should complete config global set-root"
+        );
+        assert!(
+            stdout.contains("clear-root"),
+            "{shell} should complete config global clear-root"
+        );
+    }
+}
+
+#[test]
 fn zsh_completion_includes_web_subcommands_and_flags() {
     let output = kanban(&["completion", "zsh"]);
 

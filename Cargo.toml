@@ -9,7 +9,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT"
-version = "26.8.2603"
+version = "26.8.2604"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
