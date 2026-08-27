@@ -3,13 +3,14 @@ id: US-033
 type: user-story
 status: done
 epic: EP-003
-sprint: ~
+sprint: S001.rolling-thunder
 assignee: Thomas Malt <thomas.malt@vegvesen.no>
 story_points: 2
 work_started: 
 work_done: 2026-06-25T09:13:56+0200
 created: 2026-06-24T08:55:41+0200
-updated: 2026-06-25T09:13:56+0200
+updated: 2026-08-27T10:06:06+0200
+activated: 2026-08-27T10:06:06+0200
 ---
 
 # User Story: Avatar endpoint nosniff and image-only MIME
