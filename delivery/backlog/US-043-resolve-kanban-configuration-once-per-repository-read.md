@@ -3,14 +3,15 @@ id: US-043
 type: user-story
 status: done
 epic: EP-004
-sprint: ~
+sprint: S001.rolling-thunder
 assignee: Thomas Malt <thomas.malt@vegvesen.no>
 story_points: 8
 priority: 20
 work_started: 2026-08-04T10:00:13+0200
 work_done: 2026-08-04T10:00:13+0200
 created: 2026-08-04T10:00:13+0200
-updated: 2026-08-04T10:00:13+0200
+updated: 2026-08-27T10:06:07+0200
+activated: 2026-08-27T10:06:07+0200
 ---
 
 # User Story: Resolve kanban configuration once per repository read

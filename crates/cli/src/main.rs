@@ -24,7 +24,7 @@ use crate::json_out::{emit_json_git_requirement_error, render_json};
 use crate::outcome::print_human_outcome;
 use crate::self_manage::latest_version_if_newer;
 use crate::theme::Theme;
-use kanban_core::ColorMode;
+use kanban_core::{ColorMode, DEFAULT_REPO_ROOT_MARKER, effective_repo_root};
 
 pub(crate) fn render_styled_output(styled: clap::builder::StyledStr, color: bool) -> String {
     if color {
@@ -58,13 +58,30 @@ pub(crate) fn render_no_args_help_output(theme: &Theme) -> Result<String> {
 }
 
 pub(crate) fn command_requires_git_repository(command: &Command) -> bool {
-    !matches!(command, Command::Upgrade { .. } | Command::Uninstall { .. })
+    !matches!(
+        command,
+        Command::Upgrade { .. }
+            | Command::Uninstall { .. }
+            | Command::Completion { .. }
+            | Command::Config {
+                command: crate::cli::ConfigCommand::Global { .. }
+            }
+    )
 }
 
 pub(crate) fn command_git_requirement_path(command: &Command) -> &Path {
     command_repo_root(command)
         .map(PathBuf::as_path)
         .unwrap_or_else(|| Path::new("."))
+}
+
+fn effective_command_git_requirement_path(command: &Command) -> Result<PathBuf> {
+    let path = command_git_requirement_path(command);
+    if path == Path::new(DEFAULT_REPO_ROOT_MARKER) {
+        effective_repo_root()
+    } else {
+        Ok(path.to_path_buf())
+    }
 }
 
 pub(crate) fn git_repository_requirement_message(path: &Path) -> String {
@@ -96,11 +113,14 @@ pub(crate) fn command_git_requirement_error(command: &Command) -> Option<String>
         return None;
     }
 
-    let path = command_git_requirement_path(command);
-    if is_git_repository(path) {
+    let path = match effective_command_git_requirement_path(command) {
+        Ok(path) => path,
+        Err(error) => return Some(error.to_string()),
+    };
+    if is_git_repository(&path) {
         None
     } else {
-        Some(git_repository_requirement_message(path))
+        Some(git_repository_requirement_message(&path))
     }
 }
 

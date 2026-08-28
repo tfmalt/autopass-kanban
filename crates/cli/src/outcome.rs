@@ -2,10 +2,11 @@ use std::path::PathBuf;
 
 use kanban_core::{
     CompletionDto, ConfigInitResult, ConfigSetResult, CreateSprintResult, CreateStoryResult,
-    DeleteStoryResult, DoctorFinding, Epic, EpicDetails, EpicUpdateResult, KanbanErrorBody,
-    ListIdItemDto, MoveStoryResult, PhaseOverview, PlanStoryResult, ReportForecastDto,
-    ReportWbsDto, RolloverResult, SprintOverview, SprintUpdateResult, Story, StoryDetails,
-    StoryOverview, StoryUpdateResult, TaskListResult, TaskMutationResult, ValidationReport,
+    DeleteStoryResult, DoctorFinding, Epic, EpicDetails, EpicUpdateResult, GlobalConfigStatus,
+    KanbanErrorBody, ListIdItemDto, MoveStoryResult, PhaseOverview, PlanStoryResult,
+    ReportForecastDto, ReportWbsDto, RolloverResult, SprintOverview, SprintUpdateResult, Story,
+    StoryDetails, StoryOverview, StoryUpdateResult, TaskListResult, TaskMutationResult,
+    ValidationReport,
 };
 
 use crate::layout::OutputLayout;
@@ -32,6 +33,7 @@ pub(crate) enum CommandOutcome {
         value: String,
     },
     ConfigSet(ConfigSetResult),
+    GlobalConfig(GlobalConfigStatus),
     FeaturesList {
         phases: bool,
         sprints: bool,
@@ -140,6 +142,7 @@ impl CommandOutcome {
             CommandOutcome::ConfigShow(_) => "config.show",
             CommandOutcome::ConfigGet { .. } => "config.get",
             CommandOutcome::ConfigSet(_) => "config.set",
+            CommandOutcome::GlobalConfig(_) => "config.global",
             CommandOutcome::FeaturesList { .. } => "features.list",
             CommandOutcome::FeatureToggle { action, .. } => match action {
                 FeatureToggleAction::Enable => "features.enable",
@@ -221,6 +224,21 @@ pub(crate) fn print_human_outcome(theme: &Theme, outcome: CommandOutcome) {
                 theme.info_label(),
                 theme.path(result.file_path.display())
             );
+        }
+        CommandOutcome::GlobalConfig(status) => {
+            println!(
+                "{} global config: {}",
+                theme.info_label(),
+                theme.path(status.file_path.display())
+            );
+            match status.default_repo_root {
+                Some(root) => println!(
+                    "{} default repo root: {}",
+                    theme.ok_label(),
+                    theme.path(root.display())
+                ),
+                None => println!("{} default repo root: not configured", theme.info_label()),
+            }
         }
         CommandOutcome::FeaturesList {
             phases,

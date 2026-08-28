@@ -217,6 +217,7 @@ deduplication work.
 | US-039   | Delete dead inject_bash_story_update completion code                                       | simple     | 1      |
 | US-040   | Use from_utf8_lossy in completion generation                                               | simple     | 1      |
 | US-041   | Consolidate relative_path and slugify variants                                             | low        | 3      |
+| US-F1-001 | Configure a default backlog repository for global kanban use                              | medium     | 5      |
 
 ---
 

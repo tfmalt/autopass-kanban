@@ -3,13 +3,14 @@ id: US-017
 type: user-story
 status: done
 epic: EP-003
-sprint: ~
+sprint: S001.rolling-thunder
 assignee: Thomas Malt <thomas.malt@vegvesen.no>
 story_points: 2
 work_started: 2026-06-24T18:07:26+0200
 work_done: 2026-06-25T09:08:45+0200
 created: 2026-06-24T08:55:41+0200
-updated: 2026-06-25T09:08:45+0200
+updated: 2026-08-27T10:06:06+0200
+activated: 2026-08-27T10:06:06+0200
 ---
 
 # User Story: Validate sprint name segment before filesystem join

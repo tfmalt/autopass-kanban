@@ -307,12 +307,27 @@ pub struct ConfigSetResult {
 }
 
 pub fn resolve_repo_root(path: impl AsRef<Path>) -> Result<PathBuf> {
-    let candidate = fs::canonicalize(path.as_ref())
-        .with_context(|| format!("resolve repository path {}", path.as_ref().display()))?;
+    if path.as_ref() == Path::new(crate::user_config::DEFAULT_REPO_ROOT_MARKER) {
+        let root = crate::user_config::effective_repo_root()?;
+        if root != Path::new(".") {
+            return Ok(root);
+        }
+    }
+    let path = path.as_ref().to_path_buf();
+    let candidate = fs::canonicalize(&path)
+        .with_context(|| format!("resolve repository path {}", path.display()))?;
     if let Some(root) = git_toplevel(&candidate) {
         return Ok(root);
     }
     Ok(candidate)
+}
+
+/// Resolve a path to its canonical Git worktree top-level directory.
+pub fn require_git_repo_root(path: impl AsRef<Path>) -> Result<PathBuf> {
+    let candidate = fs::canonicalize(path.as_ref())
+        .with_context(|| format!("resolve repository path {}", path.as_ref().display()))?;
+    git_toplevel(&candidate)
+        .with_context(|| format!("{} is not a git repository", path.as_ref().display()))
 }
 
 pub fn init_config(repo_root: impl AsRef<Path>) -> Result<ConfigInitResult> {
@@ -357,6 +372,12 @@ pub fn init_config_with_features(
 }
 
 pub fn load_kanban_config(repo_root: impl AsRef<Path>) -> Result<KanbanConfig> {
+    let requested_root = repo_root.as_ref();
+    let repo_root = if requested_root == Path::new(".") {
+        crate::user_config::effective_repo_root()?
+    } else {
+        requested_root.to_path_buf()
+    };
     let repo_root = resolve_repo_root(repo_root)?;
     load_kanban_config_from_root(&repo_root)
 }
@@ -406,6 +427,12 @@ pub fn set_config_value(
     key: &str,
     value: &str,
 ) -> Result<ConfigSetResult> {
+    let requested_root = repo_root.as_ref();
+    let repo_root = if requested_root == Path::new(".") {
+        crate::user_config::effective_repo_root()?
+    } else {
+        requested_root.to_path_buf()
+    };
     let repo_root = resolve_repo_root(repo_root)?;
     let config_dir = repo_root.join(CONFIG_DIR_NAME);
     if !config_dir.is_dir() {

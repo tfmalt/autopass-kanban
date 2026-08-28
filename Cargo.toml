@@ -8,8 +8,8 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-license = "UNLICENSED"
-version = "26.8.2504"
+license = "MIT"
+version = "26.8.2701"
 
 [workspace.dependencies]
 anyhow = "1.0.100"

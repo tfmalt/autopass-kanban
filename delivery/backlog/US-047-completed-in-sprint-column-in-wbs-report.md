@@ -3,13 +3,14 @@ id: US-047
 type: user-story
 status: done
 epic: EP-005
-sprint: ~
+sprint: S001.rolling-thunder
 assignee: Thomas Malt <thomas.malt@vegvesen.no>
 story_points: 5
 work_started: 2026-08-04T13:50:22+0200
 work_done: 2026-08-04T13:58:18+0200
 created: 2026-08-04T12:00:00+0200
-updated: 2026-08-04T13:58:18+0200
+updated: 2026-08-27T10:06:07+0200
+activated: 2026-08-27T10:06:07+0200
 ---
 
 # User Story: Add completed-in-sprint column to WBS Excel report

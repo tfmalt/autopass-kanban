@@ -3,13 +3,14 @@ id: US-023
 type: user-story
 status: done
 epic: EP-003
-sprint: ~
+sprint: S001.rolling-thunder
 assignee: Thomas Malt <thomas.malt@vegvesen.no>
 story_points: 5
 work_started: 
 work_done: 2026-06-24T17:36:11+0200
 created: 2026-06-24T08:55:41+0200
-updated: 2026-06-24T17:36:11+0200
+updated: 2026-08-27T10:06:06+0200
+activated: 2026-08-27T10:06:06+0200
 ---
 
 # User Story: Move blocking I/O off the web-server async runtime

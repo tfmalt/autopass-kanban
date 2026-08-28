@@ -3,13 +3,14 @@ id: US-001
 type: user-story
 status: done
 epic: EP-001
-sprint: ~
+sprint: S001.rolling-thunder
 assignee: Thomas Malt <thomas.malt@vegvesen.no>
 story_points: 8
 work_started: 2026-06-21T18:01:31+0200
 work_done: 2026-06-21T21:13:37+0200
 created: 2026-06-21T16:48:56+0200
-updated: 2026-06-21T21:13:37+0200
+updated: 2026-08-27T10:06:05+0200
+activated: 2026-08-27T10:06:05+0200
 ---
 
 # User Story: Local install of the kanban binary with PATH and completion bootstrap
