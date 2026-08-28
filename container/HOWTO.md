@@ -149,27 +149,6 @@ host shell
 
 ---
 
-## Architecture in brief
-
-```
-~/.bashrc PATH entry
-  └─ /git/autopass-kanban/container/kanban   (wrapper script)
-       └─ docker compose exec aup-kanban-1 kanban  (binary inside container)
-            └─ /workspace  ←──── volume mount ────  /git/ip-2.0
-```
-
-| File | Purpose |
-|---|---|
-| `container/Dockerfile.kanban` | Multi-stage build: Rust builder → `debian:bookworm-slim` runtime |
-| `container/docker-compose.kanban.yml` | Compose service; sets `restart: always`, user UID/GID passthrough, volume mount |
-| `container/kanban` | Wrapper script; starts container if needed, execs `kanban` inside it |
-| `container/kb` | Thin alias — delegates to `kanban "$@"` |
-| `container/docker-compose.up.sh` | Build + start helper; drops into container shell |
-| `container/docker-compose.bash.sh` | Opens a shell in the already-running container |
-| `bin/kanban` | **Original local runner** — runs the local debug binary or `cargo run`; used by team members not using Docker |
-
----
-
 ## Troubleshooting
 
 ### `docker: command not found`
@@ -181,28 +160,28 @@ Install Docker Desktop (macOS/Windows) or Docker Engine (Linux). See [docs.docke
 Check that the container mounts the live repo checkout:
 
 ```bash
-docker inspect aup-kanban-1 | grep -A3 Mounts
+docker inspect aup-kanban-web-1 | grep -A3 Mounts
 # Source should be /git/ip-2.0 unless KANBAN_REPO_PATH overrides it
 ```
 
-### Container exits immediately
-
-The image uses `ENTRYPOINT ["sleep"] CMD ["infinity"]`. If the container is not running:
+### Container is not running
 
 ```bash
-docker compose -f /git/autopass-kanban/container/docker-compose.kanban.yml up -d
-docker ps --filter name=aup-kanban-1
+cd /git/autopass-kanban
+docker compose up -d aup-kanban-web
+docker ps --filter name=aup-kanban-web-1
 ```
 
 ### Permission errors on backlog files
 
-**Most common cause:** The volume mount (`/workspace`) has incompatible ownership or the container was started with a different UID/GID.
+**Most common cause:** The volume mount (`/repo`) has incompatible ownership, or the container was started with a different UID/GID than the one that owns the checkout.
 
-**Automatic fix:** The container's entrypoint script automatically corrects `/workspace` ownership to match the running user when the container starts. **No manual action required** — just ensure the container is fresh:
+**Fix:** Restart the container so `KANBAN_UID`/`KANBAN_GID` are recomputed from your current user:
 
 ```bash
-docker compose -f /git/autopass-kanban/container/docker-compose.kanban.yml down
-docker compose -f /git/autopass-kanban/container/docker-compose.kanban.yml up -d aup-kanban
+cd /git/autopass-kanban
+docker compose down
+./docker-compose.up.sh
 ```
 
 **Manual fix (if needed):** If the container is still unable to write:
