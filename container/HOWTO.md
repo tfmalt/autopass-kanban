@@ -12,9 +12,9 @@ The `kanban` CLI and web UI run inside a long-lived Docker container. The binary
 | Docker Compose plugin | v2 | `docker compose version` |
 | Bash | 5.x | `bash --version` |
 | Kanban repo cloned at | `/git/autopass-kanban` | `ls /git/autopass-kanban/Cargo.toml` |
-| AutoPASS IP 2.0 repo cloned at | `/git/ip-2.0` | `ls /git/ip-2.0/.kanban/settings.json` |
+| AutoPASS IP 2.0 repo cloned at | `/git/ap-ip-docs` | `ls /git/ap-ip-docs/.kanban/settings.json` |
 
-> **Default project path:** the compose file mounts the sibling checkout `../ip-2.0` by default. Set `KANBAN_REPO_PATH=/path/to/project` to use another markdown backlog repository.
+> **Default project path:** the compose file mounts the sibling checkout `../ap-ip-docs` by default. Set `KANBAN_REPO_PATH=/path/to/project` to use another markdown backlog repository.
 
 ---
 
@@ -82,7 +82,7 @@ kb sprint sync      # kb is a short alias for kanban
 The wrapper (`container/kanban`) automatically:
 - Starts `aup-kanban-web-1` if it is not running (`docker compose up -d`)
 - Forwards all arguments and flags to the binary inside the container
-- Mounts the project repo (`/git/ip-2.0` by default) as `/repo` inside the container so all backlog file reads/writes go to the real checkout
+- Mounts the project repo (`/git/ap-ip-docs` by default) as `/repo` inside the container so all backlog file reads/writes go to the real checkout
 
 ---
 
@@ -128,13 +128,13 @@ browser :3000
   -> aup-kanban-web-1  (ip2-kanban-web:local)
        -> /usr/local/bin/kanban web serve
           -> embedded Rust web server
-       -> /repo  <- bind mount -> /git/ip-2.0
+       -> /repo  <- bind mount -> /git/ap-ip-docs
 
 host shell
   -> container/kanban  (wrapper)
        -> docker compose exec aup-kanban-web kanban <args>
           -> /usr/local/bin/kanban
-       -> /repo  <- bind mount -> /git/ip-2.0
+       -> /repo  <- bind mount -> /git/ap-ip-docs
 ```
 
 | File | Purpose |
@@ -155,7 +155,7 @@ host shell
 ~/.bashrc PATH entry
   └─ /git/autopass-kanban/container/kanban   (wrapper script)
        └─ docker compose exec aup-kanban-1 kanban  (binary inside container)
-            └─ /workspace  ←──── volume mount ────  /git/ip-2.0
+            └─ /workspace  ←──── volume mount ────  /git/ap-ip-docs
 ```
 
 | File | Purpose |
@@ -182,7 +182,7 @@ Check that the container mounts the live repo checkout:
 
 ```bash
 docker inspect aup-kanban-1 | grep -A3 Mounts
-# Source should be /git/ip-2.0 unless KANBAN_REPO_PATH overrides it
+# Source should be /git/ap-ip-docs unless KANBAN_REPO_PATH overrides it
 ```
 
 ### Container exits immediately
@@ -208,7 +208,7 @@ docker compose -f /git/autopass-kanban/container/docker-compose.kanban.yml up -d
 **Manual fix (if needed):** If the container is still unable to write:
 
 ```bash
-sudo chown -R "$(id -u):$(id -g)" /git/ip-2.0
+sudo chown -R "$(id -u):$(id -g)" /git/ap-ip-docs
 ```
 
 The container passes your UID/GID via `KANBAN_UID`/`KANBAN_GID` environment variables in the wrapper script (`container/kanban`).

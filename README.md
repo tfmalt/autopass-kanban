@@ -201,7 +201,7 @@ require Node.js or npm; it starts the embedded Rust server from the compiled
 For frontend development, run the API server and Vite separately:
 
 ```sh
-cargo run -p kanban-cli -- web serve --repo-root ../ip-2.0 --host 127.0.0.1 --port 3000
+cargo run -p kanban-cli -- web serve --repo-root ../ap-ip-docs --host 127.0.0.1 --port 3000
 npm --prefix web run dev
 ```
 
@@ -216,7 +216,7 @@ Build and run the standalone CLI plus embedded web UI in a container with:
 ./docker-compose.up.sh
 ```
 
-By default the compose file bind-mounts sibling checkout `../ip-2.0` as `/repo`.
+By default the compose file bind-mounts sibling checkout `../ap-ip-docs` as `/repo`.
 Set `KANBAN_REPO_PATH=/path/to/project` to serve a different git-backed kanban
 repository without installing `kanban` on the host.
 

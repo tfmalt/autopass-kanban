@@ -1,4 +1,4 @@
-# kanban-web.ps1 - Manage the kanban web UI for ip-2.0
+# kanban-web.ps1 - Manage the kanban web UI for ap-ip-docs
 #
 # Usage:
 #   kanban-web             # start (opens browser)
@@ -9,7 +9,7 @@
 #   kanban-web log         # show recent web log lines
 #   kanban-web log -Follow # follow log output
 #
-# The repo root (ip-2.0) is baked in. No path argument needed.
+# The repo root (ap-ip-docs) is baked in. No path argument needed.
 
 [CmdletBinding()]
 param(
@@ -31,7 +31,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$RepoRoot = '<PATH TO ..>\ip-2.0'
+$RepoRoot = '<PATH TO ..>\ap-ip-docs'
 $KanbanExe = '<PATH TO ..>\kanban.exe'
 
 function Test-KanbanPrerequisites {

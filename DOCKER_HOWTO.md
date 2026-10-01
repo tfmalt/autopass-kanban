@@ -9,7 +9,7 @@ The kanban web server runs in a long-lived Docker container with the embedded Ru
 | Docker Engine | 24.x | `docker --version` |
 | Docker Compose plugin | v2 | `docker compose version` |
 | Kanban repo cloned at | `/git/autopass-kanban` | `ls /git/autopass-kanban/Cargo.toml` |
-| AutoPASS IP 2.0 repo cloned at | `/git/ip-2.0` | `ls /git/ip-2.0/.kanban/settings.json` |
+| AutoPASS IP 2.0 repo cloned at | `/git/ap-ip-docs` | `ls /git/ap-ip-docs/.kanban/settings.json` |
 
 ## Start the web UI
 
@@ -24,7 +24,7 @@ The script:
 
 1. Builds `ip2-kanban-web:local` from `Dockerfile`.
 2. Starts `aup-kanban-web-1` with `restart: always`.
-3. Mounts `${KANBAN_REPO_PATH:-../ip-2.0}` as `/repo` so reads and writes use the live AutoPASS IP 2.0 checkout.
+3. Mounts `${KANBAN_REPO_PATH:-../ap-ip-docs}` as `/repo` so reads and writes use the live AutoPASS IP 2.0 checkout.
 4. Runs the container with your UID/GID so markdown edits are owned by you.
 
 To use cached layers:
@@ -67,7 +67,7 @@ browser :3000
   -> aup-kanban-web-1
        -> /usr/local/bin/kanban
           -> embedded Rust web server
-        -> /repo  <- bind mount -> /git/ip-2.0
+        -> /repo  <- bind mount -> /git/ap-ip-docs
 ```
 
 | File | Purpose |

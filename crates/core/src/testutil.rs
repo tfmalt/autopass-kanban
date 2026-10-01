@@ -2,7 +2,7 @@ use crate::config::*;
 use crate::prelude::*;
 
 /// Create a temporary repository with a minimal realistic fixture for tests
-/// that previously depended on the external `../ip-2.0` checkout.
+/// that previously depended on the external `../ap-ip-docs` checkout.
 ///
 /// Returns `(TempDir, PathBuf)` — keep the `TempDir` alive so the temp directory
 /// is not deleted before the test finishes.

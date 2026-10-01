@@ -12,7 +12,7 @@ if not exist "%PS_SCRIPT%" (
 
 rem No arguments: preserve the double-click behavior from the original wrapper.
 if "%~1"=="" (
-    start "Kanban Web ip-2.0" powershell.exe -NoExit -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" start -Foreground -NoOpen
+    start "Kanban Web ap-ip-docs" powershell.exe -NoExit -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" start -Foreground -NoOpen
     exit /b 0
 )
 
