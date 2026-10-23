@@ -22,6 +22,7 @@ export function AppShell() {
           <NavLink to="/sprints">Sprints</NavLink>
           <NavLink to="/dashboard">Dashboard</NavLink>
           <NavLink to="/report">Report</NavLink>
+          <NavLink to="/leveransestier">Leveransestier</NavLink>
         </nav>
         <span className="spacer" />
         {!liveReload.connected && (

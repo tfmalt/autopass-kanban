@@ -215,6 +215,22 @@ npm --prefix web run dev
 The Vite app lives in `web/` and proxies `/api` to `http://127.0.0.1:3000` by
 default. Override the proxy target with `KANBAN_WEB_API_ORIGIN` when needed.
 
+### Leveransestier
+
+The `/leveransestier` tab is a read-only, cross-service view of delivery paths
+(also called Happy Paths). It groups live report stories named
+`H1-<sequence> - <service> - <title>`; dot notation such as `H1.08` is also
+accepted. Numeric steps, including suffixes such as `03A`, are shown in order;
+`X` steps are supporting work, not sequential service hops. Paths can contain
+different services and sparse sequences. Sequence is not priority or proof of
+a dependency.
+
+Progress counts stories explicitly marked done, not dropped stories. E2E
+verification is not inferred from story completion. The initial H1 scenario
+text is curated from the existing TR-to-TIF backlog Epic; later paths are
+discovered from titles without inventing scenario descriptions. Custom path
+editing and persisted verification evidence are not implemented in this prototype.
+
 ## Docker
 
 Build and run the standalone CLI plus embedded web UI in a container with:

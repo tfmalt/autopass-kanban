@@ -32,6 +32,11 @@ const ReportView = lazy(async () => {
   return { default: module.ReportView };
 });
 
+const LeveransestierView = lazy(async () => {
+  const module = await import("./views/LeveransestierView.js");
+  return { default: module.LeveransestierView };
+});
+
 /**
  * Server-state freshness policy.
  *
@@ -78,6 +83,7 @@ const router = createBrowserRouter([
       { path: "sprints", element: withSuspense(<SprintsView />) },
       { path: "dashboard", element: withSuspense(<DashboardView />) },
       { path: "report", element: withSuspense(<ReportView />) },
+      { path: "leveransestier", element: withSuspense(<LeveransestierView />) },
     ],
   },
 ]);

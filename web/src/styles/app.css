@@ -13,7 +13,7 @@ html, body, #root { height: 100%; }
 .brand-block { display: flex; flex-direction: column; gap: 1px; white-space: nowrap; }
 .brand { font-weight: 700; }
 .brand-meta { font-size: 10px; color: var(--text-faint); }
-.nav { display: flex; gap: 4px; }
+.nav { display: flex; flex-wrap: wrap; gap: 4px; }
 .nav a { color: var(--text-muted); padding: 5px 11px; border-radius: 7px; text-decoration: none; font-size: 13px; }
 .nav a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .spacer { flex: 1; }
@@ -208,6 +208,47 @@ html, body, #root { height: 100%; }
 .report-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; flex-shrink: 0; }
 .report-legend-label { color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; margin-right: 4px; }
 .report-swatch { border: 1px solid var(--border); border-radius: 6px; font-size: 11px; padding: 3px 9px; cursor: default; }
+
+.leveransestier-view { max-width: 1300px; margin: 0 auto; }
+.leveransestier-heading, .leveransesti-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px 20px; }
+.leveransestier-heading { margin-bottom: 18px; }
+.leveransestier-heading h2, .leveransesti-heading h3 { margin: 0; }
+.leveransestier-heading > span, .leveransesti-source { color: var(--text-muted); font-size: 12px; }
+.leveransesti { background: var(--surface); border-block: 1px solid var(--border); padding: 20px; margin-bottom: 24px; }
+.leveransesti h3 { font-size: 17px; overflow-wrap: anywhere; }
+.leveransesti-summary { display: grid; grid-template-columns: auto minmax(80px, 1fr) auto; align-items: center; gap: 24px; padding: 18px 0; }
+.leveransesti-summary > div { display: flex; flex-direction: column; gap: 3px; }
+.leveransesti-summary span { font-size: 12px; color: var(--text-muted); }
+.leveransesti-summary > div:first-child > strong { font-size: 24px; }
+.leveransesti-summary > div:last-child > strong { color: var(--amber); font-size: 14px; }
+.leveransesti-summary progress { width: 100%; height: 10px; accent-color: var(--green); }
+.leveransesti-boundaries { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 0 0 20px; padding: 14px 0; border-block: 1px solid var(--border); }
+.leveransesti-boundaries dt { color: var(--text-muted); font-size: 12px; margin-bottom: 5px; }
+.leveransesti-boundaries dd { margin: 0; font-size: 13px; line-height: 1.5; }
+.leveransesti-flow { list-style: none; padding: 0; margin: 0; }
+.leveransesti-step { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; align-items: center; gap: 16px; min-height: 80px; border-bottom: 1px solid var(--border); }
+.leveransesti-sequence { display: flex; align-items: center; align-self: stretch; justify-content: center; font-size: 12px; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-bottom: 3px solid var(--surface); }
+.leveransesti-step-body { display: flex; flex-direction: column; gap: 4px; padding: 12px 0; overflow-wrap: anywhere; }
+.leveransesti-step-body strong { font-size: 13px; }
+.leveransesti-step-body > span { font-size: 13px; }
+.leveransesti-step-body small { color: var(--text-muted); font-size: 11px; }
+.leveransesti-status { font-size: 10px; font-weight: 600; color: var(--text-muted); background: var(--surface-2); border-radius: 4px; padding: 4px 7px; }
+.leveransesti-status.leveransesti-state-done { background: var(--green-soft); color: var(--green); }
+.leveransesti-status.leveransesti-state-in-progress, .leveransesti-status.leveransesti-state-ready-for-qa { background: var(--amber-soft); color: var(--text); }
+.leveransesti-status.leveransesti-state-blocked { background: var(--red-soft); color: var(--red); }
+.leveransesti-support { margin-top: 24px; }
+.leveransesti-support h4 { margin: 0 0 10px; font-size: 13px; }
+.leveransesti-support .leveransesti-sequence { color: var(--text-muted); background: var(--surface-2); }
+@media (max-width: 600px) {
+  .leveransestier-view { padding: 12px; }
+  .leveransesti { padding: 12px; }
+  .leveransesti-summary { grid-template-columns: 1fr auto; gap: 14px; }
+  .leveransesti-summary progress { grid-column: 1 / -1; grid-row: 2; }
+  .leveransesti-boundaries { grid-template-columns: 1fr; gap: 12px; }
+  .leveransesti-step { grid-template-columns: 60px minmax(0, 1fr); gap: 0 12px; }
+  .leveransesti-sequence { grid-row: span 2; }
+  .leveransesti-status { grid-column: 2; justify-self: start; margin-bottom: 12px; }
+}
 
 /* On narrow or short windows the viewport lock would crush the panes — fall back to normal page flow. */
 @media (max-width: 1100px), (max-height: 600px) {
