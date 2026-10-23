@@ -10,6 +10,18 @@ fn phase_from_story_id(id: &str) -> String {
     id.split('-').nth(1).unwrap_or("unknown").to_string()
 }
 
+fn story_phase(story: &StoryOverview) -> String {
+    story
+        .relative_path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .find_map(|component| {
+            let number = component.strip_prefix("phase-")?.split('-').next()?;
+            number.parse::<u32>().ok().map(|phase| format!("F{phase}"))
+        })
+        .unwrap_or_else(|| phase_from_story_id(&story.id))
+}
+
 fn normalize_story_status(status: &str) -> String {
     super::slugify_status(status)
 }
@@ -160,7 +172,7 @@ pub struct ReportStoryDto {
 impl ReportStoryDto {
     pub fn from_overview(o: &StoryOverview) -> Self {
         Self {
-            phase: Some(phase_from_story_id(&o.id)),
+            phase: Some(story_phase(o)),
             id: o.id.clone(),
             title: o.title.clone(),
             status: o.status.clone(),
@@ -434,7 +446,7 @@ impl PreparedReport {
         let mut phase_map: std::collections::BTreeMap<String, (usize, i64, i64, i64, i64)> =
             std::collections::BTreeMap::new();
         for story in stories {
-            let phase = phase_from_story_id(&story.id);
+            let phase = story_phase(story);
             let pts = parse_points(&story.story_points).unwrap_or(0);
             let e = phase_map.entry(phase).or_default();
             e.0 += 1;
@@ -856,7 +868,7 @@ fn estimate_sort_key(story: &StoryOverview) -> (u8, String, String, String) {
     };
     (
         status_rank,
-        phase_from_story_id(&story.id),
+        story_phase(story),
         story.epic_id.clone().unwrap_or_default(),
         story.id.clone(),
     )
@@ -865,7 +877,7 @@ fn estimate_sort_key(story: &StoryOverview) -> (u8, String, String, String) {
 fn build_hierarchy(stories: &[StoryOverview]) -> Vec<PhaseGroup<'_>> {
     let mut phase_map = BTreeMap::<String, BTreeMap<String, EpicGroup<'_>>>::new();
     for story in stories {
-        let phase = phase_from_story_id(&story.id);
+        let phase = story_phase(story);
         let epic_id = story
             .epic_id
             .clone()
@@ -1362,7 +1374,7 @@ fn build_progress(stories: &[StoryOverview]) -> ReportProgressDto {
 fn build_phase_rows(stories: &[StoryOverview]) -> Vec<ReportPhaseRowDto> {
     let mut phases = BTreeMap::<String, (BTreeSet<String>, usize, i64, i64, i64)>::new();
     for story in stories {
-        let phase = phase_from_story_id(&story.id);
+        let phase = story_phase(story);
         let entry = phases.entry(phase).or_default();
         entry
             .0
@@ -1566,6 +1578,54 @@ mod tests {
             planned_end: None,
             relative_path: PathBuf::from(format!("delivery/backlog/{id}.md")),
         }
+    }
+
+    #[test]
+    fn current_phase_follows_canonical_folder_not_historical_story_id() {
+        let mut first = story("US-F2-003", "Pricing", "draft", "8", None);
+        first.epic_id = Some("EP-F4-01".to_string());
+        first.relative_path =
+            PathBuf::from("delivery/backlog/phase-4-finalization/01.pricing/US-F2-003.md");
+        let mut second = first.clone();
+        second.id = "US-F3-003".to_string();
+        second.relative_path =
+            PathBuf::from("delivery/backlog/phase-4-finalization/01.pricing/US-F3-003.md");
+        assert_eq!(story_phase(&first), "F4");
+        assert_eq!(
+            ReportStoryDto::from_overview(&first).phase.as_deref(),
+            Some("F4")
+        );
+        let stories = vec![first, second];
+        let hierarchy = build_hierarchy(&stories);
+        assert_eq!(hierarchy.len(), 1);
+        assert_eq!(hierarchy[0].id, "F4");
+        assert_eq!(hierarchy[0].epics.len(), 1);
+        assert_eq!(hierarchy[0].epics[0].stories.len(), 2);
+        let report = ReportDashboardDto::build_with_context(
+            &stories,
+            &[],
+            None,
+            "2026-10-23T12:00:00+02:00".to_string(),
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap(),
+            &WorkingCalendar::empty(),
+        );
+        assert_eq!(report.phase_rows.len(), 1);
+        assert_eq!(report.phase_rows[0].phase, "F4");
+        assert_eq!(
+            report
+                .wbs_rows
+                .iter()
+                .filter(|row| row.kind == "epic")
+                .count(),
+            1
+        );
+        assert!(
+            report
+                .wbs_rows
+                .iter()
+                .all(|row| row.milestone == "MP4 - Complete Functionality")
+        );
+        assert_eq!(stories[0].id, "US-F2-003");
     }
 
     #[test]

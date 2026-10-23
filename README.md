@@ -22,6 +22,12 @@ all human-readable markdown documents with structured YAML frontmatter — there
 is no database, hidden state store, or external service. The git history *is*
 the audit trail, and the files remain fully editable by hand.
 
+For a phase-folder backlog, reports use each story's current canonical
+`phase-N-*` directory for phase, milestone and WBS grouping. Stable IDs keep
+their historical prefix after relocation; an `US-F2-*` story in a Phase 4
+Epic is reported in Phase 4, not as a second copy of that Epic in Phase 2.
+Flat layouts retain their existing ID-derived grouping.
+
 On top of those files the tool provides two interfaces:
 
 - a `kanban` command-line interface (with a documented `kb` alias) for
@@ -238,10 +244,12 @@ Implemented commands:
 - `kanban sprint rollover <name> [repo_root]`
 - `kanban sprint sync [repo_root]`
 - `kanban phase show <phase> [repo_root]`
+- `kanban epic create --title <title> --owner <owner> --milestone <code> [--id <epic_id>] [--phase <number>] [repo_root]`
 - `kanban story create --title <title> --epic <epic_id> [--id <story_id>] [--status <status>] [--sprint <sprint>] [--story-points <points>] [--assignee "Name <email>"] [--priority <rank>] [--task-file <path>] [repo_root]`
 - `kanban story show <id> [repo_root]`
 - `kanban story list [--current|--all|--next|--sprint <id>] [repo_root]`
 - `kanban story move <id> <status> [-a|--assignee "Name <email>"] [repo_root]`
+- `kanban story relocate <id> --epic <destination_epic_id> [repo_root]`
 - `kanban story plan <id> --sprint <sprint> [repo_root]`
 - `kanban task add <story_id> --title <title> --description <text> [--status <status>] [--tags <a,b>] [repo_root]`
 - `kanban task update <story_id> <task_id> [--title <title>] [--description <text>] [--status <status>] [--tags <a,b>] [repo_root]`
@@ -252,6 +260,30 @@ Implemented commands:
 - `kanban validate [repo_root]`
 - `kanban doctor [repo_root]`
 - `kanban doctor help`
+
+### Structural operations
+
+`epic create` allocates a unique ID unless `--id` is supplied. With phases
+enabled, select an existing numeric phase (or use a phased ID such as
+`EP-F4-08`); the command creates `08.<slug>/EP-F4-08-<slug>.md` there. With
+phases disabled it creates `EP-008-<slug>.md` directly in the backlog. It reads
+`templates/TEMPLATE-epic-en.md` at the repository root or beneath the configured
+backlog, writes draft status and local timestamps, and rejects unsafe/duplicate
+input before writing.
+
+`story relocate` changes the parent and physical location together. It preserves
+stable IDs, scope, lifecycle/sprint fields and task evidence, repairs parent
+child lists and local Markdown links (including sprint links), and rebases
+outgoing links. A repeated move to the current correct location is a no-op.
+Destination collisions, unsafe task paths, invalid parent YAML and concurrent
+edits fail before writes. Write errors trigger rollback; rollback failures are
+reported explicitly. This is not a crash-atomic multi-file transaction.
+
+Literal paths in code/prose, external URLs, generated files and unsupported
+escaped destinations are not silently rewritten. Existing broken links are not
+repaired opportunistically. Both commands use the repository write lock and
+support `--format json` with relative result paths. `story move` remains a
+status transition; `story update --epic` is metadata-only, not relocation.
 
 ## Repository configuration
 

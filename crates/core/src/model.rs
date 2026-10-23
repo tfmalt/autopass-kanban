@@ -319,6 +319,32 @@ pub struct SprintUpdateResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateEpicInput {
+    pub id: Option<String>,
+    pub title: String,
+    pub phase: Option<u32>,
+    pub owner: String,
+    pub milestone: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateEpicResult {
+    pub epic_id: String,
+    pub epic_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelocateStoryResult {
+    pub story_id: String,
+    pub from_epic: String,
+    pub to_epic: String,
+    pub from_path: PathBuf,
+    pub story_path: PathBuf,
+    pub task_path: Option<PathBuf>,
+    pub changed_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateStoryInput {
     pub id: Option<String>,
     pub title: String,

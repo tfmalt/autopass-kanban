@@ -207,6 +207,32 @@ pub(crate) enum PhaseCommand {
 #[derive(Subcommand)]
 pub(crate) enum EpicCommand {
     #[command(
+        about = "Create an epic from the repository template. Effect: writes a new canonical epic in the configured backlog; phased repositories use an existing phase and a numbered epic folder. Rejects duplicates and unsafe paths."
+    )]
+    Create {
+        #[arg(long, help = "Epic title.")]
+        title: String,
+        #[arg(
+            long,
+            help = "Optional EP-NNN or EP-Fn-NN id; otherwise allocated from the selected scope."
+        )]
+        id: Option<String>,
+        #[arg(
+            long,
+            help = "Existing numeric phase; inferred from a phased id when omitted."
+        )]
+        phase: Option<u32>,
+        #[arg(long, help = "Responsible owner or role.")]
+        owner: String,
+        #[arg(long, help = "Milestone code, for example MP4.")]
+        milestone: String,
+        #[arg(
+            default_value = "__kanban_default_root__",
+            help = "Repository root to update."
+        )]
+        repo_root: PathBuf,
+    },
+    #[command(
         about = "Show one epic. Effect: read-only inspection of the canonical epic file plus child story progress and key sections. Side effects: none."
     )]
     Show {
@@ -244,6 +270,20 @@ pub(crate) enum EpicCommand {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum StoryCommand {
+    #[command(
+        about = "Relocate a story to an epic. Effect: updates its parent and physical location, moves task logs, repairs parent lists and local Markdown references including sprint links. Preserves id, scope and lifecycle metadata; rejects destination collisions before writes."
+    )]
+    Relocate {
+        #[arg(help = "Stable story id to relocate.")]
+        id: String,
+        #[arg(long, help = "Destination epic id.")]
+        epic: String,
+        #[arg(
+            default_value = "__kanban_default_root__",
+            help = "Repository root to update."
+        )]
+        repo_root: PathBuf,
+    },
     #[command(
         about = "Create a story from the user-story template. Effect: writes one canonical story markdown file near its parent epic in the configured backlog path. Side effects: regenerates sprint story table when a non-empty sprint is set."
     )]
@@ -438,7 +478,7 @@ pub(crate) enum StoryCommand {
         story_type: Option<Option<String>>,
         #[arg(long, num_args = 0..=1, value_name = "STATUS", help = "Update frontmatter status. Omit VALUE to prompt with the current value.")]
         status: Option<Option<String>>,
-        #[arg(long, num_args = 0..=1, value_name = "EPIC", help = "Update frontmatter epic. Omit VALUE to prompt with the current value.")]
+        #[arg(long, num_args = 0..=1, value_name = "EPIC", help = "Update parent metadata only; use story relocate for physical relocation and relationship repair. Omit VALUE to prompt.")]
         epic: Option<Option<String>>,
         #[arg(long, num_args = 0..=1, value_name = "SPRINT", help = "Update frontmatter sprint. Omit VALUE to prompt with the current value.")]
         sprint: Option<Option<String>>,
@@ -937,7 +977,7 @@ pub(crate) enum Command {
         command: PhaseCommand,
     },
     #[command(
-        about = "Inspect epics. Effect: read-only inspection of canonical epic files and child story progress. Side effects: none."
+        about = "Create, inspect or update epics. Effects depend on subcommand; create and update write canonical Markdown, while show is read-only."
     )]
     Epic {
         #[command(subcommand)]
@@ -1097,12 +1137,13 @@ pub(crate) fn command_repo_root(command: &Command) -> Option<&PathBuf> {
             PhaseCommand::Show { repo_root, .. } => Some(repo_root),
         },
         Command::Epic { command } => match command {
-            EpicCommand::Show { repo_root, .. } | EpicCommand::Update { repo_root, .. } => {
-                Some(repo_root)
-            }
+            EpicCommand::Create { repo_root, .. }
+            | EpicCommand::Show { repo_root, .. }
+            | EpicCommand::Update { repo_root, .. } => Some(repo_root),
         },
         Command::Story { command } => match command {
             StoryCommand::Create { repo_root, .. }
+            | StoryCommand::Relocate { repo_root, .. }
             | StoryCommand::Show { repo_root, .. }
             | StoryCommand::List { repo_root, .. }
             | StoryCommand::Move { repo_root, .. }

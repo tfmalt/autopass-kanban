@@ -9,7 +9,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT"
-version = "26.8.2701"
+version = "26.10.2302"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
@@ -24,9 +24,12 @@ include_dir = "0.7.4"
 libc = "0.2.186"
 mime_guess = "2.0.5"
 notify = "8.2.0"
+percent-encoding = "2.3"
+pulldown-cmark = "0.13"
 regex = "1.12.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
+serde_yaml_ng = "0.10"
 sha2 = "0.10.9"
 tempfile = "3.23.0"
 tower = { version = "0.5", features = ["util"] }

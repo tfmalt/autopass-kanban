@@ -3,12 +3,59 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::{
-    CreateSprintResult, CreateStoryResult, DeleteStoryResult, EpicUpdateResult, MoveStoryResult,
-    PlanStoryResult, RolloverResult, SprintUpdateResult, StoryUpdateResult, TaskListResult,
-    TaskMutationResult, TaskSummary,
+    CreateEpicResult, CreateSprintResult, CreateStoryResult, DeleteStoryResult, EpicUpdateResult,
+    MoveStoryResult, PlanStoryResult, RelocateStoryResult, RolloverResult, SprintUpdateResult,
+    StoryUpdateResult, TaskListResult, TaskMutationResult, TaskSummary,
 };
 
 use super::{TaskDto, rel_to_root, slugify_status};
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateEpicDto {
+    pub epic_id: String,
+    pub epic_path: String,
+}
+
+impl CreateEpicDto {
+    pub fn from_result(result: &CreateEpicResult, repo_root: &Path) -> Self {
+        Self {
+            epic_id: result.epic_id.clone(),
+            epic_path: rel_to_root(repo_root, &result.epic_path),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RelocateStoryDto {
+    pub story_id: String,
+    pub from_epic: String,
+    pub to_epic: String,
+    pub from_path: String,
+    pub story_path: String,
+    pub task_path: Option<String>,
+    pub changed_paths: Vec<String>,
+}
+
+impl RelocateStoryDto {
+    pub fn from_result(result: &RelocateStoryResult, repo_root: &Path) -> Self {
+        Self {
+            story_id: result.story_id.clone(),
+            from_epic: result.from_epic.clone(),
+            to_epic: result.to_epic.clone(),
+            from_path: rel_to_root(repo_root, &result.from_path),
+            story_path: rel_to_root(repo_root, &result.story_path),
+            task_path: result
+                .task_path
+                .as_deref()
+                .map(|path| rel_to_root(repo_root, path)),
+            changed_paths: result
+                .changed_paths
+                .iter()
+                .map(|path| rel_to_root(repo_root, path))
+                .collect(),
+        }
+    }
+}
 
 /// DTO for `story move` responses.
 #[derive(Debug, Clone, Serialize)]

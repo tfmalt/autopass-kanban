@@ -110,6 +110,123 @@ fn parse_stdout(out: &Output) -> serde_json::Value {
 }
 
 #[test]
+fn structural_commands_create_epic_and_relocate_story_through_json_cli() {
+    let directory = tempdir().unwrap();
+    let root = directory.path();
+    init_backlog_and_sprints(root);
+    let phase = root.join("delivery/backlog/phase-4-finalization");
+    fs::create_dir_all(&phase).unwrap();
+    fs::create_dir_all(root.join("templates")).unwrap();
+    fs::write(
+        root.join("templates/TEMPLATE-epic-en.md"),
+        include_str!("../../../templates/TEMPLATE-epic-en.md"),
+    )
+    .unwrap();
+    fs::write(root.join("delivery/backlog/EP-F2-01-source.md"), "---\nid: EP-F2-01\ntype: epic\nstatus: draft\nphase: 2\n---\n\n# Epic: Source\n\n## Child User Stories\n\n| Story ID | Title | Status | Points |\n| --- | --- | --- | --- |\n| US-F2-003 | Original story | ready | 3 |\n").unwrap();
+    write_story(
+        root,
+        "delivery/backlog/US-F2-003-original.md",
+        "id: US-F2-003\ntype: user-story\nstatus: ready\nepic: EP-F2-01\nsprint: ~\nstory_points: 3\n",
+        "# User Story: Original story\n\n## Acceptance Criteria\n\nNever lose this text.",
+    );
+    let before = fs::read_to_string(root.join("delivery/backlog/US-F2-003-original.md")).unwrap();
+    let create = kanban_in(
+        root,
+        &[
+            "--format",
+            "json",
+            "epic",
+            "create",
+            "--id",
+            "EP-F4-08",
+            "--title",
+            "Agreements",
+            "--owner",
+            "Domain owner",
+            "--milestone",
+            "MP4",
+            ".",
+        ],
+    );
+    assert!(
+        create.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create.stdout)
+    );
+    let created = parse_stdout(&create);
+    assert_eq!(created["kind"], "epic.create");
+    assert_eq!(created["data"]["epic_id"], "EP-F4-08");
+    let relocate = kanban_in(
+        root,
+        &[
+            "--format",
+            "json",
+            "story",
+            "relocate",
+            "US-F2-003",
+            "--epic",
+            "EP-F4-08",
+            ".",
+        ],
+    );
+    assert!(
+        relocate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&relocate.stdout)
+    );
+    let moved = parse_stdout(&relocate);
+    assert_eq!(moved["kind"], "story.relocate");
+    assert_eq!(moved["data"]["from_epic"], "EP-F2-01");
+    assert_eq!(moved["data"]["to_epic"], "EP-F4-08");
+    let target = moved["data"]["story_path"].as_str().unwrap();
+    assert!(target.starts_with("delivery/backlog/phase-4-finalization/08.agreements/"));
+    let after = fs::read_to_string(root.join(target)).unwrap();
+    assert_eq!(before.split("---").nth(2), after.split("---").nth(2));
+    assert!(!root.join("delivery/backlog/US-F2-003-original.md").exists());
+    let again = kanban_in(
+        root,
+        &[
+            "--format",
+            "json",
+            "story",
+            "relocate",
+            "US-F2-003",
+            "--epic",
+            "EP-F4-08",
+            ".",
+        ],
+    );
+    assert!(again.status.success());
+    assert_eq!(
+        parse_stdout(&again)["data"]["changed_paths"],
+        serde_json::json!([])
+    );
+    let duplicate = kanban_in(
+        root,
+        &[
+            "--format",
+            "json",
+            "epic",
+            "create",
+            "--id",
+            "EP-F4-08",
+            "--title",
+            "Other",
+            "--owner",
+            "Owner",
+            "--milestone",
+            "MP4",
+            ".",
+        ],
+    );
+    assert!(!duplicate.status.success());
+    assert_eq!(
+        parse_stdout(&duplicate)["error"]["code"],
+        "invalid_argument"
+    );
+}
+
+#[test]
 fn config_get_emits_ok_envelope() {
     let dir = tempdir().expect("temp dir should be created");
     let repo_root = dir.path().to_string_lossy().into_owned();

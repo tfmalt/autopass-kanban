@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
 use kanban_core::{
-    CompletionDto, ConfigInitResult, ConfigSetResult, CreateSprintResult, CreateStoryResult,
-    DeleteStoryResult, DoctorFinding, Epic, EpicDetails, EpicUpdateResult, GlobalConfigStatus,
-    KanbanErrorBody, ListIdItemDto, MoveStoryResult, PhaseOverview, PlanStoryResult,
-    ReportForecastDto, ReportWbsDto, RolloverResult, SprintOverview, SprintUpdateResult, Story,
-    StoryDetails, StoryOverview, StoryUpdateResult, TaskListResult, TaskMutationResult,
-    ValidationReport,
+    CompletionDto, ConfigInitResult, ConfigSetResult, CreateEpicResult, CreateSprintResult,
+    CreateStoryResult, DeleteStoryResult, DoctorFinding, Epic, EpicDetails, EpicUpdateResult,
+    GlobalConfigStatus, KanbanErrorBody, ListIdItemDto, MoveStoryResult, PhaseOverview,
+    PlanStoryResult, RelocateStoryResult, ReportForecastDto, ReportWbsDto, RolloverResult,
+    SprintOverview, SprintUpdateResult, Story, StoryDetails, StoryOverview, StoryUpdateResult,
+    TaskListResult, TaskMutationResult, ValidationReport,
 };
 
 use crate::layout::OutputLayout;
@@ -67,6 +67,14 @@ pub(crate) enum CommandOutcome {
     },
     SprintRollover(RolloverResult),
     PhaseShow(PhaseOverview),
+    EpicCreate {
+        result: CreateEpicResult,
+        repo_root: PathBuf,
+    },
+    StoryRelocate {
+        result: RelocateStoryResult,
+        repo_root: PathBuf,
+    },
     EpicShow {
         id: String,
         result: Box<Option<(EpicDetails, Epic)>>,
@@ -162,6 +170,8 @@ impl CommandOutcome {
             CommandOutcome::SprintUpdate { .. } => "sprint.update",
             CommandOutcome::SprintRollover(_) => "sprint.rollover",
             CommandOutcome::PhaseShow(_) => "phase.show",
+            CommandOutcome::EpicCreate { .. } => "epic.create",
+            CommandOutcome::StoryRelocate { .. } => "story.relocate",
             CommandOutcome::EpicShow { .. } => "epic.show",
             CommandOutcome::StoryShow { .. } => "story.show",
             CommandOutcome::StoryCreate { .. } => "story.create",
@@ -192,6 +202,33 @@ impl CommandOutcome {
 
 pub(crate) fn print_human_outcome(theme: &Theme, outcome: CommandOutcome) {
     match outcome {
+        CommandOutcome::EpicCreate { result, .. } => {
+            println!("{} created {}", theme.ok_label(), theme.id(&result.epic_id));
+            println!(
+                "{} epic: {}",
+                theme.info_label(),
+                theme.path(result.epic_path.display())
+            );
+        }
+        CommandOutcome::StoryRelocate { result, .. } => {
+            println!(
+                "{} relocated {}: {} -> {}",
+                theme.ok_label(),
+                theme.id(&result.story_id),
+                theme.id(&result.from_epic),
+                theme.id(&result.to_epic)
+            );
+            println!(
+                "{} story: {}",
+                theme.info_label(),
+                theme.path(result.story_path.display())
+            );
+            println!(
+                "{} changed files: {}",
+                theme.info_label(),
+                result.changed_paths.len()
+            );
+        }
         CommandOutcome::Init(result) => {
             println!(
                 "{} initialized config: {}",

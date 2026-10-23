@@ -151,6 +151,177 @@ pub fn update_epic_frontmatter(
     })
 }
 
+pub fn create_epic(
+    repo_root: impl AsRef<Path>,
+    input: &CreateEpicInput,
+) -> Result<CreateEpicResult> {
+    let config = load_kanban_config(repo_root)?;
+    let _lock = RepoLock::acquire(&config.repo_root)?;
+    if !config.features().epics {
+        return Err(KanbanError::feature_disabled("epics").into());
+    }
+    let title = input.title.trim();
+    let slug = slugify_headline(title);
+    if slug.is_empty() || title.contains(['\n', '\r']) {
+        return Err(KanbanError::invalid_argument(
+            "Epic title must be a single non-empty line containing ASCII letters or numbers.",
+        )
+        .into());
+    }
+    for value in [&input.owner, &input.milestone] {
+        if value.trim().is_empty() || value.contains(['\n', '\r']) {
+            return Err(KanbanError::invalid_argument(
+                "Epic owner and milestone must be non-empty single-line values.",
+            )
+            .into());
+        }
+    }
+    let sources = read_epic_sources(&config)?;
+    let id_pattern = Regex::new(r"^EP-(?:F([1-9][0-9]*)-([0-9]{2,})|([0-9]{3,}))$")?;
+    let supplied = input
+        .id
+        .as_deref()
+        .map(|value| value.trim().to_ascii_uppercase());
+    let id_phase = supplied
+        .as_deref()
+        .map(|id| {
+            let captures = id_pattern.captures(id).ok_or_else(|| {
+                KanbanError::invalid_argument("Epic id must be EP-NNN or EP-Fn-NN.")
+            })?;
+            captures
+                .get(1)
+                .map(|value| value.as_str().parse::<u32>())
+                .transpose()
+                .map_err(anyhow::Error::from)
+        })
+        .transpose()?
+        .flatten();
+    if input.phase == Some(0)
+        || input
+            .phase
+            .zip(id_phase)
+            .is_some_and(|(requested, actual)| requested != actual)
+    {
+        return Err(
+            KanbanError::invalid_argument("Epic phase must be positive and match the id.").into(),
+        );
+    }
+    let phase = input.phase.or(id_phase);
+    if config.features().phases && phase.is_none() {
+        return Err(
+            KanbanError::invalid_argument("A phase is required when phases are enabled.").into(),
+        );
+    }
+    let prefix = if config.features().phases {
+        format!("EP-F{}-", phase.unwrap_or_default())
+    } else {
+        "EP-".to_string()
+    };
+    let next_number = sources
+        .iter()
+        .filter_map(|epic| epic.frontmatter.get("id"))
+        .filter_map(|id| id.strip_prefix(&prefix))
+        .filter_map(|value| value.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| KanbanError::invalid_argument("Epic id range exhausted."))?;
+    let id = supplied.unwrap_or_else(|| {
+        if config.features().phases {
+            format!("{prefix}{next_number:02}")
+        } else {
+            format!("{prefix}{next_number:03}")
+        }
+    });
+    if config.features().phases && id_phase.is_none() && input.id.is_some() {
+        return Err(
+            KanbanError::invalid_argument("Phased repositories require an EP-Fn-NN id.").into(),
+        );
+    }
+    if select_epic_source(&sources, &id).is_some() {
+        return Err(KanbanError::invalid_argument(format!("Epic already exists: {id}")).into());
+    }
+    let template_path = [config.repo_root.join("templates/TEMPLATE-epic-en.md"), config.backlog_path().join("templates/TEMPLATE-epic-en.md")]
+        .into_iter().find(|path| path.is_file()).ok_or_else(|| KanbanError::invalid_argument("Epic template TEMPLATE-epic-en.md was not found in templates/ or the backlog templates/ directory."))?;
+    let template = fs::read_to_string(template_path)?;
+    let timestamp = current_timestamp_string();
+    let phase_value = phase.unwrap_or(1).to_string();
+    let markdown = upsert_frontmatter_markdown(
+        &template,
+        &[
+            ("id", Some(id.clone())),
+            ("type", Some("epic".to_string())),
+            ("status", Some("draft".to_string())),
+            ("phase", Some(phase_value.clone())),
+            ("owner", Some(serde_json::to_string(input.owner.trim())?)),
+            (
+                "milestone",
+                Some(serde_json::to_string(input.milestone.trim())?),
+            ),
+            ("created", Some(timestamp.clone())),
+            ("updated", Some(timestamp)),
+        ],
+    )?;
+    let heading = Regex::new(r"(?m)^# (?:Epic:.*|[^\n]+)$")?;
+    let markdown = heading
+        .replacen(&markdown, 1, |_: &regex::Captures<'_>| {
+            format!("# Epic: {title}")
+        })
+        .into_owned();
+    let backlog = config.backlog_path();
+    let directory = if config.features().phases {
+        let marker = format!("phase-{phase_value}");
+        let candidates = fs::read_dir(&backlog)?
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name().is_some_and(|name| {
+                    let name = name.to_string_lossy();
+                    name == marker || name.starts_with(&format!("{marker}-"))
+                })
+            })
+            .collect::<Vec<_>>();
+        if candidates.len() != 1 {
+            return Err(KanbanError::invalid_argument(
+                "The requested phase must resolve to exactly one existing phase directory.",
+            )
+            .into());
+        }
+        let number = id.rsplit('-').next().unwrap_or_default();
+        ensure_path_inside(&backlog, &candidates[0].join(format!("{number}.{slug}")))?
+    } else {
+        ensure_path_inside(&backlog, &backlog)?
+    };
+    if config.features().phases && directory.exists() {
+        return Err(KanbanError::invalid_argument(
+            "The destination epic directory already exists.",
+        )
+        .into());
+    }
+    let new_directory = !directory.exists();
+    if new_directory {
+        fs::create_dir(&directory)?;
+    }
+    let result = (|| {
+        let path = ensure_path_inside(&backlog, &directory.join(format!("{id}-{slug}.md")))?;
+        if path.exists() {
+            return Err(
+                KanbanError::invalid_argument("The destination epic file already exists.").into(),
+            );
+        }
+        atomic_write(&path, &markdown)?;
+        Ok(CreateEpicResult {
+            epic_id: id,
+            epic_path: relative_path(&config.repo_root, &path),
+        })
+    })();
+    if result.is_err() && new_directory {
+        let _ = fs::remove_dir(&directory);
+    }
+    result
+}
+
 fn find_epic_source_with_config(config: &KanbanConfig, epic_id: &str) -> Result<Option<Epic>> {
     let sources = read_epic_sources(config)?;
     Ok(select_epic_source(&sources, epic_id).cloned())
@@ -217,6 +388,102 @@ mod tests {
     use super::*;
     use crate::testutil::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn create_epic_places_unique_id_in_phase_and_preserves_existing_files() {
+        let (_fixture, root) = build_fixture();
+        fs::create_dir_all(root.join("templates")).unwrap();
+        fs::write(root.join("templates/TEMPLATE-epic-en.md"), "---\nid: EP-XXX\ntype: epic\nstatus: draft\n---\n\n# Epic: Placeholder\n\n## Child User Stories\n").unwrap();
+        let input = CreateEpicInput {
+            id: Some("EP-F1-07".into()),
+            title: "Agreements".into(),
+            phase: Some(1),
+            owner: "Domain owner".into(),
+            milestone: "MP1".into(),
+        };
+        let result = create_epic(&root, &input).unwrap();
+        assert_eq!(result.epic_id, "EP-F1-07");
+        assert_eq!(
+            result.epic_path,
+            PathBuf::from(
+                "delivery/backlog/phase-1-scaffolding/07.agreements/EP-F1-07-agreements.md"
+            )
+        );
+        let bytes = fs::read(root.join(&result.epic_path)).unwrap();
+        assert!(create_epic(&root, &input).is_err());
+        assert_eq!(fs::read(root.join(result.epic_path)).unwrap(), bytes);
+    }
+
+    #[test]
+    fn create_epic_supports_flat_layout_and_safe_scalar_metadata() {
+        let (_fixture, root) = build_fixture();
+        let settings = root.join(".kanban/settings.json");
+        let mut config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+        config["paths"]["features"]["phases"] = false.into();
+        fs::write(settings, serde_json::to_string(&config).unwrap()).unwrap();
+        fs::create_dir_all(root.join("templates")).unwrap();
+        fs::write(
+            root.join("templates/TEMPLATE-epic-en.md"),
+            "---\nid: EP-XXX\n---\n\n# Epic: Placeholder\n",
+        )
+        .unwrap();
+        let input = CreateEpicInput {
+            id: None,
+            title: "Flat epic".into(),
+            phase: None,
+            owner: "Team: operations".into(),
+            milestone: "MP2".into(),
+        };
+        let result = create_epic(&root, &input).unwrap();
+        assert_eq!(result.epic_id, "EP-001");
+        assert_eq!(
+            result.epic_path,
+            PathBuf::from("delivery/backlog/EP-001-flat-epic.md")
+        );
+        let text = fs::read_to_string(root.join(result.epic_path)).unwrap();
+        let metadata: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(text.split("---").nth(1).unwrap()).unwrap();
+        assert_eq!(metadata["owner"].as_str(), Some("Team: operations"));
+        assert!(
+            create_epic(
+                &root,
+                &CreateEpicInput {
+                    owner: "bad\nvalue".into(),
+                    ..input
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn create_epic_rejects_inconsistent_or_unsafe_ids_before_creating_folders() {
+        let (_fixture, root) = build_fixture();
+        let input = CreateEpicInput {
+            id: Some("EP-F4-08".into()),
+            title: "Agreements".into(),
+            phase: Some(1),
+            owner: "Owner".into(),
+            milestone: "MP4".into(),
+        };
+        assert!(create_epic(&root, &input).is_err());
+        assert!(
+            create_epic(
+                &root,
+                &CreateEpicInput {
+                    id: Some("../../escape".into()),
+                    ..input
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            !root
+                .join("delivery/backlog/phase-1-scaffolding/08.agreements")
+                .exists()
+        );
+    }
 
     #[test]
     fn find_epic_exposes_child_story_progress_and_sections() {

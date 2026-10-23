@@ -25,18 +25,18 @@ use crate::web::{
 };
 use chrono::NaiveDate;
 use kanban_core::{
-    CompletionDto, CreateStoryInput, FeaturesConfig, KanbanError, KanbanErrorBody, KanbanErrorCode,
-    ListIdItemDto, ReportForecastDto, ReportWbsDto, WorkingCalendar, add_task_to_story,
-    clear_default_repo_root, config_show_value, create_sprint, create_story, delete_story,
-    delete_task_from_story, doctor_repository, find_epic_with_source, find_story,
-    find_story_with_source, get_config_json, get_config_value, global_config_status,
+    CompletionDto, CreateEpicInput, CreateStoryInput, FeaturesConfig, KanbanError, KanbanErrorBody,
+    KanbanErrorCode, ListIdItemDto, ReportForecastDto, ReportWbsDto, WorkingCalendar,
+    add_task_to_story, clear_default_repo_root, config_show_value, create_epic, create_sprint,
+    create_story, delete_story, delete_task_from_story, doctor_repository, find_epic_with_source,
+    find_story, find_story_with_source, get_config_json, get_config_value, global_config_status,
     init_config_with_features, list_all_epic_overviews, list_all_stories, list_epic_ids,
     list_sprint_names, list_story_completion_items, list_story_ids, list_tasks_for_story,
     load_kanban_config, move_story_to_status_with_assignee, plan_story_into_sprint,
-    read_story_file, rollover_sprint, set_config_value, set_default_repo_root, story_markdown_file,
-    suggested_sprint_dates, summarize_current_sprint, summarize_phase, summarize_sprint,
-    summarize_sprints, sync_sprint_rosters, update_epic_frontmatter, update_sprint_frontmatter,
-    update_story_frontmatter, update_task_in_story, validate_repository,
+    read_story_file, relocate_story, rollover_sprint, set_config_value, set_default_repo_root,
+    story_markdown_file, suggested_sprint_dates, summarize_current_sprint, summarize_phase,
+    summarize_sprint, summarize_sprints, sync_sprint_rosters, update_epic_frontmatter,
+    update_sprint_frontmatter, update_story_frontmatter, update_task_in_story, validate_repository,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -407,6 +407,28 @@ pub(crate) fn execute_command(
             CommandOutcome::PhaseShow(summarize_phase(repo_root, phase)?)
         }
         Command::Epic { command } => match command {
+            EpicCommand::Create {
+                title,
+                id,
+                phase,
+                owner,
+                milestone,
+                repo_root,
+            } => {
+                ensure_epics_enabled(mode, repo_root)?;
+                let root = load_kanban_config(repo_root)?.repo_root;
+                let input = CreateEpicInput {
+                    id: id.clone(),
+                    title: title.clone(),
+                    phase: *phase,
+                    owner: owner.clone(),
+                    milestone: milestone.clone(),
+                };
+                CommandOutcome::EpicCreate {
+                    result: create_epic(&root, &input)?,
+                    repo_root: root,
+                }
+            }
             EpicCommand::Show { id, repo_root } => {
                 ensure_epics_enabled(mode, repo_root)?;
                 CommandOutcome::EpicShow {
@@ -502,6 +524,18 @@ pub(crate) fn execute_command(
             }
         },
         Command::Story { command } => match command {
+            StoryCommand::Relocate {
+                id,
+                epic,
+                repo_root,
+            } => {
+                ensure_epics_enabled(mode, repo_root)?;
+                let root = load_kanban_config(repo_root)?.repo_root;
+                CommandOutcome::StoryRelocate {
+                    result: relocate_story(&root, id, epic)?,
+                    repo_root: root,
+                }
+            }
             StoryCommand::Create {
                 title,
                 epic,

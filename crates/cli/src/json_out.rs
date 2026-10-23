@@ -10,11 +10,12 @@ use crate::dispatch::{DispatchMode, config_show_json_value, execute_command};
 use crate::outcome::CommandOutcome;
 use crate::theme::Theme;
 use kanban_core::{
-    ColorMode, ConfigGetDto, ConfigInitDto, ConfigSetDto, CreateStoryDto, DeleteStoryDto,
-    DoctorDto, EpicShowDto, EpicUpdateDto, JsonEnvelope, KanbanErrorBody, KanbanErrorCode,
-    ListIdsDto, MoveStoryDto, NoData, PhaseShowDto, PlanStoryDto, SprintCreateDto, SprintListDto,
-    SprintOverviewDto, SprintRolloverDto, SprintSyncDto, SprintUpdateDto, StoryListDto,
-    StoryShowDto, StoryUpdateDto, TaskMutationDto, TaskShowDto, ValidateDto,
+    ColorMode, ConfigGetDto, ConfigInitDto, ConfigSetDto, CreateEpicDto, CreateStoryDto,
+    DeleteStoryDto, DoctorDto, EpicShowDto, EpicUpdateDto, JsonEnvelope, KanbanErrorBody,
+    KanbanErrorCode, ListIdsDto, MoveStoryDto, NoData, PhaseShowDto, PlanStoryDto,
+    RelocateStoryDto, SprintCreateDto, SprintListDto, SprintOverviewDto, SprintRolloverDto,
+    SprintSyncDto, SprintUpdateDto, StoryListDto, StoryShowDto, StoryUpdateDto, TaskMutationDto,
+    TaskShowDto, ValidateDto,
 };
 
 /// Serialize a `JsonEnvelope` to stdout and return its exit code.
@@ -76,10 +77,12 @@ fn json_kind(command: &Command) -> &'static str {
             command: PhaseCommand::Show { .. },
         } => "phase.show",
         Command::Epic { command } => match command {
+            EpicCommand::Create { .. } => "epic.create",
             EpicCommand::Show { .. } => "epic.show",
             EpicCommand::Update { .. } => "epic.update",
         },
         Command::Story { command } => match command {
+            StoryCommand::Relocate { .. } => "story.relocate",
             StoryCommand::Create { .. } => "story.create",
             StoryCommand::Show { .. } => "story.show",
             StoryCommand::List { .. } => "story.list",
@@ -137,6 +140,14 @@ pub(crate) fn emit_json_git_requirement_error(
 fn emit_shared_outcome(outcome: CommandOutcome) -> i32 {
     let kind = outcome.kind();
     match outcome {
+        CommandOutcome::EpicCreate { result, repo_root } => print_envelope(&JsonEnvelope::ok(
+            kind,
+            CreateEpicDto::from_result(&result, &repo_root),
+        )),
+        CommandOutcome::StoryRelocate { result, repo_root } => print_envelope(&JsonEnvelope::ok(
+            kind,
+            RelocateStoryDto::from_result(&result, &repo_root),
+        )),
         CommandOutcome::Init(result) => {
             print_envelope(&JsonEnvelope::ok(kind, ConfigInitDto::from_result(&result)))
         }
