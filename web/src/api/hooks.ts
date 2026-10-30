@@ -98,8 +98,8 @@ export function useGitPull() {
         for (const queryKey of AGGREGATE_QUERY_KEYS) {
           void queryClient.invalidateQueries({ queryKey });
         }
-        void queryClient.invalidateQueries({ queryKey: ['gitStatus'] });
       }
+      void queryClient.invalidateQueries({ queryKey: ['gitStatus'] });
     },
   });
 }

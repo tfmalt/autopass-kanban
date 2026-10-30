@@ -111,6 +111,22 @@ pub(crate) fn commit_message(changes: &[PendingChange]) -> String {
     message
 }
 
+pub(crate) fn commit_message_or_paths(changes: &[PendingChange], paths: &[String]) -> String {
+    if !changes.is_empty() {
+        return commit_message(changes);
+    }
+    let count = paths.len();
+    let noun = if count == 1 { "update" } else { "updates" };
+    let mut message = format!("kanban: {count} backlog {noun} from web UI");
+    for path in paths.iter().take(200) {
+        message.push_str(&format!("\n\n- synchronized {path}"));
+    }
+    if count > 200 {
+        message.push_str(&format!("\n\n- and {} more", count - 200));
+    }
+    message
+}
+
 fn relative_path(repo_root: &Path, path: &Path) -> Result<String> {
     let path = if path.is_absolute() {
         path.strip_prefix(repo_root)

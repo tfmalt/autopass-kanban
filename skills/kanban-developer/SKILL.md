@@ -76,10 +76,33 @@ under `web/src/` with shared types in `web/shared/`.
 - `crates/core/src/repository.rs` — filesystem operations
 - `crates/cli/src/cli.rs` — CLI command definitions (clap)
 - `crates/cli/src/render/` — terminal output rendering
+- `crates/web-server/src/git.rs` — self-healing Git pull/push synchronization engine
+- `crates/web-server/src/pending.rs` — web UI commit summary log (`.git/kanban/pending-web-changes.json`)
+- `crates/web-server/src/handlers/mod.rs` — HTTP handlers for `/api/git-status`, `/api/git-pull`, and `/api/git-push`
+- `web/src/components/GitSyncControls.tsx`, `GitPullButton.tsx`, `GitPushButton.tsx` — header Git sync UI controls
 
 ### Configuration
 
 - `.kanban/settings.json` — paths, story points, features, web config
+
+### Self-Healing Web Git Synchronization (`crates/web-server/src/git.rs`)
+
+The web server (`kanban web serve`) operates against a live Git repository (and in AP2 `autopass-kanban-web`, as a persistent singleton pod backed by `/workspace/ap-ip-docs`). Always preserve these invariants when modifying web mutation handlers or Git sync logic:
+
+1. **Git Worktree Is the Single Source of Truth for Managed Changes:**
+   - Do **not** rely on manual per-handler path lists to decide which files to stage. `commit_pending_kanban_changes` inspects `git status --porcelain=v1 -z --untracked-files=all` across managed Kanban prefixes (`delivery/backlog`, `delivery/sprints`, `.kanban`, excluding `.kanban/.lock` and `.kanban/run`) plus any recorded paths.
+   - `.git/kanban/pending-web-changes.json` (`PendingStore`) is an **audit/summary log** used to generate descriptive commit messages (`kanban: N backlog updates from web UI`), not a filter that can leave unrecorded epic/sprint/rename side effects dirty in the worktree.
+2. **Never Deadlock Pull and Push (`behind > 0` + local changes):**
+   - Never disable `GitPushButton` solely because `status.behind > 0`, and never block `POST /api/git-pull` when local Kanban edits exist.
+   - Both **Pull** (`sync_pull`) and **Push** (`api_git_push`) are self-healing:
+     1. Abort any stranded `rebase`/`merge`/`cherry-pick` state (`abort_in_progress_git_ops`).
+     2. Strip/reset generated `## Stories in This Sprint` (`ROSTER_HEADING`) sections to `HEAD` (`reset_generated_roster_sections_to_head`) before committing or rebasing so derived tables never cause false merge conflicts.
+     3. Stage (`git add -A`) and commit pending managed Kanban changes first.
+     4. Fetch and rebase onto `@{upstream}` with `git rebase --autostash -X theirs @{upstream}` so replayed local web commits win on overlapping Kanban frontmatter hunks while upstream changes merge cleanly.
+     5. Run `sync_sprint_rosters(&repo_root)` after rebase to deterministically regenerate all sprint tables from canonical story frontmatter, and amend `HEAD` (`amend_head_with_sprint_rosters`) before pushing.
+     6. On `git push` non-fast-forward races, automatically `fetch` + `rebase` + regenerate rosters and retry once.
+3. **Decouple `git fetch` from `RepoLock`:**
+   - `GET /api/git-status` must **never** hold `RepoLock` while running `git fetch` over the network, or slow network I/O will block board mutations. Skip `git fetch` in `/api/git-status` whenever `pull_in_progress` or `push_in_progress` is active.
 
 ---
 

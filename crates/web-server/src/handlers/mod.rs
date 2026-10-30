@@ -23,7 +23,6 @@ use crate::changes::ChangeBroadcaster;
 use crate::dto::*;
 use crate::git;
 use crate::metrics::*;
-use crate::pending;
 use crate::read_model::WebReadModel;
 use crate::snapshot::{load_epic_detail, load_repository_snapshot, load_story_detail};
 use crate::sprint_io::{
@@ -706,19 +705,31 @@ pub(crate) async fn api_git_status(
         }));
     };
     let pending = state.pending.clone();
+    let sync_busy = state.pull_in_progress.load(Ordering::SeqCst)
+        || state.push_in_progress.load(Ordering::SeqCst);
     let status = run_blocking(move || {
-        // Refresh the upstream tracking ref so the polled pull count reflects
-        // remote changes, not only the last time a user manually pulled.
-        let _ = git::run(
-            &git_context.repo_root,
-            &["fetch", "--quiet", "--no-tags"],
-            true,
-        );
+        if !sync_busy {
+            // Refresh the upstream tracking ref without holding RepoLock so
+            // network latency never blocks local board mutations.
+            let _ = git::run(
+                &git_context.repo_root,
+                &["fetch", "--quiet", "--no-tags"],
+                true,
+            );
+        }
         let upstream = git::upstream_state(&git_context.repo_root);
-        let pending_count = pending
-            .map(|store| store.load().map(|changes| changes.len()))
+        let recorded = pending
+            .map(|store| store.load())
             .transpose()?
-            .unwrap_or(0);
+            .unwrap_or_default();
+        let sprint_paths = summarize_sprints(&git_context.repo_root)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|sprint| sprint.readme_path)
+            .collect::<Vec<_>>();
+        let pending_count =
+            git::effective_pending_count(&git_context.repo_root, &sprint_paths, &recorded)
+                .unwrap_or(recorded.len());
         Ok(GitStatusResponse {
             available: true,
             upstream: upstream.upstream,
@@ -771,17 +782,39 @@ pub(crate) async fn api_git_push(
     };
     let _write_guard = state.write_lock.lock().await;
     let result = run_blocking(move || {
-        let changes = pending_store.load()?;
-        let upstream = git::upstream_state(&git_context.repo_root);
-        if let Some(message) = git::push_preflight_error(&upstream) {
-            return Ok(GitPushResponse {
-                ok: false,
-                status: "error",
-                message: message.to_string(),
-                commit_sha: None,
-            });
-        }
-        if changes.is_empty() && upstream.ahead == 0 {
+        let _ = sync_sprint_rosters(&git_context.repo_root);
+        let mut repo_lock = Some(RepoLock::acquire(&git_context.repo_root)?);
+        git::abort_in_progress_git_ops(&git_context);
+        let _ = git::run(
+            &git_context.repo_root,
+            &["fetch", "--quiet", "--no-tags"],
+            true,
+        );
+        let upstream_before = git::upstream_state(&git_context.repo_root);
+        let mut sprint_paths = summarize_sprints(&git_context.repo_root)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|sprint| sprint.readme_path)
+            .collect::<Vec<_>>();
+        let mut commit_sha = match git::commit_pending_kanban_changes(
+            &git_context.repo_root,
+            &sprint_paths,
+            Some(&pending_store),
+            upstream_before.behind > 0,
+        ) {
+            Ok(sha) => sha,
+            Err(error) => {
+                return Ok(GitPushResponse {
+                    ok: false,
+                    status: "error",
+                    message: error.to_string(),
+                    commit_sha: None,
+                });
+            }
+        };
+
+        let mut upstream = git::upstream_state(&git_context.repo_root);
+        if upstream.ahead == 0 && commit_sha.is_none() {
             return Ok(GitPushResponse {
                 ok: true,
                 status: "nothing_to_do",
@@ -789,100 +822,66 @@ pub(crate) async fn api_git_push(
                 commit_sha: None,
             });
         }
-        let mut commit_sha = None;
-        if !changes.is_empty() {
-            let paths = pending::commit_paths(&changes)?;
-            let existing_paths = paths
-                .iter()
-                .filter(|path| {
-                    git::run(
-                        &git_context.repo_root,
-                        &["ls-files", "--error-unmatch", "--", path],
-                        false,
-                    )
-                    .is_ok_and(|output| output.status.success())
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            let new_paths = paths
-                .iter()
-                .filter(|path| {
-                    !existing_paths.contains(path) && git_context.repo_root.join(path).exists()
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            let commit_paths = existing_paths
-                .iter()
-                .chain(&new_paths)
-                .cloned()
-                .collect::<Vec<_>>();
-            if !new_paths.is_empty() {
-                let mut args = vec![
-                    "add".to_string(),
-                    "--intent-to-add".to_string(),
-                    "--".to_string(),
-                ];
-                args.extend(new_paths);
-                let output = git::run_owned(&git_context.repo_root, &args, false)?;
-                if !output.status.success() {
+
+        for attempt in 0..2 {
+            if upstream.behind > 0 {
+                let rebase_output = git::rebase_onto_upstream(&git_context)?;
+                if !rebase_output.status.success() {
                     return Ok(GitPushResponse {
                         ok: false,
                         status: "error",
-                        message: format!(
-                            "Commit preparation failed: {}",
-                            git::output_text(&output)
-                        ),
-                        commit_sha: None,
+                        message: git::classify_pull_error(&git::output_text(&rebase_output)),
+                        commit_sha,
                     });
                 }
+                drop(repo_lock.take());
+                let _ = sync_sprint_rosters(&git_context.repo_root);
+                repo_lock = Some(RepoLock::acquire(&git_context.repo_root)?);
+                sprint_paths = summarize_sprints(&git_context.repo_root)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|sprint| sprint.readme_path)
+                    .collect::<Vec<_>>();
+                commit_sha =
+                    git::amend_head_with_sprint_rosters(&git_context.repo_root, &sprint_paths)?;
             }
-            if !commit_paths.is_empty() {
-                let mut args = vec![
-                    "commit".to_string(),
-                    "--only".to_string(),
-                    "-m".to_string(),
-                    pending::commit_message(&changes),
-                    "--".to_string(),
-                ];
-                args.extend(commit_paths);
-                let output = git::run_owned(&git_context.repo_root, &args, false)?;
-                if !output.status.success() {
-                    return Ok(GitPushResponse {
-                        ok: false,
-                        status: "error",
-                        message: format!(
-                            "Commit failed: {}",
-                            git::output_text(&output)
-                                .chars()
-                                .take(200)
-                                .collect::<String>()
-                        ),
-                        commit_sha: None,
-                    });
-                }
-                let head = git::run(&git_context.repo_root, &["rev-parse", "HEAD"], false)?;
-                commit_sha = Some(String::from_utf8_lossy(&head.stdout).trim().to_string());
-                // A failed push leaves the commit ahead of its upstream, but
-                // the ledger is safe to clear once its entries are committed.
-                pending_store.clear()?;
+
+            commit_sha = git::head_sha(&git_context.repo_root).ok().or(commit_sha);
+            let output = git::run(&git_context.repo_root, &["push"], true)?;
+            if output.status.success() {
+                return Ok(GitPushResponse {
+                    ok: true,
+                    status: "success",
+                    message: "Changes pushed.".to_string(),
+                    commit_sha,
+                });
             }
-        }
-        let output = git::run(&git_context.repo_root, &["push"], true)?;
-        if output.status.success() {
-            Ok(GitPushResponse {
-                ok: true,
-                status: "success",
-                message: "Changes pushed.".to_string(),
-                commit_sha,
-            })
-        } else {
-            Ok(GitPushResponse {
+            let text = git::output_text(&output);
+            let lower = text.to_lowercase();
+            if attempt == 0 && (lower.contains("non-fast-forward") || lower.contains("fetch first"))
+            {
+                let _ = git::run(
+                    &git_context.repo_root,
+                    &["fetch", "--quiet", "--no-tags"],
+                    true,
+                );
+                upstream = git::upstream_state(&git_context.repo_root);
+                continue;
+            }
+            return Ok(GitPushResponse {
                 ok: false,
                 status: "error",
-                message: git::classify_push_error(&git::output_text(&output)),
+                message: git::classify_push_error(&text),
                 commit_sha,
-            })
+            });
         }
+
+        Ok(GitPushResponse {
+            ok: false,
+            status: "error",
+            message: "Push failed after automatic rebase retry.".to_string(),
+            commit_sha,
+        })
     })
     .await?;
     if result.ok {
@@ -909,18 +908,73 @@ pub(crate) async fn api_git_pull(
             pulled_at: None,
         }));
     }
+    let Some(git_context) = state.git.clone() else {
+        state.pull_in_progress.store(false, Ordering::SeqCst);
+        return Ok(Json(GitPullResponse {
+            ok: false,
+            status: "error",
+            message: "Pull failed: the data directory is not a git repository.".to_string(),
+            stdout: None,
+            stderr: None,
+            pulled_at: None,
+        }));
+    };
     let _write_guard = state.write_lock.lock().await;
 
     let repo_root = state.repo_root.clone();
     let pull_flag = state.pull_in_progress.clone();
+    let task_pull_flag = pull_flag.clone();
+    let pending_store = state.pending.clone();
 
     let result = tokio::time::timeout(
         Duration::from_secs(GIT_PULL_TIMEOUT_SECS),
-        task::spawn_blocking(move || git::run(&repo_root, &["pull", "--ff-only"], true)),
+        task::spawn_blocking(move || {
+            struct PullFlagReset(Arc<std::sync::atomic::AtomicBool>);
+            impl Drop for PullFlagReset {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::SeqCst);
+                }
+            }
+            let _pull_flag_reset = PullFlagReset(task_pull_flag);
+            let repo_lock = RepoLock::acquire(&repo_root)?;
+            let sprint_paths = summarize_sprints(&repo_root)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|sprint| sprint.readme_path)
+                .collect::<Vec<_>>();
+            let outcome = git::sync_pull(&git_context, &sprint_paths, pending_store.as_ref())?;
+            drop(repo_lock);
+
+            if outcome.output.status.success()
+                && (!outcome.recovered_paths.is_empty() || outcome.rebased_local_changes)
+            {
+                let changed_sprints = sync_sprint_rosters(&repo_root).unwrap_or_default();
+                if !changed_sprints.is_empty() {
+                    if outcome.rebased_local_changes || git::upstream_state(&repo_root).ahead > 0 {
+                        let _repo_lock = RepoLock::acquire(&repo_root)?;
+                        let sprint_paths = summarize_sprints(&repo_root)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|sprint| sprint.readme_path)
+                            .collect::<Vec<_>>();
+                        let _ = git::amend_head_with_sprint_rosters(&repo_root, &sprint_paths)?;
+                    } else if let Some(store) = pending_store {
+                        let changed_paths = summarize_sprints(&repo_root)?
+                            .into_iter()
+                            .filter(|sprint| changed_sprints.contains(&sprint.sprint_name))
+                            .map(|sprint| repo_root.join(sprint.readme_path))
+                            .collect();
+                        store.record(
+                            "Regenerated sprint rosters after Git pull".to_string(),
+                            changed_paths,
+                        )?;
+                    }
+                }
+            }
+            Ok::<_, anyhow::Error>(outcome)
+        }),
     )
     .await;
-
-    pull_flag.store(false, Ordering::SeqCst);
 
     match result {
         Err(_elapsed) => Ok(Json(GitPullResponse {
@@ -935,6 +989,7 @@ pub(crate) async fn api_git_pull(
             pulled_at: None,
         })),
         Ok(Err(join_err)) => {
+            pull_flag.store(false, Ordering::SeqCst);
             eprintln!("kanban git-pull task join error: {join_err}");
             Ok(Json(GitPullResponse {
                 ok: false,
@@ -945,22 +1000,22 @@ pub(crate) async fn api_git_pull(
                 pulled_at: None,
             }))
         }
-        Ok(Ok(Err(io_err))) => {
-            let message = if io_err.kind() == std::io::ErrorKind::NotFound {
-                "git executable not found. Ensure git is installed and on PATH.".to_string()
-            } else {
-                format!("Failed to run git: {io_err}")
-            };
+        Ok(Ok(Err(error))) => {
+            eprintln!("kanban git-pull operation error: {error:#}");
             Ok(Json(GitPullResponse {
                 ok: false,
                 status: "error",
-                message,
+                message: "Unable to prepare the backlog repository for pull.".to_string(),
                 stdout: None,
                 stderr: None,
                 pulled_at: None,
             }))
         }
-        Ok(Ok(Ok(output))) => {
+        Ok(Ok(Ok(git::PullOutcome {
+            output,
+            recovered_paths,
+            rebased_local_changes,
+        }))) => {
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
             if output.status.success() {
@@ -968,7 +1023,13 @@ pub(crate) async fn api_git_pull(
                 Ok(Json(GitPullResponse {
                     ok: true,
                     status: "success",
-                    message: stdout.trim().to_string(),
+                    message: if rebased_local_changes {
+                        "Pulled latest data and rebased local changes.".to_string()
+                    } else if !recovered_paths.is_empty() {
+                        "Pulled latest data and regenerated sprint rosters.".to_string()
+                    } else {
+                        stdout.trim().to_string()
+                    },
                     stdout: Some(stdout),
                     stderr: if stderr.trim().is_empty() {
                         None

@@ -714,7 +714,7 @@ dependencies = [
 
 [[package]]
 name = "kanban-cli"
-version = "26.10.2303"
+version = "26.10.3001"
 dependencies = [
  "anyhow",
  "chrono",
@@ -732,7 +732,7 @@ dependencies = [
 
 [[package]]
 name = "kanban-core"
-version = "26.10.2303"
+version = "26.10.3001"
 dependencies = [
  "anyhow",
  "chrono",
@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "kanban-web-server"
-version = "26.10.2303"
+version = "26.10.3001"
 dependencies = [
  "anyhow",
  "axum",

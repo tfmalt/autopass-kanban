@@ -14,7 +14,13 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 describe("GitPushButton", () => {
-  it("requires a pull before pushing when the remote is ahead", () => {
+  it("does not claim the repository is unavailable before status loads", () => {
+    render(<GitPushButton />, { wrapper });
+    expect(screen.getByRole("button", { name: "Checking Git status" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /not a git repository/i })).not.toBeInTheDocument();
+  });
+
+  it("allows pushing when the remote is ahead by syncing automatically", () => {
     render(
       <GitPushButton
         status={{ available: true, upstream: "origin/main", ahead: 0, behind: 1, pendingCount: 1 }}
@@ -22,6 +28,8 @@ describe("GitPushButton", () => {
       { wrapper },
     );
 
-    expect(screen.getByRole("button", { name: /pull latest data before pushing/i })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: /commit, sync with remote, and push changes/i }),
+    ).not.toBeDisabled();
   });
 });

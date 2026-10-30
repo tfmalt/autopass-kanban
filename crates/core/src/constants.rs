@@ -49,7 +49,7 @@ pub const SPRINT_STATUS_DISPLAY_ORDER: [&str; 6] = [
 
 pub(crate) const SPRINT_STATUSES: [&str; 4] = ["planned", "active", "closed", "cancelled"];
 
-pub(crate) const ROSTER_HEADING: &str = "## User Stories selected for sprint";
+pub const ROSTER_HEADING: &str = "## User Stories selected for sprint";
 
 pub const CANONICAL_TASK_STATUSES: [&str; 4] = ["todo", "in-progress", "blocked", "done"];
 

@@ -15,7 +15,13 @@ fn main() {
 
     emit_rerun_triggers(&web_root, &client_root);
 
-    if client_root.join("package.json").is_file() {
+    println!("cargo:rerun-if-env-changed=KANBAN_WEB_PREBUILT");
+    if env::var("KANBAN_WEB_PREBUILT").as_deref() == Ok("1") {
+        assert!(
+            source.join("index.html").is_file(),
+            "prebuilt web assets are missing"
+        );
+    } else if client_root.join("package.json").is_file() {
         build_web_client_if_needed(&web_root, &client_root, &source);
     }
 

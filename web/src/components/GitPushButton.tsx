@@ -29,13 +29,14 @@ export function GitPushButton({ status }: { status?: GitStatusResponse }) {
     return () => { if (timer.current) clearTimeout(timer.current); };
   }, [push.isPending, push.isSuccess, push.isError, push.data]);
 
-  const unavailable = !status?.available;
+  const checking = status === undefined;
+  const unavailable = status?.available === false;
   const noUpstream = status?.available && !status.upstream;
   const remoteAhead = status?.available && status.behind > 0;
   const nothingToPush = status?.available && status.pendingCount === 0 && status.ahead === 0;
-  const disabled = uiState === "loading" || unavailable || noUpstream || remoteAhead || nothingToPush;
+  const disabled = checking || uiState === "loading" || unavailable || noUpstream || nothingToPush;
   const error = push.isError ? String(push.error) : push.isSuccess && !push.data.ok ? push.data.message : undefined;
-  const label = uiState === "loading" ? "Pushing changes..." : uiState === "success" ? "Changes pushed" : uiState === "error" && error ? `Push failed: ${error}` : unavailable ? "Push unavailable: not a git repository" : noUpstream ? "Push unavailable: no remote tracking branch" : remoteAhead ? "Pull latest data before pushing" : nothingToPush ? "Nothing to commit or push" : "Commit and push web changes";
+  const label = checking ? "Checking Git status" : uiState === "loading" ? "Pushing changes..." : uiState === "success" ? "Changes pushed" : uiState === "error" && error ? `Push failed: ${error}` : unavailable ? "Push unavailable: not a git repository" : noUpstream ? "Push unavailable: no remote tracking branch" : nothingToPush ? "Nothing to commit or push" : remoteAhead ? "Commit, sync with remote, and push changes" : "Commit and push web changes";
   const color = uiState === "error" ? "var(--red)" : uiState === "success" ? "var(--green)" : "var(--text-faint)";
   return <button type="button" className="git-sync-btn" onClick={() => { setUiState("idle"); push.mutate(); }} disabled={disabled} aria-label={label} title={label}><PushIcon spin={uiState === "loading"} color={color} /></button>;
 }

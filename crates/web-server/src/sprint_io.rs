@@ -98,9 +98,9 @@ pub(crate) fn update_sprint_file(
     atomic_write(&old_path, &updated)
         .with_context(|| format!("write sprint file {}", old_path.display()))?;
     if new_name != name {
-        update_story_sprint_references(repo_root, name, &new_name)?;
         fs::rename(&old_path, &new_path)
             .with_context(|| format!("rename sprint file to {}", new_path.display()))?;
+        update_story_sprint_references(repo_root, name, &new_name)?;
     }
     Ok(json!({
         "sprintPath": rel_to_root(repo_root, &new_path),
